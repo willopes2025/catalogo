@@ -32,6 +32,11 @@ import { Fiscal } from './paginas/Fiscal';
 import { Relatorios } from './paginas/Relatorios';
 import { Suporte } from './paginas/Suporte';
 import { MinhaSenha } from './paginas/MinhaSenha';
+import { Garantia } from './paginas/Garantia';
+import { Comissoes } from './paginas/Comissoes';
+import { Auditoria } from './paginas/Auditoria';
+import { Manual } from './paginas/Manual';
+import { ImprimirEtiquetas } from './paginas/ImprimirEtiquetas';
 
 const cliente = new QueryClient({ defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: false, staleTime: 15_000 } } });
 
@@ -51,6 +56,7 @@ ReactDOM.createRoot(document.getElementById('raiz')!).render(
           <Route path="/imprimir/maleta/:id" element={<Protegido><ImprimirMaleta /></Protegido>} />
           <Route path="/imprimir/documento/:id" element={<Protegido><ImprimirDocumento /></Protegido>} />
           <Route path="/imprimir/venda/:id" element={<Protegido><ImprimirVenda /></Protegido>} />
+          <Route path="/imprimir/etiquetas" element={<Protegido><ImprimirEtiquetas /></Protegido>} />
           <Route
             element={
               <Protegido>
@@ -83,6 +89,10 @@ ReactDOM.createRoot(document.getElementById('raiz')!).render(
             <Route path="relatorios" element={<Relatorios />} />
             <Route path="suporte" element={<Suporte />} />
             <Route path="minha-senha" element={<MinhaSenha />} />
+            <Route path="garantia" element={<Garantia />} />
+            <Route path="comissoes" element={<Comissoes />} />
+            <Route path="auditoria" element={<Auditoria />} />
+            <Route path="manual" element={<Manual />} />
             <Route path="configuracoes" element={<Configuracoes />} />
             <Route path=":modulo" element={<EmConstrucao />} />
           </Route>

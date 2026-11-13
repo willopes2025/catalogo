@@ -18,6 +18,7 @@ const produtoSchema = z.object({
   milesimos: opcional(20),
   fornecedorId: z.string().uuid().optional().nullable(),
   codigoFornecedor: opcional(60),
+  loteBanhoId: z.string().uuid().nullable().optional(),
   custo: centavos.default(0),
   preco: centavos.refine((v) => v > 0, 'Informe o preço de venda'),
   precoAtacado: centavos.optional().nullable(),

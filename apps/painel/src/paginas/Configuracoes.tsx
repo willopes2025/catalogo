@@ -5,6 +5,8 @@ import { centavosParaTexto, paraCentavos } from '../formato';
 import { Abas, Campo, Carregando, Erro, Topo } from '../componentes/ui';
 import { Usuarios, Grupos, Modelos, Integracoes, Empresas } from './ConfiguracoesOutras';
 import { Importacao } from './Importacao';
+import { AvisosERegras } from './ConfiguracoesAvisos';
+import { Link } from 'react-router-dom';
 
 type Regras = Record<string, number | boolean>;
 
@@ -28,15 +30,16 @@ const CAMPOS: [string, string, string][] = [
   ['maletasSimultaneas', 'Maletas abertas ao mesmo tempo', 'Por representante'],
 ];
 
-type Aba = 'regras' | 'empresas' | 'usuarios' | 'grupos' | 'modelos' | 'integracoes' | 'importacao';
+type Aba = 'regras' | 'avisos' | 'empresas' | 'usuarios' | 'grupos' | 'modelos' | 'integracoes' | 'importacao';
 
 export function Configuracoes() {
   const [aba, setAba] = useState<Aba>('regras');
   return (
     <>
-      <Topo eb="Configurações" titulo={{ regras: 'Regras do consignado', empresas: 'Empresas', usuarios: 'Usuários', grupos: 'Grupos e permissões', modelos: 'Modelos de documento', integracoes: 'Integrações', importacao: 'Importar planilhas' }[aba]} />
-      <Abas ativa={aba} mudar={setAba} abas={[['regras', 'Regras do consignado'], ['empresas', 'Empresas'], ['usuarios', 'Usuários'], ['grupos', 'Grupos e permissões'], ['modelos', 'Modelos de documento'], ['integracoes', 'Integrações'], ['importacao', 'Importar planilhas']]} />
+      <Topo eb="Configurações" titulo={{ regras: 'Regras do consignado', avisos: 'Avisos, etiquetas e outras regras', empresas: 'Empresas', usuarios: 'Usuários', grupos: 'Grupos e permissões', modelos: 'Modelos de documento', integracoes: 'Integrações', importacao: 'Importar planilhas' }[aba]} acoes={<Link to="/auditoria" className="botao claro">Auditoria</Link>} />
+      <Abas ativa={aba} mudar={setAba} abas={[['regras', 'Regras do consignado'], ['avisos', 'Avisos e regras'], ['empresas', 'Empresas'], ['usuarios', 'Usuários'], ['grupos', 'Grupos e permissões'], ['modelos', 'Modelos de documento'], ['integracoes', 'Integrações'], ['importacao', 'Importar planilhas']]} />
       {aba === 'regras' && <Regras />}
+      {aba === 'avisos' && <AvisosERegras />}
       {aba === 'empresas' && <Empresas />}
       {aba === 'usuarios' && <Usuarios />}
       {aba === 'grupos' && <Grupos />}

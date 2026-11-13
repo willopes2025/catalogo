@@ -35,6 +35,13 @@ import { ConfiguracoesService } from './configuracoes/configuracoes.service';
 import { FinanceiroController } from './financeiro/financeiro.controller';
 import { PainelController } from './painel/painel.controller';
 import { SaudeController } from './saude.controller';
+import { GarantiaController, LotesController } from './garantia/garantia.controller';
+import { GarantiaService } from './garantia/garantia.service';
+import { ComissoesController } from './comissoes/comissoes.controller';
+import { ComissoesService } from './comissoes/comissoes.service';
+import { AvisosController } from './avisos/avisos.controller';
+import { AvisosService } from './avisos/avisos.service';
+import { AuditoriaController } from './auditoria/auditoria.controller';
 
 const segredo = process.env.JWT_SECRET;
 if (!segredo || (process.env.NODE_ENV === 'production' && segredo.length < 32)) {
@@ -68,6 +75,11 @@ if (!segredo || (process.env.NODE_ENV === 'production' && segredo.length < 32)) 
     RelatoriosController,
     SuporteController,
     ImportacaoController,
+    GarantiaController,
+    LotesController,
+    ComissoesController,
+    AvisosController,
+    AuditoriaController,
   ],
   providers: [
     AuditoriaService,
@@ -81,6 +93,9 @@ if (!segredo || (process.env.NODE_ENV === 'production' && segredo.length < 32)) 
     AsaasService,
     FiscalService,
     ImportacaoService,
+    GarantiaService,
+    ComissoesService,
+    AvisosService,
     { provide: APP_GUARD, useClass: AuthGuard },
     { provide: APP_FILTER, useClass: ErrosFilter },
   ],

@@ -74,6 +74,9 @@ export const usuarios = pgTable('usuarios', {
   empresas: jsonb('empresas').$type<string[]>().notNull().default([]),
   ativo: boolean('ativo').notNull().default(true),
   ultimoAcesso: timestamp('ultimo_acesso', { withTimezone: true }),
+  /** Vendedora de loja: comissão própria (pontos-base) e meta mensal em centavos. */
+  comissaoPb: integer('comissao_pb'),
+  metaMensal: integer('meta_mensal'),
   criadoEm: criadoEm(),
 });
 
@@ -225,6 +228,7 @@ export const tipoMovimento = pgEnum('tipo_movimento', [
   'maleta_devolucao',
   'venda',
   'perda',
+  'garantia',
 ]);
 
 export const movimentos = pgTable(
@@ -570,6 +574,88 @@ export const importacoes = pgTable('importacoes', {
   atualizados: integer('atualizados').notNull().default(0),
   erros: jsonb('erros').$type<{ linha: number; mensagem: string }[]>().notNull().default([]),
   usuarioId: uuid('usuario_id').references(() => usuarios.id),
+  criadoEm: criadoEm(),
+});
+
+// ───────────────────────── Garantia e ordens de serviço ─────────────────────────
+
+export const servicos = pgTable('servicos', {
+  id: id(),
+  descricao: text('descricao').notNull(),
+  valor: integer('valor').notNull().default(0),
+  ativo: boolean('ativo').notNull().default(true),
+});
+
+/**
+ * Ordem de serviço: garantia (reclamação de defeito no prazo) ou conserto pago.
+ * Guarda de onde veio a peça, para onde foi e o que foi decidido.
+ */
+export const ordensServico = pgTable(
+  'ordens_servico',
+  {
+    id: id(),
+    numero: serial('numero').notNull(),
+    tipo: text('tipo').notNull(), // garantia | conserto
+    status: text('status').notNull().default('aberta'), // aberta | na_assistencia | pronta | concluida | cancelada
+    clienteId: uuid('cliente_id').references(() => pessoas.id),
+    representanteId: uuid('representante_id').references(() => pessoas.id),
+    produtoId: uuid('produto_id').references(() => produtos.id),
+    vendaId: uuid('venda_id').references(() => vendas.id),
+    maletaId: uuid('maleta_id').references(() => maletas.id),
+    dataCompra: date('data_compra'),
+    garantiaAte: date('garantia_ate'),
+    defeito: text('defeito').notNull(),
+    prestadorId: uuid('prestador_id').references(() => pessoas.id),
+    servicoId: uuid('servico_id').references(() => servicos.id),
+    valor: integer('valor').notNull().default(0),
+    valorPago: integer('valor_pago').notNull().default(0),
+    previsao: date('previsao'),
+    /** troca | conserto | devolucao_fornecedor | recusada */
+    decisao: text('decisao'),
+    motivoDecisao: text('motivo_decisao'),
+    /** Peça entregue no lugar, na troca. */
+    produtoTrocaId: uuid('produto_troca_id').references(() => produtos.id),
+    observacao: text('observacao'),
+    observacaoInterna: text('observacao_interna'),
+    usuarioId: uuid('usuario_id').references(() => usuarios.id),
+    criadoEm: criadoEm(),
+    concluidaEm: timestamp('concluida_em', { withTimezone: true }),
+  },
+  (t) => ({ porStatus: index('os_status_idx').on(t.status) }),
+);
+
+// ───────────────────────── Comissões ─────────────────────────
+
+export const fechamentosComissao = pgTable('fechamentos_comissao', {
+  id: id(),
+  mes: text('mes').notNull().unique(), // AAAA-MM
+  total: integer('total').notNull(),
+  usuarioId: uuid('usuario_id').references(() => usuarios.id),
+  criadoEm: criadoEm(),
+});
+
+export const comissoes = pgTable('comissoes', {
+  id: id(),
+  fechamentoId: uuid('fechamento_id').notNull().references(() => fechamentosComissao.id, { onDelete: 'cascade' }),
+  tipo: text('tipo').notNull(), // loja | rede
+  usuarioId: uuid('usuario_id').references(() => usuarios.id),
+  pessoaId: uuid('pessoa_id').references(() => pessoas.id),
+  nome: text('nome').notNull(),
+  base: integer('base').notNull(),
+  percentualPb: integer('percentual_pb').notNull(),
+  valor: integer('valor').notNull(),
+  meta: integer('meta'),
+  detalhes: jsonb('detalhes'),
+  tituloId: uuid('titulo_id').references(() => titulos.id),
+});
+
+// ───────────────────────── Avisos ─────────────────────────
+
+/** Cada aviso enviado, para nunca mandar o mesmo duas vezes. */
+export const avisosEnviados = pgTable('avisos_enviados', {
+  chave: text('chave').primaryKey(),
+  para: text('para').notNull(),
+  assunto: text('assunto').notNull(),
   criadoEm: criadoEm(),
 });
 

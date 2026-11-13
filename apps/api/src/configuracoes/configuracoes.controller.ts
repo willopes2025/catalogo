@@ -1,4 +1,5 @@
-import { Body, Controller, Get, Put } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, Param, Put } from '@nestjs/common';
+import { CONFIGS, type ChaveConfig } from './outras-configuracoes';
 import { z } from 'zod';
 import { Permissao, Usuario, type UsuarioLogado } from '../comum/auth';
 import { validar } from '../comum/validacao';
@@ -40,5 +41,22 @@ export class ConfiguracoesController {
     const r = await this.config.salvarRegras(d);
     await this.auditoria.registrar({ usuarioId: u.id, acao: 'editar', entidade: 'regras_consignado', dados: { antes, depois: d } });
     return r;
+  }
+
+  @Get('chave/:chave')
+  lerChave(@Param('chave') chave: string) {
+    if (!(chave in CONFIGS)) throw new BadRequestException('Configuração desconhecida.');
+    return this.config.ler(chave as ChaveConfig);
+  }
+
+  @Put('chave/:chave')
+  @Permissao('configuracoes', 'editar')
+  async salvarChave(@Usuario() u: UsuarioLogado, @Param('chave') chave: string, @Body() body: unknown) {
+    if (!(chave in CONFIGS)) throw new BadRequestException('Configuração desconhecida.');
+    const k = chave as ChaveConfig;
+    const d = validar(CONFIGS[k].schema, body);
+    await this.config.salvar(k, d as never);
+    await this.auditoria.registrar({ usuarioId: u.id, acao: 'editar', entidade: `config:${k}`, dados: d });
+    return d;
   }
 }

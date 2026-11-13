@@ -4,6 +4,7 @@ import { REGRAS_PADRAO, type RegrasConsignado } from '@aritana/regras';
 import { DB, type Db } from '../comum/db.module';
 import type { Tx } from '../db/client';
 import { configuracoes, niveis, pessoas } from '../db/schema';
+import { CONFIGS, type ChaveConfig, type ValorConfig } from './outras-configuracoes';
 
 @Injectable()
 export class ConfiguracoesService {
@@ -30,6 +31,16 @@ export class ConfiguracoesService {
       .insert(configuracoes)
       .values({ chave: 'regras_consignado', valor })
       .onConflictDoUpdate({ target: configuracoes.chave, set: { valor, atualizadoEm: new Date() } });
+    return valor;
+  }
+
+  async ler<K extends ChaveConfig>(chave: K, tx?: Tx): Promise<ValorConfig<K>> {
+    const [c] = await (tx ?? this.db).select().from(configuracoes).where(eq(configuracoes.chave, chave));
+    return { ...CONFIGS[chave].padrao, ...((c?.valor as object) ?? {}) } as ValorConfig<K>;
+  }
+
+  async salvar<K extends ChaveConfig>(chave: K, valor: ValorConfig<K>) {
+    await this.db.insert(configuracoes).values({ chave, valor }).onConflictDoUpdate({ target: configuracoes.chave, set: { valor, atualizadoEm: new Date() } });
     return valor;
   }
 }

@@ -22,6 +22,13 @@
       "when": 1794582214872,
       "tag": "0002_loja_fiscal_suporte",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1794587167977,
+      "tag": "0003_garantia_comissoes_avisos",
+      "breakpoints": true
     }
   ]
 }

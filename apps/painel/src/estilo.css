@@ -158,3 +158,15 @@ input.invalido { border-color: var(--erro); }
   .login .lado { padding: 28px; }
   .tabela { display: block; overflow-x: auto; }
 }
+
+/* Manual de uso */
+.manual { display: grid; grid-template-columns: 240px 1fr; gap: 18px; align-items: start; }
+.manual-indice { display: flex; flex-direction: column; gap: 2px; position: sticky; top: 16px; }
+.manual-indice button { text-align: left; background: none; border: 0; border-radius: 8px; padding: 8px 12px; font: inherit; color: var(--texto, #2b231d); cursor: pointer; }
+.manual-indice button:hover { background: var(--creme-2); }
+.manual-indice button.ativo { background: var(--marrom); color: #faf6ef; font-weight: 600; }
+.manual-passos { padding-left: 22px; margin: 0; }
+.manual-passos li { margin-bottom: 14px; }
+.manual-passos li p { margin: 2px 0 0; color: var(--suave); }
+@media (max-width: 800px) { .manual { grid-template-columns: 1fr; } .manual-indice { position: static; flex-direction: row; flex-wrap: wrap; } }
+@media print { .lateral, .manual-indice, .topo .botao { display: none !important; } .app { display: block; } }

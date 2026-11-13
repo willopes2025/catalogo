@@ -13,7 +13,7 @@ pnpm -s db:migrate >/dev/null
 pnpm -s db:seed >/dev/null
 node test/simuladores.mjs > /tmp/aritana-simuladores.log 2>&1 &
 SIM=$!
-PORT=3100 node dist/main.js > /tmp/aritana-api-teste.log 2>&1 &
+AVISOS_AUTOMATICOS=0 PORT=3100 node dist/main.js > /tmp/aritana-api-teste.log 2>&1 &
 PID=$!
 trap 'kill $PID $SIM' EXIT
 for i in $(seq 1 30); do curl -sf localhost:3100/api/saude >/dev/null && break; sleep 0.5; done

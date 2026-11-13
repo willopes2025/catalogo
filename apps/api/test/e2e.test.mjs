@@ -490,3 +490,80 @@ test('importação do Jueri: simula sem gravar, importa, e reimportar só atuali
   assert.equal(rede.lider, 'Líder Importada');
   assert.equal(rede.nivel, 'Nível Novo');
 });
+
+test('inventário: ajuste pela contagem registra só as diferenças', async () => {
+  const p = ctx.pv[2];
+  const saldo = (await ok('GET', `/estoque/rastreio/${p.codigoBarras}`)).porLocal.find((l) => l.tipo === 'loja').quantidade;
+  const r = await ok('POST', '/estoque/ajustes', { localId: ctx.loja.id, motivo: 'Inventário de teste', itens: [{ codigoBarras: p.codigoBarras, quantidadeContada: saldo + 2 }] });
+  assert.equal(r.diferencas.length, 1);
+  assert.equal(r.diferencas[0].depois, saldo + 2);
+  const igual = await ok('POST', '/estoque/ajustes', { localId: ctx.loja.id, motivo: 'Recontagem', itens: [{ codigoBarras: p.codigoBarras, quantidadeContada: saldo + 2 }] });
+  assert.equal(igual.diferencas.length, 0);
+});
+
+test('lotes de banho', async () => {
+  await ok('POST', '/lotes', { codigo: 'LOTE-E2E-01', fabricacao: '2026-10-01' });
+  assert.ok((await ok('GET', '/lotes')).some((l) => l.codigo === 'LOTE-E2E-01'));
+});
+
+test('garantia: troca da peça da venda, prazo calculado e estoque movido', async () => {
+  const [a] = ctx.pv;
+  const outra = (await ok('GET', '/produtos')).itens[20];
+  const sem = await chamar('POST', '/garantia/ordens', { tipo: 'garantia', codigoProduto: outra.codigoBarras, vendaId: ctx.venda1.id, defeito: 'Fecho quebrou' });
+  assert.equal(sem.status, 400, 'peça que não é da venda é recusada');
+  const os = await ok('POST', '/garantia/ordens', { tipo: 'garantia', codigoProduto: a.codigoBarras, vendaId: ctx.venda1.id, defeito: 'Banho descascando' });
+  assert.equal(os.foraDoPrazo, false);
+  assert.ok(os.garantiaAte > os.dataCompra);
+  const antes = (await ok('GET', `/estoque/rastreio/${a.codigoBarras}`)).porLocal.find((l) => l.tipo === 'loja').quantidade;
+  const semMotivo = await chamar('POST', `/garantia/ordens/${os.id}/decisao`, { decisao: 'recusada' });
+  assert.equal(semMotivo.status, 400);
+  const d = await ok('POST', `/garantia/ordens/${os.id}/decisao`, { decisao: 'troca', codigoTroca: a.codigoBarras, localId: ctx.loja.id });
+  assert.equal(d.status, 'concluida');
+  const rastreio = await ok('GET', `/estoque/rastreio/${a.codigoBarras}`);
+  assert.equal(rastreio.porLocal.find((l) => l.tipo === 'loja').quantidade, antes - 1, 'peça nova saiu da loja');
+  assert.equal(rastreio.porLocal.find((l) => l.local === 'Avarias e garantia').quantidade, 1, 'peça com defeito foi para avarias');
+});
+
+test('conserto pago: assistência, conclusão e recebimento no financeiro', async () => {
+  const assist = (await ok('GET', '/pessoas?tipo=assistencia')).itens[0];
+  const s = await ok('POST', '/garantia/servicos', { descricao: 'Solda de corrente', valor: 3500 });
+  const os = await ok('POST', '/garantia/ordens', { tipo: 'conserto', defeito: 'Corrente partida', servicoId: s.id, valor: 3500 });
+  await ok('POST', `/garantia/ordens/${os.id}/assistencia`, { prestadorId: assist.id, previsao: '2026-12-31' });
+  const fim = await ok('POST', `/garantia/ordens/${os.id}/concluir`, { valorPago: 3500, formaPagamento: 'pix' });
+  assert.equal(fim.status, 'concluida');
+  const abertas = await ok('GET', '/garantia/ordens?status=abertas');
+  assert.ok(!abertas.some((o) => o.id === os.id));
+});
+
+test('comissões: prévia, fechamento gera contas a pagar, reabrir cancela', async () => {
+  const mes = new Date(Date.now() - 3 * 3600_000).toISOString().slice(0, 7);
+  const c = await ok('GET', `/comissoes?mes=${mes}`);
+  const minha = c.linhas.find((l) => l.tipo === 'loja');
+  assert.ok(minha && minha.base > 0, 'vendas do balcão entram na base');
+  assert.equal(minha.valor, Math.round((minha.base * minha.percentualPb) / 10000));
+  const f = await ok('POST', '/comissoes/fechar', { mes });
+  assert.ok(f.linhas >= 1);
+  assert.equal((await chamar('POST', '/comissoes/fechar', { mes })).status, 400);
+  assert.equal((await ok('GET', `/comissoes?mes=${mes}`)).fechado, true);
+  await ok('POST', '/comissoes/reabrir', { mes });
+  assert.equal((await ok('GET', `/comissoes?mes=${mes}`)).fechado, false);
+});
+
+test('avisos: resumo para a equipe sai uma vez só', async () => {
+  const cfg = await ok('GET', '/configuracoes/chave/avisos');
+  await ok('PUT', '/configuracoes/chave/avisos', { ...cfg, emailsEquipe: ['equipe@exemplo.com'] });
+  assert.equal((await chamar('PUT', '/configuracoes/chave/avisos', { ...cfg, hora: 30 })).status, 400);
+  const r1 = await ok('POST', '/avisos/executar');
+  assert.ok(r1.enviados >= 1);
+  const r2 = await ok('POST', '/avisos/executar');
+  assert.equal(r2.enviados, 0);
+  assert.ok((await ok('GET', '/avisos/historico')).some((a) => a.para === 'equipe@exemplo.com'));
+});
+
+test('auditoria registra e filtra', async () => {
+  const r = await ok('GET', '/auditoria?entidade=ordem_servico');
+  assert.ok(r.linhas.length >= 2);
+  assert.ok(r.linhas.every((l) => l.entidade === 'ordem_servico'));
+  const f = await ok('GET', '/auditoria/filtros');
+  assert.ok(f.entidades.includes('comissoes'));
+});

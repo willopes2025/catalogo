@@ -3,7 +3,7 @@ import { MODULOS } from '@aritana/regras';
 import { lerSessao, pode, salvarSessao } from '../api';
 
 /** Rotas já construídas nesta etapa; as demais abrem a página "em construção". */
-const ROTAS: Record<string, string> = { inicio: '/', rede: '/rede', cadastros: '/cadastros', produtos: '/produtos', estoque: '/estoque', maletas: '/maletas', vendas: '/vendas', lojas: '/lojas', financeiro: '/financeiro', fiscal: '/fiscal', relatorios: '/relatorios', configuracoes: '/configuracoes', suporte: '/suporte' };
+const ROTAS: Record<string, string> = { inicio: '/', rede: '/rede', cadastros: '/cadastros', produtos: '/produtos', estoque: '/estoque', maletas: '/maletas', vendas: '/vendas', lojas: '/lojas', financeiro: '/financeiro', fiscal: '/fiscal', relatorios: '/relatorios', configuracoes: '/configuracoes', suporte: '/suporte', garantia: '/garantia', comissoes: '/comissoes' };
 
 export function Layout() {
   const sessao = lerSessao();
@@ -30,6 +30,7 @@ export function Layout() {
         <div className="rodape">
           <div style={{ fontWeight: 600, color: '#faf6ef' }}>{sessao?.usuario.nome}</div>
           <div style={{ marginBottom: 8 }}>{sessao?.usuario.grupo}</div>
+          <NavLink to="/manual" style={{ color: 'var(--areia)', display: 'block', marginBottom: 6 }}>Manual de uso</NavLink>
           <NavLink to="/minha-senha" style={{ color: 'var(--areia)', display: 'block', marginBottom: 6 }}>Trocar senha</NavLink>
           <button
             onClick={() => {

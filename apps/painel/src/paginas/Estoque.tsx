@@ -5,22 +5,26 @@ import { api, pode } from '../api';
 import { dataHora, reais } from '../formato';
 import { Abas, Campo, Carregando, Erro, Indicador, Topo } from '../componentes/ui';
 import { Leitor, type ItemLido } from '../componentes/Leitor';
+import { Inventario, Etiquetas, Lotes } from './EstoqueExtra';
 
 interface Local { id: string; nome: string; tipo: string; empresa: string }
 
-const TIPO_MOV: Record<string, string> = { entrada: 'Entrada', ajuste: 'Ajuste', transferencia: 'Transferência', maleta_envio: 'Foi para maleta', maleta_devolucao: 'Voltou da maleta', venda: 'Vendida', perda: 'Perdida' };
+const TIPO_MOV: Record<string, string> = { entrada: 'Entrada', ajuste: 'Ajuste', transferencia: 'Transferência', maleta_envio: 'Foi para maleta', maleta_devolucao: 'Voltou da maleta', venda: 'Vendida', perda: 'Perdida', garantia: 'Garantia', devolucao: 'Devolução' };
 
 export function Estoque() {
   const [params] = useSearchParams();
-  const [aba, setAba] = useState<'saldos' | 'entrada' | 'transferencia' | 'rastreio'>(params.get('rastreio') ? 'rastreio' : 'saldos');
+  const [aba, setAba] = useState<'saldos' | 'entrada' | 'transferencia' | 'inventario' | 'etiquetas' | 'lotes' | 'rastreio'>(params.get('rastreio') ? 'rastreio' : 'saldos');
   const locais = useQuery({ queryKey: ['locais'], queryFn: () => api<Local[]>('/estoque/locais') });
   return (
     <>
       <Topo eb="Estoque" titulo="Cada peça com endereço" sub="Depósito, loja, eventos e maletas das representantes" />
-      <Abas ativa={aba} mudar={setAba} abas={[['saldos', 'Saldos'], ['entrada', 'Entrada'], ['transferencia', 'Transferência'], ['rastreio', 'Rastreio da peça']]} />
+      <Abas ativa={aba} mudar={setAba} abas={[['saldos', 'Saldos'], ['entrada', 'Entrada'], ['transferencia', 'Transferência'], ['inventario', 'Inventário e ajuste'], ['etiquetas', 'Etiquetas'], ['lotes', 'Lotes de banho'], ['rastreio', 'Rastreio da peça']]} />
       {aba === 'saldos' && <Saldos locais={locais.data ?? []} />}
       {aba === 'entrada' && <Movimentar tipo="entrada" locais={locais.data ?? []} />}
       {aba === 'transferencia' && <Movimentar tipo="transferencia" locais={locais.data ?? []} />}
+      {aba === 'inventario' && <Inventario locais={locais.data ?? []} />}
+      {aba === 'etiquetas' && <Etiquetas locais={locais.data ?? []} />}
+      {aba === 'lotes' && <Lotes />}
       {aba === 'rastreio' && <Rastreio inicial={params.get('rastreio') ?? ''} />}
     </>
   );

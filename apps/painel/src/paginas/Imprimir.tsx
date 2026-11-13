@@ -21,7 +21,8 @@ const estiloFolha = `
   @media print { .acoes-impressao { display: none; } }
 `;
 
-function Folha({ children }: { children: React.ReactNode }) {
+function Folha({ children, rodape = false }: { children: React.ReactNode; rodape?: boolean }) {
+  const cfg = useQuery({ queryKey: ['config', 'impressao'], queryFn: () => api<{ rodapePedido: string }>('/configuracoes/chave/impressao'), enabled: rodape });
   useEffect(() => {
     document.body.style.background = '#fff';
     return () => { document.body.style.background = ''; };
@@ -30,7 +31,10 @@ function Folha({ children }: { children: React.ReactNode }) {
     <>
       <style>{estiloFolha}</style>
       <div className="acoes-impressao"><button className="botao" onClick={() => window.print()}>Imprimir ou salvar PDF</button><button className="botao claro" onClick={() => window.close()}>Fechar</button></div>
-      <div className="folha">{children}</div>
+      <div className="folha">
+        {children}
+        {rodape && cfg.data?.rodapePedido && <p style={{ marginTop: 24, paddingTop: 8, borderTop: '1px solid #ddd', fontSize: 11, color: '#555' }}>{cfg.data.rodapePedido}</p>}
+      </div>
     </>
   );
 }
@@ -46,7 +50,7 @@ export function ImprimirMaleta() {
   const m = q.data;
   const itens = m.itens.filter((i: any) => i.enviada > 0);
   return (
-    <Folha>
+    <Folha rodape>
       <div className="cab">
         <div>
           <img src="/logo-marrom.png" alt="Aritana" style={{ width: 120 }} />
@@ -120,7 +124,7 @@ export function ImprimirVenda() {
   if (q.error) return <Erro erro={q.error} />;
   const v = q.data;
   return (
-    <Folha>
+    <Folha rodape>
       <div style={{ maxWidth: 80 * 3.78, margin: '0 auto', fontSize: 12 }}>
         <div style={{ textAlign: 'center' }}><img src="/logo-marrom.png" alt="Aritana" style={{ width: 120 }} /><div>{v.local}</div><div>Recibo da venda nº {v.numero}</div><div>{dataHora(v.criadoEm)}</div>{v.cliente && <div>Cliente: {v.cliente}</div>}</div>
         <table>

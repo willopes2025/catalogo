@@ -3,7 +3,7 @@
 Sistema da Aritana Semijoias: matriz, representantes, lojas e eventos, substituindo o Jueri.
 Desenvolvido pela Wide Inteligência Comercial. **O código pertence à Aritana.**
 
-## O que já está pronto (Versão 1 · semanas 1, 2 e 3)
+## O que já está pronto (Versão 1 completa)
 
 | Parte | O que faz |
 |---|---|
@@ -36,11 +36,24 @@ Desenvolvido pela Wide Inteligência Comercial. **O código pertence à Aritana.
 | **Suporte** | Chamados com a Wide, conversa dentro do sistema e status das integrações. |
 | **Importação** | Planilhas do Jueri (.xlsx ou .csv) de produtos com estoque, representantes (com líder e nível), clientes e fornecedores. Simula antes de gravar; reimportar atualiza sem duplicar. |
 
+**Fechamento da Versão 1**
+
+| Parte | O que faz |
+|---|---|
+| **Etiquetas** | Estoque › Etiquetas: bipe as peças (ou carregue tudo de um local), escolha as quantidades e imprima com código de barras (EAN-13 ou Code 128) na impressora térmica. Tamanho, colunas, preço e referência configuráveis. |
+| **Inventário** | Contagem parcial ou inventário completo do local, com a lista de diferenças e o valor faltando/sobrando antes de gravar o ajuste. |
+| **Lotes de banho** | Cadastro de lotes e vínculo na ficha do produto, para rastrear defeito por banho. |
+| **Garantia e consertos** | Ordem de serviço a partir do nº da venda ou da maleta, prazo da garantia calculado, envio para a assistência, troca com baixa da peça nova e entrada da defeituosa em “Avarias e garantia”, conserto pago lançado no financeiro. |
+| **Comissões** | Prévia do mês por vendedora (vendido menos devoluções, percentual e meta por pessoa), comissão de líder sobre a rede (opcional), conferência da comissão retida nos acertos, fechamento que gera as contas a pagar e reabertura enquanto nada foi pago. |
+| **Avisos automáticos** | E-mail diário à representante (acerto chegando e em atraso), lembrete de parcela com link do boleto ou Pix e resumo do dia para a equipe. Cada aviso sai uma vez só. |
+| **Auditoria** | Tela com filtros por usuário, ação, área e período. |
+| **Manual de uso** | Passo a passo de cada rotina dentro do sistema (link no menu lateral). |
+
 As naturezas de operação e os CFOPs que vêm instalados são um **ponto de partida** para empresa do Simples Nacional e **precisam ser conferidos pelo contador** antes de emitir em produção.
 
 Os modelos de contrato e promissória que vêm instalados são **provisórios** e devem ser trocados pelos textos revisados pelo jurídico da Aritana, em Configurações › Modelos de documento.
 
-Os módulos ainda não construídos aparecem no menu como “em construção” (Versão 1) ou “V2”.
+Os módulos da Versão 2 aparecem no menu marcados com “V2”.
 
 ## Decisões técnicas
 

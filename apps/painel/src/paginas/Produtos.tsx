@@ -60,6 +60,7 @@ export function FichaProduto() {
   const [din, setDin] = useState<Record<string, string>>({ custo: '', preco: '', precoAtacado: '' });
   const q = useQuery({ queryKey: ['produto', id], queryFn: () => api<Record<string, any>>(`/produtos/${id}`), enabled: !novo });
   const cats = useQuery({ queryKey: ['categorias'], queryFn: () => api<{ id: string; nome: string }[]>('/produtos/categorias') });
+  const lotes = useQuery({ queryKey: ['lotes'], queryFn: () => api<{ id: string; codigo: string }[]>('/lotes') });
   useEffect(() => {
     if (q.data) {
       setF(q.data);
@@ -68,7 +69,8 @@ export function FichaProduto() {
   }, [q.data]);
   const salvar = useMutation({
     mutationFn: () => {
-      const { estoque, fornecedor, criadoEm, atualizadoEm, id: _i, fotos, idJueri, loteBanhoId, ...c } = f;
+      const { estoque, fornecedor, criadoEm, atualizadoEm, id: _i, fotos, idJueri, ...c } = f;
+      c.loteBanhoId = c.loteBanhoId || null;
       for (const k of DINHEIRO) c[k] = din[k] ? paraCentavos(din[k]) : k === 'precoAtacado' ? null : 0;
       c.estoqueMinimo = Number(c.estoqueMinimo) || 0;
       return novo ? api<any>('/produtos', { corpo: c }) : api<any>(`/produtos/${id}`, { metodo: 'PATCH', corpo: c });
@@ -99,6 +101,7 @@ export function FichaProduto() {
           {inp('pesoBanho', 'Banho')}
           {inp('milesimos', 'Milésimos')}
           {inp('codigoFornecedor', 'Código do fornecedor')}
+          <Campo rotulo="Lote do banho"><select value={f.loteBanhoId ?? ''} onChange={set('loteBanhoId')} disabled={!editavel}><option value="">—</option>{lotes.data?.map((l) => <option key={l.id} value={l.id}>{l.codigo}</option>)}</select></Campo>
           {inp('localizacao', 'Localização na prateleira')}
           {inp('estoqueMinimo', 'Estoque mínimo', '', { type: 'number', min: 0 })}
           <div className="secao">Valores</div>

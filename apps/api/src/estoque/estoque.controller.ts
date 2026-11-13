@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Inject, NotFoundException, Param, Post, Query } from '@nestjs/common';
+import { Body, Controller, Get, Inject, NotFoundException, Param, ParseUUIDPipe, Post, Query } from '@nestjs/common';
 import { and, asc, desc, eq, ilike, ne, or, sql } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 import { z } from 'zod';
@@ -64,6 +64,18 @@ export class EstoqueController {
       .where(eq(locaisEstoque.tipo, 'maleta'));
     const num = (o: Record<string, unknown>) => Object.fromEntries(Object.entries(o).map(([k, v]) => [k, typeof v === 'string' && /^\d+$/.test(v) ? Number(v) : v]));
     return { locais: porLocal.map(num), emMaletas: num(emMaletas) };
+  }
+
+  /** Tudo o que o sistema diz que há no local, para conferir no inventário. */
+  @Get('inventario/:localId')
+  @Permissao('estoque', 'ver')
+  inventario(@Param('localId', ParseUUIDPipe) localId: string) {
+    return this.db
+      .select({ produtoId: produtos.id, codigoBarras: produtos.codigoBarras, referencia: produtos.referencia, descricao: produtos.descricao, preco: produtos.preco, quantidade: saldos.quantidade })
+      .from(saldos)
+      .innerJoin(produtos, eq(produtos.id, saldos.produtoId))
+      .where(and(eq(saldos.localId, localId), ne(saldos.quantidade, 0)))
+      .orderBy(asc(produtos.descricao));
   }
 
   @Get('saldos')
