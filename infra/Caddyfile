@@ -1,0 +1,10 @@
+# Troque pelo domínio real (ex.: sistema.aritanaonline.com.br)
+{$DOMINIO:localhost} {
+  encode gzip
+  handle /api/* {
+    reverse_proxy api:3000
+  }
+  handle {
+    reverse_proxy painel:80
+  }
+}

@@ -1,0 +1,54 @@
+# Ambiente completo: banco, filas, API, painel e Caddy (HTTPS automático).
+# Em desenvolvimento, basta: docker compose up -d db redis
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: aritana
+      POSTGRES_USER: aritana
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-aritana}
+    volumes:
+      - dbdata:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aritana"]
+      interval: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:6379:6379"
+
+  api:
+    build: { context: ., dockerfile: infra/api.Dockerfile }
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgres://aritana:${DB_PASSWORD:-aritana}@db:5432/aritana
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      db: { condition: service_healthy }
+    profiles: ["prod"]
+
+  painel:
+    build: { context: ., dockerfile: infra/painel.Dockerfile }
+    restart: unless-stopped
+    profiles: ["prod"]
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports: ["80:80", "443:443"]
+    volumes:
+      - ./infra/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddydata:/data
+    depends_on: [api, painel]
+    profiles: ["prod"]
+
+volumes:
+  dbdata:
+  caddydata:

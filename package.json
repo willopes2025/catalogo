@@ -1,0 +1,13 @@
+{
+  "name": "aritana-plataforma",
+  "private": true,
+  "packageManager": "pnpm@10.28.0",
+  "scripts": {
+    "dev:api": "pnpm --filter @aritana/api dev",
+    "dev:painel": "pnpm --filter @aritana/painel dev",
+    "build": "pnpm -r build",
+    "test": "pnpm -r test",
+    "db:migrate": "pnpm --filter @aritana/api db:migrate",
+    "db:seed": "pnpm --filter @aritana/api db:seed"
+  }
+}
