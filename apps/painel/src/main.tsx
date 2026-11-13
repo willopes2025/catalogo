@@ -21,6 +21,11 @@ import { Financeiro } from './paginas/Financeiro';
 import { Configuracoes } from './paginas/Configuracoes';
 import { EmConstrucao } from './paginas/EmConstrucao';
 import { LinkPedido } from './paginas/LinkPedido';
+import { Cadastros, FichaCadastro } from './paginas/Cadastros';
+import { Niveis } from './paginas/Niveis';
+import { Assinar } from './paginas/Assinar';
+import { Catalogo } from './paginas/Catalogo';
+import { ImprimirDocumento, ImprimirMaleta } from './paginas/Imprimir';
 
 const cliente = new QueryClient({ defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: false, staleTime: 15_000 } } });
 
@@ -35,6 +40,10 @@ ReactDOM.createRoot(document.getElementById('raiz')!).render(
         <Routes>
           <Route path="/entrar" element={<Entrar />} />
           <Route path="/pedido/:token" element={<LinkPedido />} />
+          <Route path="/assinar/:token" element={<Assinar />} />
+          <Route path="/catalogo/:slug" element={<Catalogo />} />
+          <Route path="/imprimir/maleta/:id" element={<Protegido><ImprimirMaleta /></Protegido>} />
+          <Route path="/imprimir/documento/:id" element={<Protegido><ImprimirDocumento /></Protegido>} />
           <Route
             element={
               <Protegido>
@@ -45,6 +54,10 @@ ReactDOM.createRoot(document.getElementById('raiz')!).render(
             <Route index element={<Inicio />} />
             <Route path="rede" element={<Representantes />} />
             <Route path="rede/nova" element={<FichaRepresentante />} />
+            <Route path="rede/niveis" element={<Niveis />} />
+            <Route path="cadastros" element={<Cadastros />} />
+            <Route path="cadastros/novo" element={<FichaCadastro />} />
+            <Route path="cadastros/:id" element={<FichaCadastro />} />
             <Route path="rede/:id" element={<FichaRepresentante />} />
             <Route path="produtos" element={<Produtos />} />
             <Route path="produtos/novo" element={<FichaProduto />} />

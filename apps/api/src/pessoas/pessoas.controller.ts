@@ -7,7 +7,8 @@ import { Usuario, temPermissao, type UsuarioLogado } from '../comum/auth';
 import { centavos, dataISO, opcional, validar } from '../comum/validacao';
 import { cnpjValido, cpfValido, soDigitos } from '../comum/documentos';
 import { AuditoriaService } from '../comum/auditoria.service';
-import { creditos, maletas, niveis, pessoas, referencias, titulos } from '../db/schema';
+import { creditos, documentos, maletas, niveis, pessoas, referencias, titulos } from '../db/schema';
+import { gerarSlug } from '@aritana/regras';
 
 const TIPOS = ['representante', 'cliente', 'fornecedor', 'transportadora', 'assistencia'] as const;
 type TipoPessoa = (typeof TIPOS)[number];
@@ -149,7 +150,12 @@ export class PessoasController {
       this.db.select({ saldo: sql<number>`coalesce(sum(${creditos.valor}),0)::int` }).from(creditos).where(eq(creditos.pessoaId, id)),
       this.db.select({ id: pessoas.id, nome: pessoas.nome, status: pessoas.status }).from(pessoas).where(eq(pessoas.liderId, id)),
     ]);
-    return { ...p.pessoa, nivel: p.nivel, lider: p.lider, referencias: refs, maletas: ms, titulos: ts, saldoCredito: cred.saldo, rede };
+    const docs = await this.db
+      .select({ id: documentos.id, tipo: documentos.tipo, titulo: documentos.titulo, status: documentos.status, token: documentos.token, criadoEm: documentos.criadoEm, visualizadoEm: documentos.visualizadoEm, assinadoEm: documentos.assinadoEm, maletaId: documentos.maletaId })
+      .from(documentos)
+      .where(eq(documentos.pessoaId, id))
+      .orderBy(desc(documentos.criadoEm));
+    return { ...p.pessoa, nivel: p.nivel, lider: p.lider, referencias: refs, maletas: ms, titulos: ts, saldoCredito: cred.saldo, rede, documentos: docs };
   }
 
   @Post()
@@ -165,7 +171,8 @@ export class PessoasController {
       if (dup) throw new ForbiddenException({ mensagem: `Já existe um cadastro com esse documento: ${dup.nome}.`, id: dup.id });
     }
     return this.db.transaction(async (tx) => {
-      const [p] = await tx.insert(pessoas).values(dados).returning();
+      const slug = dados.tipo === 'representante' ? await this.slugLivre(tx, dados.nome) : null;
+      const [p] = await tx.insert(pessoas).values({ ...dados, slug }).returning();
       if (refs?.length) await tx.insert(referencias).values(refs.map((r) => ({ ...r, pessoaId: p.id })));
       await this.auditoria.registrar({ usuarioId: u.id, acao: 'criar', entidade: 'pessoa', entidadeId: p.id, dados: { tipo: p.tipo } }, tx);
       return p;
@@ -181,7 +188,8 @@ export class PessoasController {
     if (dados.documento) dados.documento = soDigitos(dados.documento);
     if (dados.liderId === id) throw new ForbiddenException('A representante não pode ser líder dela mesma.');
     return this.db.transaction(async (tx) => {
-      const [p] = await tx.update(pessoas).set({ ...dados, atualizadoEm: new Date() }).where(eq(pessoas.id, id)).returning();
+      const slug = atual.tipo === 'representante' && !atual.slug ? await this.slugLivre(tx, dados.nome) : atual.slug;
+      const [p] = await tx.update(pessoas).set({ ...dados, slug, atualizadoEm: new Date() }).where(eq(pessoas.id, id)).returning();
       if (refs) {
         await tx.delete(referencias).where(eq(referencias.pessoaId, id));
         if (refs.length) await tx.insert(referencias).values(refs.map((r) => ({ ...r, pessoaId: id })));
@@ -191,15 +199,13 @@ export class PessoasController {
       return p;
     });
   }
-}
 
-@Controller('niveis')
-export class NiveisController {
-  constructor(@Inject(DB) private readonly db: Db) {}
-  @Get()
-  listar() {
-    return this.db.select().from(niveis).orderBy(asc(niveis.ordem));
+  /** Endereço do catálogo: nome da representante; se já existir, acrescenta um número. */
+  private async slugLivre(tx: Pick<Db, 'select'>, nome: string) {
+    const base = gerarSlug(nome) || 'representante';
+    const usados = await tx.select({ slug: pessoas.slug }).from(pessoas).where(ilike(pessoas.slug, `${base}%`));
+    const set = new Set(usados.map((u) => u.slug));
+    if (!set.has(base)) return base;
+    for (let i = 2; ; i++) if (!set.has(`${base}-${i}`)) return `${base}-${i}`;
   }
 }
-
-export { inArray };

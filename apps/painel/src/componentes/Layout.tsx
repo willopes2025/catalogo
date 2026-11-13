@@ -3,7 +3,7 @@ import { MODULOS } from '@aritana/regras';
 import { lerSessao, pode, salvarSessao } from '../api';
 
 /** Rotas já construídas nesta etapa; as demais abrem a página "em construção". */
-const ROTAS: Record<string, string> = { inicio: '/', rede: '/rede', produtos: '/produtos', estoque: '/estoque', maletas: '/maletas', financeiro: '/financeiro', configuracoes: '/configuracoes' };
+const ROTAS: Record<string, string> = { inicio: '/', rede: '/rede', cadastros: '/cadastros', produtos: '/produtos', estoque: '/estoque', maletas: '/maletas', financeiro: '/financeiro', configuracoes: '/configuracoes' };
 
 export function Layout() {
   const sessao = lerSessao();

@@ -43,12 +43,13 @@ test('cadastro de representante valida CPF e cria', async () => {
   assert.equal(ruim.status, 400);
   assert.ok(ruim.dados.campos.documento);
   const p = await ok('POST', '/pessoas', {
-    tipo: 'representante', nome: 'Representante Teste E2E', documento: '529.982.247-25', telefone1: '27999990000',
+    tipo: 'representante', nome: 'Representante Teste E2E', documento: '390.533.447-05', telefone1: '27999990000', email: 'teste.e2e@exemplo.com',
     cidade: 'Vitória', uf: 'ES', modeloTrabalho: 'consignado', limiteCredito: 100000,
     referencias: [{ nome: 'Referência 1', telefone: '27988887777', relacao: 'vizinha' }],
   });
   ctx.rep = p;
-  const dup = await chamar('POST', '/pessoas', { tipo: 'representante', nome: 'Duplicada', documento: '52998224725' });
+  assert.equal(p.slug, 'representante-teste-e2e');
+  const dup = await chamar('POST', '/pessoas', { tipo: 'representante', nome: 'Duplicada', documento: '39053344705' });
   assert.equal(dup.status, 403);
 });
 
@@ -76,6 +77,7 @@ test('cria maleta: peças saem do depósito e vão para a maleta', async () => {
   });
   ctx.maleta = m;
   assert.equal(m.dataLimite, '2026-10-31');
+  assert.ok(m.promissoriaId, 'promissória gerada junto com a maleta');
   const det = await ok('GET', `/maletas/${m.id}`);
   assert.equal(det.totais.pecas, 4);
   assert.equal(det.itens.find((i) => i.codigoBarras === a.codigoBarras).enviada, 3, 'leituras repetidas somam');
@@ -173,4 +175,96 @@ test('painel Início responde com os indicadores', async () => {
   const d = await ok('GET', '/painel/inicio');
   assert.ok(typeof d.maletas.abertas === 'number');
   assert.ok(d.mes.acertos >= 1);
+});
+
+// ───────────── Semana 2 ─────────────
+
+test('promissória da maleta traz valor por extenso e dados da representante', async () => {
+  const doc = await ok('GET', `/documentos/${ctx.maleta.promissoriaId}`);
+  assert.equal(doc.tipo, 'promissoria');
+  assert.match(doc.conteudo, /Maleta|maleta nº/);
+  assert.match(doc.conteudo, /reais/);
+  assert.match(doc.conteudo, /390\.533\.447-05/);
+  assert.equal(doc.hash.length, 64);
+});
+
+test('contrato: geração, código por e-mail e assinatura com evidências', async () => {
+  const doc = await ok('POST', '/documentos', { pessoaId: ctx.rep.id, tipo: 'contrato' });
+  assert.match(doc.conteudo, /30%/, 'comissão à vista das regras entra no texto');
+  assert.ok(!doc.conteudo.includes('{{'), 'nenhuma variável sobrando');
+  const salvo = token;
+  token = '';
+  const pub = await ok('GET', `/publico/documentos/${doc.token}`);
+  assert.equal(pub.status, 'pendente');
+  assert.equal(pub.emailMascarado, 'te***@exemplo.com');
+  const c = await ok('POST', `/publico/documentos/${doc.token}/codigo`);
+  assert.match(c.codigoDev, /^\d{6}$/);
+  const repetido = await chamar('POST', `/publico/documentos/${doc.token}/codigo`);
+  assert.equal(repetido.status, 400, 'não deixa pedir código em sequência');
+  const errado = await chamar('POST', `/publico/documentos/${doc.token}/assinar`, { codigo: c.codigoDev === '000000' ? '111111' : '000000', nome: 'Representante Teste E2E', cpf: '39053344705', aceite: true });
+  assert.equal(errado.status, 400);
+  assert.match(errado.dados.mensagem, /incorreto/);
+  const nomeErrado = await chamar('POST', `/publico/documentos/${doc.token}/assinar`, { codigo: c.codigoDev, nome: 'Outra Pessoa', cpf: '39053344705', aceite: true });
+  assert.match(nomeErrado.dados.mensagem, /nome completo/);
+  const cpfErrado = await chamar('POST', `/publico/documentos/${doc.token}/assinar`, { codigo: c.codigoDev, nome: 'representante teste e2e', cpf: '52998224725', aceite: true });
+  assert.match(cpfErrado.dados.mensagem, /CPF/);
+  const ass = await ok('POST', `/publico/documentos/${doc.token}/assinar`, { codigo: c.codigoDev, nome: 'representante teste E2E', cpf: '390.533.447-05', aceite: true });
+  assert.equal(ass.hash, doc.hash);
+  const de_novo = await chamar('POST', `/publico/documentos/${doc.token}/assinar`, { codigo: c.codigoDev, nome: 'Representante Teste E2E', cpf: '39053344705', aceite: true });
+  assert.equal(de_novo.status, 400);
+  token = salvo;
+  const final = await ok('GET', `/documentos/${doc.id}`);
+  assert.equal(final.status, 'assinado');
+  assert.ok(final.ip && final.assinadoEm && final.userAgent !== undefined);
+  assert.ok(!('codigoHash' in final), 'hash do código nunca sai da API');
+});
+
+test('modelo com variável desconhecida é recusado', async () => {
+  const r = await chamar('POST', '/documentos/modelos', { tipo: 'aditivo', titulo: 'Aditivo', conteudo: 'Texto do aditivo com {{variavel_que_nao_existe}} e mais texto.' });
+  assert.equal(r.status, 400);
+  assert.match(r.dados.campos.conteudo, /variavel_que_nao_existe/);
+});
+
+test('catálogo público mostra as peças da maleta, sem custo', async () => {
+  const m = await ok('POST', '/maletas', { representanteId: ctx.rep.id, origemId: ctx.deposito.id, itens: [{ codigoBarras: ctx.prods[0].codigoBarras, quantidade: 1 }] });
+  ctx.maleta3 = m;
+  const salvo = token;
+  token = '';
+  const cat = await ok('GET', '/publico/catalogo/representante-teste-e2e');
+  assert.equal(cat.pecas.length, 1);
+  assert.ok(!('custo' in cat.pecas[0]));
+  assert.ok(!('documento' in cat.representante) && !('id' in cat.representante));
+  assert.equal((await chamar('GET', '/publico/catalogo/nao-existe')).status, 404);
+  token = salvo;
+});
+
+test('nível com comissão própria muda a conta do acerto', async () => {
+  const n = await ok('POST', '/niveis', { nome: 'Diamante E2E', ordem: 9, metaMensal: 0, comissaoAvistaPb: 4000, comissaoPrazoPb: 3500 });
+  await ok('PATCH', `/pessoas/${ctx.rep.id}`, { nivelId: n.id });
+  const det = await ok('GET', `/maletas/${ctx.maleta3.id}`);
+  const sim = await ok('POST', `/maletas/${ctx.maleta3.id}/simular-acerto`, { forma: 'avista', itens: [{ produtoId: det.itens[0].produtoId, vendida: 1, devolvida: 0, perdida: 0 }] });
+  assert.equal(sim.resultado.comissaoPb, 4000);
+  await ok('POST', `/maletas/${ctx.maleta3.id}/cancelar`, { motivo: 'fim do teste' });
+});
+
+test('usuário do Financeiro: senha provisória e permissões por módulo', async () => {
+  const grupos = await ok('GET', '/grupos');
+  const fin = grupos.find((g) => g.nome === 'Financeiro');
+  const u = await ok('POST', '/usuarios', { nome: 'Financeiro Teste', email: 'fin.teste@aritana.local', grupoId: fin.id });
+  assert.ok(u.senhaProvisoria.length >= 10);
+  const salvo = token;
+  const login = await ok('POST', '/auth/login', { email: 'fin.teste@aritana.local', senha: u.senhaProvisoria });
+  token = login.token;
+  await ok('GET', '/financeiro/titulos');
+  assert.equal((await chamar('POST', '/maletas', { representanteId: ctx.rep.id, origemId: ctx.deposito.id, itens: [{ codigoBarras: 'x', quantidade: 1 }] })).status, 403);
+  assert.equal((await chamar('GET', '/usuarios')).status, 403);
+  token = salvo;
+});
+
+test('Assertiva sem credenciais avisa em vez de falhar', async () => {
+  const r = await chamar('GET', '/integracoes/assertiva/cpf/39053344705');
+  assert.equal(r.status, 503);
+  assert.match(r.dados.mensagem, /credenciais/);
+  const st = await ok('GET', '/integracoes/status');
+  assert.equal(st.find((i) => i.chave === 'assertiva').ligada, false);
 });

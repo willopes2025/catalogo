@@ -16,7 +16,8 @@ import type { Tx } from '../db/client';
 import { AuditoriaService } from '../comum/auditoria.service';
 import { EstoqueService } from '../estoque/estoque.service';
 import { ConfiguracoesService } from '../configuracoes/configuracoes.service';
-import { acertos, creditos, locaisEstoque, maletaItens, maletas, pessoas, produtos, titulos } from '../db/schema';
+import { DocumentosService } from '../documentos/documentos.service';
+import { acertos, creditos, documentos, locaisEstoque, maletaItens, maletas, pessoas, produtos, titulos } from '../db/schema';
 
 export const hoje = () => new Date(Date.now() - 3 * 3600_000).toISOString().slice(0, 10); // horário de Brasília
 
@@ -45,6 +46,7 @@ export class MaletasService {
     private readonly estoque: EstoqueService,
     private readonly config: ConfiguracoesService,
     private readonly auditoria: AuditoriaService,
+    private readonly documentos: DocumentosService,
   ) {}
 
   /** Situação de crédito da representante: limite, quanto está usado e pendências. */
@@ -144,7 +146,9 @@ export class MaletasService {
         await this.estoque.mover(tx, { produtoId: i.produto.id, origemId: origem.id, destinoId: local.id, quantidade: i.quantidade, tipo: 'maleta_envio', referenciaTipo: 'maleta', referenciaId: maleta.id, usuarioId });
       }
       await this.auditoria.registrar({ usuarioId, acao: 'criar', entidade: 'maleta', entidadeId: maleta.id, dados: { valor, pecas: itens.reduce((a, i) => a + i.quantidade, 0), excecao: !lib.pode ? lib.motivos : undefined } }, tx);
-      return maleta;
+      // Promissória da maleta, se houver modelo cadastrado (sem modelo, a maleta é criada assim mesmo).
+      const promissoria = await this.documentos.gerar(tx, { pessoaId: d.representanteId, tipo: 'promissoria', maletaId: maleta.id }, usuarioId, false);
+      return { ...maleta, promissoriaId: promissoria?.id ?? null };
     });
   }
 
@@ -173,6 +177,7 @@ export class MaletasService {
         await this.estoque.mover(tx, { produtoId: i.produto.id, origemId: m.origemId, destinoId: m.localId, quantidade: i.quantidade, tipo: 'maleta_envio', motivo: 'Inclusão durante o ciclo', referenciaTipo: 'maleta', referenciaId: id, usuarioId });
       }
       await this.auditoria.registrar({ usuarioId, acao: 'incluir_itens', entidade: 'maleta', entidadeId: id, dados: { itens } }, tx);
+      await this.documentos.gerar(tx, { pessoaId: m.representanteId, tipo: 'promissoria', maletaId: id }, usuarioId, false);
       return { ok: true };
     });
   }
@@ -225,6 +230,10 @@ export class MaletasService {
       .orderBy(asc(produtos.descricao));
     const comSaldo = itens.map((i) => ({ ...i, naMaleta: i.enviada - i.vendida - i.devolvida - i.perdida }));
     const historico = await this.db.select().from(acertos).where(eq(acertos.maletaId, id)).orderBy(asc(acertos.criadoEm));
+    const docs = await this.db
+      .select({ id: documentos.id, tipo: documentos.tipo, status: documentos.status, token: documentos.token, assinadoEm: documentos.assinadoEm })
+      .from(documentos)
+      .where(and(eq(documentos.maletaId, id), sql`${documentos.status} <> 'cancelado'`));
     const totais = {
       pecas: comSaldo.reduce((a, i) => a + i.naMaleta, 0),
       valor: comSaldo.reduce((a, i) => a + i.naMaleta * i.preco, 0),
@@ -232,7 +241,7 @@ export class MaletasService {
       valorEnviado: comSaldo.reduce((a, i) => a + i.enviada * i.preco, 0),
     };
     const diasAtraso = m.maleta.status === 'aberta' ? Math.max(0, diasEntre(m.maleta.dataLimite, hoje())) : 0;
-    return { ...m.maleta, representante: m.representante, telefone: m.telefone, cidade: m.cidade, origem: m.origem, itens: comSaldo, acertos: historico, totais, diasAtraso };
+    return { ...m.maleta, representante: m.representante, telefone: m.telefone, cidade: m.cidade, origem: m.origem, itens: comSaldo, acertos: historico, documentos: docs, totais, diasAtraso };
   }
 
   async prebaixa(id: string, itens: { produtoId: string; vendida: number; devolvida: number }[], usuarioId: string | null) {

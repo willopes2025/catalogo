@@ -136,12 +136,15 @@ export const pessoas = pgTable(
     status: statusPessoa('status').notNull().default('ativo'),
     observacao: text('observacao'),
     observacaoInterna: text('observacao_interna'),
+    /** Endereço do catálogo da representante: /catalogo/<slug> */
+    slug: text('slug'),
     /** Id no Jueri, para conferência da migração. */
     idJueri: text('id_jueri'),
     criadoEm: criadoEm(),
     atualizadoEm: atualizadoEm(),
   },
   (t) => ({
+    slug: uniqueIndex('pessoas_slug_uq').on(t.slug),
     porTipo: index('pessoas_tipo_idx').on(t.tipo, t.status),
     porDocumento: index('pessoas_documento_idx').on(t.documento),
     porLider: index('pessoas_lider_idx').on(t.liderId),
@@ -382,6 +385,62 @@ export const creditos = pgTable('creditos', {
   usuarioId: uuid('usuario_id').references(() => usuarios.id),
   criadoEm: criadoEm(),
 });
+
+// ───────────────────────── Contratos e assinatura ─────────────────────────
+
+export const tipoDocumento = pgEnum('tipo_documento', ['contrato', 'promissoria', 'aditivo']);
+export const statusDocumento = pgEnum('status_documento', ['pendente', 'assinado', 'cancelado', 'expirado']);
+
+/** Modelo de texto com variáveis {{nome}}, {{comissao_avista}} etc. */
+export const modelosDocumento = pgTable('modelos_documento', {
+  id: id(),
+  tipo: tipoDocumento('tipo').notNull(),
+  /** Modelo de trabalho a que se aplica; nulo = todos. */
+  modeloTrabalho: modeloTrabalho('modelo_trabalho'),
+  titulo: text('titulo').notNull(),
+  conteudo: text('conteudo').notNull(),
+  versao: integer('versao').notNull().default(1),
+  ativo: boolean('ativo').notNull().default(true),
+  criadoEm: criadoEm(),
+  atualizadoEm: atualizadoEm(),
+});
+
+/**
+ * Documento gerado para uma pessoa e enviado para assinatura eletrônica.
+ * O texto final fica congelado em `conteudo`, com o hash SHA-256 que prova que não mudou.
+ */
+export const documentos = pgTable(
+  'documentos',
+  {
+    id: id(),
+    tipo: tipoDocumento('tipo').notNull(),
+    pessoaId: uuid('pessoa_id').notNull().references(() => pessoas.id),
+    maletaId: uuid('maleta_id').references(() => maletas.id),
+    modeloId: uuid('modelo_id').references(() => modelosDocumento.id),
+    titulo: text('titulo').notNull(),
+    conteudo: text('conteudo').notNull(),
+    hash: text('hash').notNull(),
+    status: statusDocumento('status').notNull().default('pendente'),
+    token: text('token').notNull(),
+    enviadoPara: text('enviado_para'),
+    /** Código de confirmação guardado só como hash. */
+    codigoHash: text('codigo_hash'),
+    codigoExpiraEm: timestamp('codigo_expira_em', { withTimezone: true }),
+    tentativas: integer('tentativas').notNull().default(0),
+    visualizadoEm: timestamp('visualizado_em', { withTimezone: true }),
+    assinadoEm: timestamp('assinado_em', { withTimezone: true }),
+    assinaturaNome: text('assinatura_nome'),
+    assinaturaDocumento: text('assinatura_documento'),
+    ip: text('ip'),
+    userAgent: text('user_agent'),
+    usuarioId: uuid('usuario_id').references(() => usuarios.id),
+    criadoEm: criadoEm(),
+  },
+  (t) => ({
+    token: uniqueIndex('documentos_token_uq').on(t.token),
+    porPessoa: index('documentos_pessoa_idx').on(t.pessoaId),
+  }),
+);
 
 // ───────────────────────── Configurações e auditoria ─────────────────────────
 

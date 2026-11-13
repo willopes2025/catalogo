@@ -4,6 +4,8 @@ import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { api, ErroApi, pode } from '../api';
 import { centavosParaTexto, data, documento, paraCentavos, reais, telefone } from '../formato';
 import { Abas, Campo, Carregando, Erro, StatusMaleta, StatusPessoa, Topo } from '../componentes/ui';
+import { BotaoAssertiva } from '../componentes/BotaoAssertiva';
+import { DocumentosPessoa } from '../componentes/DocumentosPessoa';
 
 interface Linha {
   id: string; nome: string; documento: string | null; telefone1: string | null; cidade: string | null; uf: string | null;
@@ -25,7 +27,7 @@ export function Representantes() {
 
   return (
     <>
-      <Topo eb="Rede" titulo="Representantes" sub={q.data ? `${q.data.total} cadastros` : undefined} acoes={pode('rede', 'criar') && <Link className="botao" to="/rede/nova">Nova representante</Link>} />
+      <Topo eb="Rede" titulo="Representantes" sub={q.data ? `${q.data.total} cadastros` : undefined} acoes={<><Link className="botao claro" to="/rede/niveis">Níveis e metas</Link>{pode('rede', 'criar') && <Link className="botao" to="/rede/nova">Nova representante</Link>}</>} />
       <form
         className="busca"
         onSubmit={(e) => {
@@ -93,7 +95,7 @@ export function FichaRepresentante() {
   const nova = !id;
   const navegar = useNavigate();
   const qc = useQueryClient();
-  const [aba, setAba] = useState<'dados' | 'rede' | 'credito' | 'maletas' | 'financeiro'>('dados');
+  const [aba, setAba] = useState<'dados' | 'rede' | 'credito' | 'maletas' | 'financeiro' | 'documentos'>('dados');
   const [f, setF] = useState<Pessoa>(VAZIA);
   const [limiteTexto, setLimiteTexto] = useState(centavosParaTexto(VAZIA.limiteCredito));
 
@@ -109,7 +111,7 @@ export function FichaRepresentante() {
 
   const salvar = useMutation({
     mutationFn: () => {
-      const { maletas, titulos, rede, nivel, lider, saldoCredito, criadoEm, atualizadoEm, id: _id, ...corpo } = f;
+      const { maletas, titulos, rede, nivel, lider, saldoCredito, documentos, slug, criadoEm, atualizadoEm, id: _id, ...corpo } = f;
       corpo.limiteCredito = paraCentavos(limiteTexto);
       corpo.referencias = (f.referencias ?? []).filter((r: any) => r.nome?.trim()).map(({ nome, telefone, relacao }: any) => ({ nome, telefone, relacao }));
       return nova ? api<Pessoa>('/pessoas', { corpo }) : api<Pessoa>(`/pessoas/${id}`, { metodo: 'PATCH', corpo });
@@ -141,6 +143,7 @@ export function FichaRepresentante() {
         sub={!nova && <><StatusPessoa status={f.status} bloqueado={f.bloqueado} /> &nbsp; {f.nivel ?? 'Sem nível'} · Limite {reais(f.limiteCredito ?? 0)} · Crédito {reais(f.saldoCredito ?? 0)}</>}
         acoes={
           <>
+            {!nova && f.slug && f.status === 'ativo' && <a className="botao claro" href={`/catalogo/${f.slug}`} target="_blank" rel="noreferrer">Ver catálogo</a>}
             {!nova && f.status === 'ativo' && pode('maletas', 'criar') && <Link className="botao claro" to={`/maletas/nova?representante=${id}`}>Nova maleta</Link>}
             {editavel && <button className="botao" onClick={() => salvar.mutate()} disabled={salvar.isPending}>{salvar.isPending ? 'Salvando…' : 'Salvar'}</button>}
           </>
@@ -151,7 +154,7 @@ export function FichaRepresentante() {
       <Abas
         ativa={aba}
         mudar={setAba}
-        abas={nova ? [['dados', 'Dados'], ['rede', 'Modelo e rede']] : [['dados', 'Dados'], ['rede', 'Modelo e rede'], ['credito', 'Crédito'], ['maletas', `Maletas (${f.maletas?.length ?? 0})`], ['financeiro', 'Financeiro']]}
+        abas={nova ? [['dados', 'Dados'], ['rede', 'Modelo e rede']] : [['dados', 'Dados'], ['rede', 'Modelo e rede'], ['credito', 'Crédito'], ['maletas', `Maletas (${f.maletas?.length ?? 0})`], ['financeiro', 'Financeiro'], ['documentos', `Documentos (${f.documentos?.length ?? 0})`]]}
       />
       <div className="cartao">
         {aba === 'dados' && (
@@ -159,12 +162,12 @@ export function FichaRepresentante() {
             <div className="secao">Identificação</div>
             {inp('nome', 'Nome completo', { required: true }, 'l2')}
             {inp('documento', 'CPF', { inputMode: 'numeric', placeholder: '000.000.000-00' })}
-            {inp('rg', 'RG')}
+            {editavel ? <div className="campo"><label>&nbsp;</label><BotaoAssertiva cpf={f.documento} aplicar={(d) => setF({ ...f, ...d })} /></div> : inp('rg', 'RG')}
+            {editavel && inp('rg', 'RG')}
             {inp('nascimento', 'Nascimento', { type: 'date' })}
             <Campo rotulo="Gênero"><select value={f.genero ?? ''} onChange={set('genero')} disabled={!editavel}><option value="">—</option><option>Feminino</option><option>Masculino</option><option>Outro</option></select></Campo>
             <Campo rotulo="Estado civil"><select value={f.estadoCivil ?? ''} onChange={set('estadoCivil')} disabled={!editavel}><option value="">—</option><option>Solteira(o)</option><option>Casada(o)</option><option>Divorciada(o)</option><option>Viúva(o)</option><option>União estável</option></select></Campo>
             {inp('profissao', 'Profissão')}
-            <p className="muted l4">A consulta automática do CPF pela Assertiva será ligada assim que a Aritana enviar as credenciais da integração.</p>
             <div className="secao">Contato</div>
             {inp('telefone1', 'Telefone / WhatsApp', { inputMode: 'tel' })}
             {inp('telefone2', 'Telefone 2', { inputMode: 'tel' })}
@@ -228,6 +231,7 @@ export function FichaRepresentante() {
             </table>
           ) : <p className="muted">Nenhuma maleta ainda.</p>
         )}
+        {aba === 'documentos' && !nova && <DocumentosPessoa pessoa={f} />}
         {aba === 'financeiro' && (
           f.titulos?.length ? (
             <table className="tabela">

@@ -9,6 +9,7 @@ import bcrypt from 'bcryptjs';
 import { eq } from 'drizzle-orm';
 import { REGRAS_PADRAO } from '@aritana/regras';
 import { criarConexao, schema as s } from './client';
+import { MODELOS_INICIAIS } from './modelos-iniciais';
 
 async function main() {
   const { db, pool } = criarConexao();
@@ -71,6 +72,7 @@ async function main() {
     ]);
 
     await tx.insert(s.configuracoes).values({ chave: 'regras_consignado', valor: REGRAS_PADRAO });
+    await tx.insert(s.modelosDocumento).values(MODELOS_INICIAIS);
 
     await tx.insert(s.contas).values([
       { empresaId: matriz.id, nome: 'Caixa', tipo: 'caixa' },
@@ -91,6 +93,11 @@ async function main() {
       .insert(s.pessoas)
       .values({ tipo: 'fornecedor', tipoDocumento: 'cnpj', nome: 'Fornecedor Exemplo Ltda', cidade: 'Limeira', uf: 'SP' })
       .returning();
+    await tx.insert(s.pessoas).values([
+      { tipo: 'cliente', nome: 'Cliente Exemplo', telefone1: '27900000010', cidade: 'Vitória', uf: 'ES', consentimentoLgpd: true },
+      { tipo: 'transportadora', tipoDocumento: 'cnpj', nome: 'Transportadora Exemplo', cidade: 'Serra', uf: 'ES' },
+      { tipo: 'assistencia', tipoDocumento: 'cnpj', nome: 'Assistência Técnica Exemplo', cidade: 'Vila Velha', uf: 'ES' },
+    ]);
 
     const nomes: Record<string, string[]> = {
       Brincos: ['Argola lisa', 'Ponto de luz', 'Ear cuff trançado', 'Gota cravejada', 'Argola com zircônia'],
@@ -139,14 +146,14 @@ async function main() {
     const [ana] = await tx
       .insert(s.pessoas)
       .values({
-        tipo: 'representante', nome: 'Representante Exemplo 1 (líder)', telefone1: '27900000001', cidade: 'Vila Velha', uf: 'ES',
+        tipo: 'representante', nome: 'Representante Exemplo 1 (líder)', slug: 'representante-exemplo-1', email: 'exemplo1@exemplo.com', telefone1: '27900000001', cidade: 'Vila Velha', uf: 'ES',
         modeloTrabalho: 'consignado', nivelId: lider.id, limiteCredito: 500000, praca: 'Vila Velha',
       })
       .returning();
     await tx.insert(s.pessoas).values([
-      { tipo: 'representante', nome: 'Representante Exemplo 2', telefone1: '27900000002', cidade: 'Serra', uf: 'ES', modeloTrabalho: 'consignado', nivelId: bronze.id, liderId: ana.id, limiteCredito: 150000, praca: 'Serra' },
-      { tipo: 'representante', nome: 'Representante Exemplo 3', telefone1: '27900000003', cidade: 'Cariacica', uf: 'ES', modeloTrabalho: 'revenda', nivelId: bronze.id, liderId: ana.id, limiteCredito: 150000, praca: 'Cariacica' },
-      { tipo: 'representante', nome: 'Candidata Exemplo', telefone1: '27900000004', cidade: 'Vitória', uf: 'ES', status: 'triagem', modeloTrabalho: 'consignado' },
+      { tipo: 'representante', nome: 'Representante Exemplo 2', slug: 'representante-exemplo-2', email: 'exemplo2@exemplo.com', documento: '52998224725', telefone1: '27900000002', cidade: 'Serra', uf: 'ES', modeloTrabalho: 'consignado', nivelId: bronze.id, liderId: ana.id, limiteCredito: 150000, praca: 'Serra' },
+      { tipo: 'representante', nome: 'Representante Exemplo 3', slug: 'representante-exemplo-3', telefone1: '27900000003', cidade: 'Cariacica', uf: 'ES', modeloTrabalho: 'revenda', nivelId: bronze.id, liderId: ana.id, limiteCredito: 150000, praca: 'Cariacica' },
+      { tipo: 'representante', nome: 'Candidata Exemplo', slug: 'candidata-exemplo', telefone1: '27900000004', cidade: 'Vitória', uf: 'ES', status: 'triagem', modeloTrabalho: 'consignado' },
     ]);
   });
 

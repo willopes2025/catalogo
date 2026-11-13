@@ -8,6 +8,13 @@
       "when": 1794579669726,
       "tag": "0000_inicial",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1794581116532,
+      "tag": "0001_contratos_e_catalogo",
+      "breakpoints": true
     }
   ]
 }

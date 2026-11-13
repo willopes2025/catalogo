@@ -3,7 +3,7 @@
 Sistema da Aritana Semijoias: matriz, representantes, lojas e eventos, substituindo o Jueri.
 Desenvolvido pela Wide Inteligência Comercial. **O código pertence à Aritana.**
 
-## O que já está pronto (Versão 1 · semana 1)
+## O que já está pronto (Versão 1 · semanas 1 e 2)
 
 | Parte | O que faz |
 |---|---|
@@ -11,6 +11,20 @@ Desenvolvido pela Wide Inteligência Comercial. **O código pertence à Aritana.
 | **Banco de dados** | Empresas (matriz e loja), locais de estoque, usuários e grupos com permissão por módulo, representantes com líder e supervisor, clientes, fornecedores, produtos, **estoque em livro-caixa**, maletas, acertos, títulos, créditos, regras configuráveis e auditoria. |
 | **API** (`apps/api`) | Login, cadastros, produtos, estoque (entrada, ajuste por contagem, transferência, rastreio da peça), maletas (criar com bipagem, troca no meio do ciclo, pré-baixa, simular e fechar acerto, cancelar), link do pedido para a representante, financeiro e painel Início. |
 | **Painel** (`apps/painel`) | Login, menu dos 19 módulos, Início, Representantes, Produtos, Estoque, Maletas, Acerto com conferência por bipagem, Financeiro, Regras do consignado e o **link do pedido** para celular. |
+
+**Semana 2**
+
+| Parte | O que faz |
+|---|---|
+| **Cadastros** | Clientes (com representante vinculada e consentimento LGPD), fornecedores, transportadoras e assistências técnicas. |
+| **Níveis e metas** | Bronze, Prata, Ouro, Líder com meta e comissão própria, que substitui a comissão padrão no acerto. |
+| **Usuários e grupos** | Criação de usuários com senha provisória, grupos com permissão por módulo e ação, empresas (razão social e CNPJ). |
+| **Assertiva** | Botão “Buscar pela Assertiva” no cadastro. Pronto, desligado até a Aritana enviar as credenciais. |
+| **Contrato e promissória** | Modelos editáveis com variáveis (comissão, multa, juros e limite vêm das regras). Promissória gerada com cada maleta, com valor por extenso. Assinatura eletrônica por link, com código por e-mail, nome e CPF, e registro de data, IP, aparelho e hash SHA-256. |
+| **Impressão** | Pedido da maleta, lista de separação, contrato e promissória, para imprimir ou salvar em PDF. |
+| **Catálogo** | `/catalogo/<nome-da-representante>`: peças da maleta, filtros e botão de pedir pelo WhatsApp dela. |
+
+Os modelos de contrato e promissória que vêm instalados são **provisórios** e devem ser trocados pelos textos revisados pelo jurídico da Aritana, em Configurações › Modelos de documento.
 
 Os módulos ainda não construídos aparecem no menu como “em construção” (Versão 1) ou “V2”.
 
@@ -43,8 +57,8 @@ pnpm dev:painel                        # http://localhost:5173
 ## Testes
 
 ```bash
-pnpm --filter @aritana/regras test     # regras do consignado (19 testes)
-pnpm --filter @aritana/api test:e2e    # fluxo completo contra a API (12 etapas, banco de teste)
+pnpm --filter @aritana/regras test     # regras do consignado e textos (34 testes)
+pnpm --filter @aritana/api test:e2e    # fluxo completo contra a API (19 etapas, banco de teste)
 ```
 
 ## Publicar na VPS
@@ -65,7 +79,6 @@ pnpm --filter @aritana/api test:e2e    # fluxo completo contra a API (12 etapas,
 
 ## Próximas etapas da Versão 1
 
-- Semana 2: cadastros de clientes e fornecedores, consulta Assertiva, contrato e promissória com assinatura por link, PDFs da maleta, catálogo simples da representante, níveis com comissão própria.
 - Semana 3: frente de caixa da loja, caixas, boletos e Pix pelo Asaas, notas fiscais pelo emissor, relatórios, suporte e migração do Jueri.
 
 ## Estrutura

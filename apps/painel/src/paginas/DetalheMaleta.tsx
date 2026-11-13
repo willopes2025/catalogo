@@ -35,11 +35,13 @@ export function DetalheMaleta() {
         eb={`Maletas · Nº ${m.numero}`}
         titulo={m.representante}
         sub={<><StatusMaleta status={m.status} diasAtraso={m.diasAtraso} /> &nbsp; Retirada {data(m.dataRetirada)} · Acerto até <b>{data(m.dataLimite)}</b> · {telefone(m.telefone)} · {m.cidade}</>}
-        acoes={aberta && (
+        acoes={(
           <>
-            {pode('maletas', 'editar') && <button className="botao claro" onClick={() => { setModo(modo === 'incluir' ? 'ver' : 'incluir'); setItens([]); }}>Incluir peças</button>}
-            {pode('maletas', 'editar') && <button className="botao claro" onClick={() => { setModo(modo === 'retirar' ? 'ver' : 'retirar'); setItens([]); }}>Retirar peças</button>}
-            {pode('maletas', 'editar') && <Link className="botao" to={`/maletas/${id}/acerto`}>Fazer acerto</Link>}
+            <a className="botao claro" href={`/imprimir/maleta/${id}?via=pedido`} target="_blank" rel="noreferrer">Imprimir pedido</a>
+            {aberta && <a className="botao claro" href={`/imprimir/maleta/${id}?via=separacao`} target="_blank" rel="noreferrer">Separação</a>}
+            {aberta && pode('maletas', 'editar') && <button className="botao claro" onClick={() => { setModo(modo === 'incluir' ? 'ver' : 'incluir'); setItens([]); }}>Incluir peças</button>}
+            {aberta && pode('maletas', 'editar') && <button className="botao claro" onClick={() => { setModo(modo === 'retirar' ? 'ver' : 'retirar'); setItens([]); }}>Retirar peças</button>}
+            {aberta && pode('maletas', 'editar') && <Link className="botao" to={`/maletas/${id}/acerto`}>Fazer acerto</Link>}
           </>
         )}
       />
@@ -62,6 +64,20 @@ export function DetalheMaleta() {
           </div>
         </div>
       )}
+
+      {m.documentos?.map((d: any) => (
+        <div key={d.id} className="cartao flex entre" style={{ marginBottom: 14, flexWrap: 'wrap' }}>
+          <div>
+            <h3>{d.tipo === 'promissoria' ? 'Nota promissória' : d.tipo}</h3>
+            <p className="muted">{d.status === 'assinado' ? 'Assinada eletronicamente pela representante.' : 'Aguardando assinatura. Envie o link junto com o do pedido, ou imprima para assinar no papel.'}</p>
+          </div>
+          <div className="flex">
+            <span className={`etiqueta ${d.status === 'assinado' ? 'ok' : 'alerta'}`}>{d.status === 'assinado' ? 'Assinada' : 'Pendente'}</span>
+            <a className="botao claro" href={`/imprimir/documento/${d.id}`} target="_blank" rel="noreferrer">Imprimir</a>
+            {d.status === 'pendente' && <button className="botao claro" onClick={async () => { const l = `${window.location.origin}/assinar/${d.token}`; try { await navigator.clipboard.writeText(l); } catch { window.prompt('Copie o link:', l); } }}>Copiar link de assinatura</button>}
+          </div>
+        </div>
+      ))}
 
       {modo !== 'ver' && (
         <div className="cartao coluna" style={{ marginBottom: 14 }}>

@@ -2,7 +2,8 @@ import { useEffect, useState } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { api, pode } from '../api';
 import { centavosParaTexto, paraCentavos } from '../formato';
-import { Campo, Carregando, Erro, Topo } from '../componentes/ui';
+import { Abas, Campo, Carregando, Erro, Topo } from '../componentes/ui';
+import { Usuarios, Grupos, Modelos, Integracoes, Empresas } from './ConfiguracoesOutras';
 
 type Regras = Record<string, number | boolean>;
 
@@ -26,7 +27,25 @@ const CAMPOS: [string, string, string][] = [
   ['maletasSimultaneas', 'Maletas abertas ao mesmo tempo', 'Por representante'],
 ];
 
+type Aba = 'regras' | 'empresas' | 'usuarios' | 'grupos' | 'modelos' | 'integracoes';
+
 export function Configuracoes() {
+  const [aba, setAba] = useState<Aba>('regras');
+  return (
+    <>
+      <Topo eb="Configurações" titulo={{ regras: 'Regras do consignado', empresas: 'Empresas', usuarios: 'Usuários', grupos: 'Grupos e permissões', modelos: 'Modelos de documento', integracoes: 'Integrações' }[aba]} />
+      <Abas ativa={aba} mudar={setAba} abas={[['regras', 'Regras do consignado'], ['empresas', 'Empresas'], ['usuarios', 'Usuários'], ['grupos', 'Grupos e permissões'], ['modelos', 'Modelos de documento'], ['integracoes', 'Integrações']]} />
+      {aba === 'regras' && <Regras />}
+      {aba === 'empresas' && <Empresas />}
+      {aba === 'usuarios' && <Usuarios />}
+      {aba === 'grupos' && <Grupos />}
+      {aba === 'modelos' && <Modelos />}
+      {aba === 'integracoes' && <Integracoes />}
+    </>
+  );
+}
+
+function Regras() {
   const q = useQuery({ queryKey: ['regras'], queryFn: () => api<Regras>('/configuracoes/regras-consignado') });
   const [t, setT] = useState<Record<string, string>>({});
   const [perdida, setPerdida] = useState(true);
@@ -46,7 +65,10 @@ export function Configuracoes() {
   const editavel = pode('configuracoes', 'editar');
   return (
     <>
-      <Topo eb="Configurações" titulo="Regras do consignado" sub="Valores provisórios até a Aritana confirmar os percentuais. Mudanças valem para os próximos acertos." acoes={editavel && <button className="botao" onClick={() => salvar.mutate()} disabled={salvar.isPending}>Salvar regras</button>} />
+      <div className="flex entre" style={{ marginBottom: 12 }}>
+        <p className="muted">Valores provisórios até a Aritana confirmar os percentuais. Mudanças valem para os próximos acertos e entram nos novos contratos.</p>
+        {editavel && <button className="botao" onClick={() => salvar.mutate()} disabled={salvar.isPending}>Salvar regras</button>}
+      </div>
       {salvar.isSuccess && <div className="aviso ok" style={{ marginBottom: 12 }}>Regras salvas.</div>}
       {salvar.error && <div style={{ marginBottom: 12 }}><Erro erro={salvar.error} /></div>}
       <div className="cartao form">
@@ -54,7 +76,7 @@ export function Configuracoes() {
           <Campo key={k} rotulo={r} ajuda={a}><input value={t[k] ?? ''} onChange={(e) => setT({ ...t, [k]: e.target.value })} inputMode="decimal" disabled={!editavel} /></Campo>
         ))}
         <div className="campo"><label>Peça perdida ou quebrada</label><select value={perdida ? 'custo' : 'preco'} onChange={(e) => setPerdida(e.target.value === 'custo')} disabled={!editavel}><option value="custo">Cobrada pelo custo</option><option value="preco">Cobrada pelo preço de venda</option></select></div>
-        <p className="muted l4">A comissão de cada nível (Bronze, Prata, Ouro, Líder) pode substituir a comissão padrão: isso será configurado na tela de Níveis.</p>
+        <p className="muted l4">A comissão de cada nível (Bronze, Prata, Ouro, Líder) pode substituir a comissão padrão, em Rede › Níveis e metas.</p>
       </div>
     </>
   );

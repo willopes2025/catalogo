@@ -6,7 +6,15 @@ import { AuthGuard } from './comum/auth';
 import { ErrosFilter } from './comum/erros.filter';
 import { AuditoriaService } from './comum/auditoria.service';
 import { AuthController } from './auth/auth.controller';
-import { NiveisController, PessoasController } from './pessoas/pessoas.controller';
+import { PessoasController } from './pessoas/pessoas.controller';
+import { GruposController, NiveisController, UsuariosController } from './usuarios/usuarios.controller';
+import { AssertivaService } from './integracoes/assertiva.service';
+import { EmailService } from './integracoes/email.service';
+import { IntegracoesController } from './integracoes/integracoes.controller';
+import { DocumentoPublicoController, DocumentosController } from './documentos/documentos.controller';
+import { DocumentosService } from './documentos/documentos.service';
+import { CatalogoController } from './catalogo/catalogo.controller';
+import { EmpresasController } from './empresas/empresas.controller';
 import { ProdutosController } from './produtos/produtos.controller';
 import { EstoqueController } from './estoque/estoque.controller';
 import { EstoqueService } from './estoque/estoque.service';
@@ -37,12 +45,22 @@ if (!segredo || (process.env.NODE_ENV === 'production' && segredo.length < 32)) 
     ConfiguracoesController,
     FinanceiroController,
     PainelController,
+    UsuariosController,
+    GruposController,
+    IntegracoesController,
+    DocumentosController,
+    DocumentoPublicoController,
+    CatalogoController,
+    EmpresasController,
   ],
   providers: [
     AuditoriaService,
     EstoqueService,
     MaletasService,
     ConfiguracoesService,
+    AssertivaService,
+    EmailService,
+    DocumentosService,
     { provide: APP_GUARD, useClass: AuthGuard },
     { provide: APP_FILTER, useClass: ErrosFilter },
   ],
