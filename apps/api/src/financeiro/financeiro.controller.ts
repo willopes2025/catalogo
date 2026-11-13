@@ -65,6 +65,9 @@ export class FinanceiroController {
         pagoEm: titulos.pagoEm,
         valorPago: titulos.valorPago,
         conta: contas.nome,
+        cobrancaTipo: titulos.cobrancaTipo,
+        cobrancaUrl: titulos.cobrancaUrl,
+        pixCopiaCola: titulos.pixCopiaCola,
         diasAtraso: sql<number>`case when ${titulos.status} = 'aberto' then greatest(${hoje()}::date - ${titulos.vencimento}, 0) else 0 end`,
       })
       .from(titulos)

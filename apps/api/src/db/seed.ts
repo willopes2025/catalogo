@@ -10,6 +10,7 @@ import { eq } from 'drizzle-orm';
 import { REGRAS_PADRAO } from '@aritana/regras';
 import { criarConexao, schema as s } from './client';
 import { MODELOS_INICIAIS } from './modelos-iniciais';
+import { REGRAS_FISCAIS_PADRAO } from '../fiscal/fiscal.service';
 
 async function main() {
   const { db, pool } = criarConexao();
@@ -34,6 +35,7 @@ async function main() {
     await tx.insert(s.locaisEstoque).values([
       { empresaId: matriz.id, nome: 'Depósito da matriz', tipo: 'deposito' },
       { empresaId: loja.id, nome: 'Loja', tipo: 'loja' },
+      { empresaId: matriz.id, nome: 'Eventos (feiras e bazares)', tipo: 'evento' },
     ]);
 
     const [diretoria] = await tx
@@ -73,6 +75,7 @@ async function main() {
 
     await tx.insert(s.configuracoes).values({ chave: 'regras_consignado', valor: REGRAS_PADRAO });
     await tx.insert(s.modelosDocumento).values(MODELOS_INICIAIS);
+    await tx.insert(s.regrasFiscais).values(REGRAS_FISCAIS_PADRAO);
 
     await tx.insert(s.contas).values([
       { empresaId: matriz.id, nome: 'Caixa', tipo: 'caixa' },
@@ -126,6 +129,7 @@ async function main() {
             preco,
             precoAtacado: Math.round(preco * 0.6),
             estoqueMinimo: 3,
+            ncm: '71171900',
           });
           seq++;
         }

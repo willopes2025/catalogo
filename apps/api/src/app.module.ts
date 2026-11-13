@@ -15,6 +15,16 @@ import { DocumentoPublicoController, DocumentosController } from './documentos/d
 import { DocumentosService } from './documentos/documentos.service';
 import { CatalogoController } from './catalogo/catalogo.controller';
 import { EmpresasController } from './empresas/empresas.controller';
+import { VendasController } from './vendas/vendas.controller';
+import { VendasService } from './vendas/vendas.service';
+import { AsaasService } from './integracoes/asaas.service';
+import { WebhooksController } from './integracoes/webhooks.controller';
+import { FiscalController } from './fiscal/fiscal.controller';
+import { FiscalService } from './fiscal/fiscal.service';
+import { RelatoriosController } from './relatorios/relatorios.controller';
+import { SuporteController } from './suporte/suporte.controller';
+import { ImportacaoController } from './importacao/importacao.controller';
+import { ImportacaoService } from './importacao/importacao.service';
 import { ProdutosController } from './produtos/produtos.controller';
 import { EstoqueController } from './estoque/estoque.controller';
 import { EstoqueService } from './estoque/estoque.service';
@@ -52,6 +62,12 @@ if (!segredo || (process.env.NODE_ENV === 'production' && segredo.length < 32)) 
     DocumentoPublicoController,
     CatalogoController,
     EmpresasController,
+    VendasController,
+    WebhooksController,
+    FiscalController,
+    RelatoriosController,
+    SuporteController,
+    ImportacaoController,
   ],
   providers: [
     AuditoriaService,
@@ -61,6 +77,10 @@ if (!segredo || (process.env.NODE_ENV === 'production' && segredo.length < 32)) 
     AssertivaService,
     EmailService,
     DocumentosService,
+    VendasService,
+    AsaasService,
+    FiscalService,
+    ImportacaoService,
     { provide: APP_GUARD, useClass: AuthGuard },
     { provide: APP_FILTER, useClass: ErrosFilter },
   ],

@@ -15,6 +15,13 @@
       "when": 1794581116532,
       "tag": "0001_contratos_e_catalogo",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1794582214872,
+      "tag": "0002_loja_fiscal_suporte",
+      "breakpoints": true
     }
   ]
 }

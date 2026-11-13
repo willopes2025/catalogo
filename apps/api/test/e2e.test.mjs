@@ -268,3 +268,221 @@ test('Assertiva sem credenciais avisa em vez de falhar', async () => {
   const st = await ok('GET', '/integracoes/status');
   assert.equal(st.find((i) => i.chave === 'assertiva').ligada, false);
 });
+
+// ───────────── Semana 3 ─────────────
+
+const SIM = 'http://localhost:3199';
+const recebidos = async () => (await fetch(SIM + '/__recebidos')).json();
+
+test('empresas com CNPJ para as notas', async () => {
+  const emps = await ok('GET', '/empresas');
+  for (const e of emps) await ok('PATCH', `/empresas/${e.id}`, { razaoSocial: `${e.nome} Ltda`, cnpj: '11.222.333/0001-81', cidade: 'Vitória', uf: 'ES' });
+  const ruim = await chamar('PATCH', `/empresas/${emps[0].id}`, { cnpj: '11.111.111/1111-11' });
+  assert.equal(ruim.status, 400);
+});
+
+test('caixa da loja: abrir uma vez só', async () => {
+  const locais = await ok('GET', '/estoque/locais');
+  ctx.loja = locais.find((l) => l.tipo === 'loja');
+  const c = await ok('POST', '/caixas/abrir', { localId: ctx.loja.id, valorAbertura: 10000 });
+  ctx.caixa = c;
+  assert.equal((await chamar('POST', '/caixas/abrir', { localId: ctx.loja.id, valorAbertura: 0 })).status, 400);
+  const atual = await ok('GET', `/caixas/atual?localId=${ctx.loja.id}`);
+  assert.equal(atual.porForma.dinheiro, 10000);
+});
+
+test('venda no balcão com desconto, dinheiro com troco e Pix', async () => {
+  const prods = (await ok('GET', '/produtos')).itens;
+  ctx.pv = prods.slice(10, 13);
+  const [a, b] = ctx.pv;
+  const antesA = (await ok('GET', `/estoque/rastreio/${a.codigoBarras}`)).porLocal.find((l) => l.tipo === 'loja').quantidade;
+  const subtotal = a.preco * 2 + b.preco;
+  const desconto = Math.round(subtotal * 0.05);
+  const total = subtotal - desconto;
+  const pix = 5000;
+  const v = await ok('POST', '/vendas', {
+    localId: ctx.loja.id, tipo: 'balcao', descontoTotal: desconto,
+    itens: [{ codigoBarras: a.codigoBarras, quantidade: 1 }, { codigoBarras: b.codigoBarras, quantidade: 1 }, { codigoBarras: a.codigoBarras, quantidade: 1 }],
+    pagamentos: [{ forma: 'pix', valor: pix }, { forma: 'dinheiro', valor: total - pix + 1000 }],
+  });
+  assert.equal(v.total, total);
+  assert.equal(v.troco, 1000);
+  ctx.venda1 = v;
+  const depois = (await ok('GET', `/estoque/rastreio/${a.codigoBarras}`)).porLocal.find((l) => l.tipo === 'loja').quantidade;
+  assert.equal(depois, antesA - 2, 'leituras repetidas somam e baixam do estoque da loja');
+  const caixa = await ok('GET', `/caixas/atual?localId=${ctx.loja.id}`);
+  assert.equal(caixa.porForma.dinheiro, 10000 + total - pix, 'caixa recebe o dinheiro líquido do troco');
+  assert.equal(caixa.porForma.pix, pix);
+});
+
+test('venda recusada: falta pagamento, troco sem dinheiro e desconto acima do limite', async () => {
+  const [a] = ctx.pv;
+  const falta = await chamar('POST', '/vendas', { localId: ctx.loja.id, itens: [{ codigoBarras: a.codigoBarras, quantidade: 1 }], pagamentos: [{ forma: 'pix', valor: a.preco - 1 }] });
+  assert.match(falta.dados.mensagem, /Falta receber/);
+  const troco = await chamar('POST', '/vendas', { localId: ctx.loja.id, itens: [{ codigoBarras: a.codigoBarras, quantidade: 1 }], pagamentos: [{ forma: 'debito', valor: a.preco + 500 }] });
+  assert.match(troco.dados.mensagem, /troco/);
+  const grupos = await ok('GET', '/grupos');
+  const u = await ok('POST', '/usuarios', { nome: 'Vendedora Loja', email: 'loja.teste@aritana.local', grupoId: grupos.find((g) => g.nome === 'Loja').id });
+  const salvo = token;
+  token = (await ok('POST', '/auth/login', { email: 'loja.teste@aritana.local', senha: u.senhaProvisoria })).token;
+  const desc = await chamar('POST', '/vendas', { localId: ctx.loja.id, descontoTotal: Math.round(a.preco * 0.5), itens: [{ codigoBarras: a.codigoBarras, quantidade: 1 }], pagamentos: [{ forma: 'pix', valor: a.preco }] });
+  assert.equal(desc.status, 403);
+  assert.match(desc.dados.mensagem, /limite/);
+  token = salvo;
+});
+
+test('NFC-e da venda sai autorizada pelo emissor', async () => {
+  const n = await ok('POST', `/fiscal/nfce/venda/${ctx.venda1.id}`);
+  assert.equal(n.status, 'autorizada');
+  assert.ok(n.chave && n.urlDanfe.startsWith('http'));
+  const env = (await recebidos()).filter((r) => r.caminho.startsWith('/focus/v2/nfce')).pop().corpo;
+  assert.equal(env.cnpj_emitente, '11222333000181');
+  const somaItens = env.items.reduce((a, i) => a + Math.round(Number(i.valor_bruto) * 100) - Math.round(Number(i.valor_desconto ?? 0) * 100), 0);
+  assert.equal(somaItens, ctx.venda1.total, 'desconto geral rateado nos itens');
+  const somaPag = env.formas_pagamento.reduce((a, p) => a + Math.round(Number(p.valor_pagamento) * 100), 0);
+  assert.equal(somaPag, ctx.venda1.total);
+  assert.equal((await chamar('POST', `/fiscal/nfce/venda/${ctx.venda1.id}`)).status, 400, 'não emite nota duplicada');
+});
+
+test('devolução vira crédito e o crédito paga outra venda', async () => {
+  const clientes = (await ok('GET', '/pessoas?tipo=cliente')).itens;
+  ctx.cliente = clientes[0];
+  const [, , c] = ctx.pv;
+  const v = await ok('POST', '/vendas', { localId: ctx.loja.id, clienteId: ctx.cliente.id, itens: [{ codigoBarras: c.codigoBarras, quantidade: 2 }], pagamentos: [{ forma: 'credito', valor: c.preco * 2, parcelas: 2, maquininha: 'Stone' }] });
+  const det = await ok('GET', `/vendas/${v.id}`);
+  const d = await ok('POST', `/vendas/${v.id}/devolver`, { itens: [{ produtoId: det.itens[0].produtoId, quantidade: 1 }], destino: 'credito' });
+  assert.equal(d.valor, c.preco);
+  const mais = await chamar('POST', `/vendas/${v.id}/devolver`, { itens: [{ produtoId: det.itens[0].produtoId, quantidade: 2 }], destino: 'credito' });
+  assert.match(mais.dados.mensagem, /Só 1/);
+  const v2 = await ok('POST', '/vendas', { localId: ctx.loja.id, clienteId: ctx.cliente.id, itens: [{ codigoBarras: c.codigoBarras, quantidade: 1 }], pagamentos: [{ forma: 'credito_loja', valor: c.preco }] });
+  assert.equal(v2.total, c.preco);
+  const semSaldo = await chamar('POST', '/vendas', { localId: ctx.loja.id, clienteId: ctx.cliente.id, itens: [{ codigoBarras: c.codigoBarras, quantidade: 1 }], pagamentos: [{ forma: 'credito_loja', valor: c.preco }] });
+  assert.match(semSaldo.dados.mensagem, /crédito/);
+});
+
+test('cancelamento no mesmo dia devolve estoque e estorna o caixa', async () => {
+  const [a] = ctx.pv;
+  const antes = await ok('GET', `/caixas/atual?localId=${ctx.loja.id}`);
+  const v = await ok('POST', '/vendas', { localId: ctx.loja.id, itens: [{ codigoBarras: a.codigoBarras, quantidade: 1 }], pagamentos: [{ forma: 'dinheiro', valor: a.preco }] });
+  await ok('POST', `/vendas/${v.id}/cancelar`, { motivo: 'cliente desistiu' });
+  const depois = await ok('GET', `/caixas/atual?localId=${ctx.loja.id}`);
+  assert.equal(depois.porForma.dinheiro, antes.porForma.dinheiro);
+  assert.equal((await ok('GET', `/vendas/${v.id}`)).status, 'cancelada');
+});
+
+test('sangria e fechamento do caixa batem forma por forma', async () => {
+  const atual = await ok('GET', `/caixas/atual?localId=${ctx.loja.id}`);
+  assert.equal((await chamar('POST', `/caixas/${ctx.caixa.id}/movimento`, { tipo: 'sangria', valor: atual.porForma.dinheiro + 1, descricao: 'teste' })).status, 400);
+  await ok('POST', `/caixas/${ctx.caixa.id}/movimento`, { tipo: 'sangria', valor: 5000, descricao: 'Depósito no banco' });
+  const fim = await ok('GET', `/caixas/atual?localId=${ctx.loja.id}`);
+  const contado = { ...fim.porForma };
+  contado.dinheiro -= 200; // faltaram R$ 2,00
+  const f = await ok('POST', `/caixas/${ctx.caixa.id}/fechar`, { contado });
+  assert.equal(f.status, 'fechado');
+  assert.equal(f.diferenca, -200);
+  assert.equal((await ok('GET', `/caixas/atual?localId=${ctx.loja.id}`)).aberto, false);
+});
+
+test('Asaas: Pix gerado para o título e baixa automática pelo aviso de pagamento', async () => {
+  const tit = await ok('GET', `/financeiro/titulos?pessoaId=${ctx.rep.id}`);
+  const t = tit.itens[0];
+  const c = await ok('POST', `/financeiro/titulos/${t.id}/cobranca`, { tipo: 'PIX' });
+  assert.match(c.url, /asaas\.com/);
+  assert.match(c.pixCopiaCola, /^00020126/);
+  const env = (await recebidos()).filter((r) => r.caminho === '/asaas/payments').pop().corpo;
+  assert.equal(env.value, t.valor / 100);
+  assert.equal(env.externalReference, t.id);
+  const de_novo = await ok('POST', `/financeiro/titulos/${t.id}/cobranca`, { tipo: 'PIX' });
+  assert.equal(de_novo.jaExistia, true, 'não cria cobrança duplicada');
+
+  const salvo = token;
+  token = '';
+  const evento = { id: 'evt_teste_1', event: 'PAYMENT_RECEIVED', payment: { id: c.id, value: t.valor / 100, paymentDate: '2026-11-25', externalReference: t.id } };
+  const r0 = await fetch(API + '/webhooks/asaas', { method: 'POST', headers: { 'content-type': 'application/json', 'asaas-access-token': 'errado' }, body: JSON.stringify(evento) });
+  assert.equal(r0.status, 401);
+  const r1 = await (await fetch(API + '/webhooks/asaas', { method: 'POST', headers: { 'content-type': 'application/json', 'asaas-access-token': 'token-webhook-teste' }, body: JSON.stringify(evento) })).json();
+  assert.equal(r1.resultado, 'baixado');
+  const r2 = await (await fetch(API + '/webhooks/asaas', { method: 'POST', headers: { 'content-type': 'application/json', 'asaas-access-token': 'token-webhook-teste' }, body: JSON.stringify(evento) })).json();
+  assert.equal(r2.repetido, true);
+  token = salvo;
+  const pagos = await ok('GET', `/financeiro/titulos?pessoaId=${ctx.rep.id}&aba=pagos`);
+  assert.ok(pagos.itens.some((x) => x.id === t.id && x.pagoEm === '2026-11-25'));
+});
+
+test('NF-e de remessa da maleta: exige endereço, depois processa e autoriza', async () => {
+  const m = await ok('POST', '/maletas', { representanteId: ctx.rep.id, origemId: ctx.deposito.id, itens: [{ codigoBarras: ctx.prods[1].codigoBarras, quantidade: 1 }] });
+  const sem = await chamar('POST', `/fiscal/nfe/maleta/${m.id}`);
+  assert.match(sem.dados.mensagem, /endereço/);
+  await ok('PATCH', `/pessoas/${ctx.rep.id}`, { logradouro: 'Rua das Flores', numero: '10', bairro: 'Centro', cidade: 'Vitória', uf: 'ES', cep: '29000000' });
+  const n = await ok('POST', `/fiscal/nfe/maleta/${m.id}`);
+  assert.equal(n.status, 'processando');
+  const env = (await recebidos()).filter((r) => r.caminho.startsWith('/focus/v2/nfe?')).pop().corpo;
+  assert.equal(env.items[0].cfop, '5917', 'CFOP de remessa em consignação dentro do estado');
+  assert.equal(env.cpf_destinatario, '39053344705');
+  const c = await ok('POST', `/fiscal/notas/${n.id}/consultar`);
+  assert.equal(c.status, 'autorizada');
+  await ok('POST', `/maletas/${m.id}/cancelar`, { motivo: 'fim do teste' });
+});
+
+test('relatórios de desempenho, produtos (curva ABC), vendas e financeiro', async () => {
+  const d = await ok('GET', '/relatorios/desempenho?de=2026-01-01&ate=2026-12-31');
+  const linha = d.linhas.find((l) => l.id === ctx.rep.id);
+  assert.ok(linha && linha.vendido > 0 && linha.acertos >= 1);
+  const p = await ok('GET', '/relatorios/produtos');
+  assert.ok(p.linhas.some((l) => l.curva === 'A'));
+  const v = await ok('GET', '/relatorios/vendas');
+  assert.ok(v.porForma.some((f) => f.forma === 'pix'));
+  const f = await ok('GET', '/relatorios/financeiro');
+  assert.ok(Array.isArray(f.fluxo) && Array.isArray(f.faixas));
+  const mal = await ok('GET', '/relatorios/maletas');
+  assert.ok(Array.isArray(mal.semMaleta));
+});
+
+test('suporte: abrir chamado e responder', async () => {
+  const c = await ok('POST', '/suporte/chamados', { titulo: 'Dúvida sobre o acerto parcial', tipo: 'duvida', modulo: 'maletas', descricao: 'Como faço acerto parcial por vídeo?' });
+  await ok('POST', `/suporte/chamados/${c.id}/mensagens`, { texto: 'Complementando: a representante está em outra cidade.' });
+  const det = await ok('GET', `/suporte/chamados/${c.id}`);
+  assert.equal(det.mensagens.length, 2);
+  const st = await ok('GET', '/suporte/status');
+  assert.ok(st.sistema.ok);
+});
+
+test('importação do Jueri: simula sem gravar, importa, e reimportar só atualiza', async () => {
+  const planilha = [
+    { 'Cód. de barras': '7899990000011', 'Referência': 'JU001', 'Descrição': 'Brinco Jueri Teste', 'Categoria': 'Categoria Importada', 'Preço': 'R$ 89,90', 'Custo': '25,00', 'Estoque': '7', 'NCM': '7117.19.00', 'Fornecedor': 'Fornecedor Importado' },
+    { 'Cód. de barras': '7899990000028', 'Referência': 'JU002', 'Descrição': 'Colar Jueri Teste', 'Categoria': 'Colares', 'Preço': '149.9', 'Custo': '40', 'Estoque': '3' },
+    { 'Cód. de barras': '', 'Referência': '', 'Descrição': 'Linha ruim', 'Preço': '' },
+  ];
+  const sim = await ok('POST', '/importacao/produtos', { linhas: planilha, localId: ctx.deposito.id, simular: true });
+  assert.equal(sim.criados, 2);
+  assert.equal(sim.erros.length, 1);
+  assert.equal(sim.erros[0].linha, 4);
+  assert.equal((await chamar('GET', '/produtos/codigo/7899990000011')).status, 404, 'simulação não grava');
+  const real = await ok('POST', '/importacao/produtos', { linhas: planilha, localId: ctx.deposito.id, simular: false, arquivo: 'produtos-jueri.xlsx' });
+  assert.equal(real.criados, 2);
+  const p = await ok('GET', '/produtos/codigo/7899990000011');
+  assert.equal(p.preco, 8990);
+  assert.equal(p.ncm, '71171900');
+  const rast = await ok('GET', '/estoque/rastreio/7899990000011');
+  assert.equal(rast.porLocal.find((l) => l.tipo === 'deposito').quantidade, 7);
+  planilha[0]['Preço'] = '99,90';
+  planilha[0]['Estoque'] = '5';
+  const de_novo = await ok('POST', '/importacao/produtos', { linhas: planilha.slice(0, 2), localId: ctx.deposito.id, simular: false });
+  assert.equal(de_novo.criados, 0);
+  assert.equal(de_novo.atualizados, 2);
+  assert.equal((await ok('GET', '/produtos/codigo/7899990000011')).preco, 9990);
+  assert.equal((await ok('GET', '/estoque/rastreio/7899990000011')).porLocal.find((l) => l.tipo === 'deposito').quantidade, 5, 'estoque fica igual à planilha');
+
+  const reps = [
+    { Nome: 'Líder Importada', CPF: '153.509.460-56', 'Telefone 1': '(27) 99999-1111', Cidade: 'Vitória', UF: 'ES', 'Nível': 'Ouro', Status: 'Ativo' },
+    { Nome: 'Rede Importada', CPF: '', 'Telefone 1': '27999992222', Cidade: 'Serra', UF: 'ES', 'Revendedor líder': 'Líder Importada', 'Nível': 'Nível Novo' },
+    { Nome: 'CPF Errado', CPF: '123.456.789-00' },
+  ];
+  const ir = await ok('POST', '/importacao/pessoas', { tipo: 'representante', linhas: reps, simular: false });
+  assert.equal(ir.criados, 2);
+  assert.equal(ir.erros.length, 1);
+  const lista = await ok('GET', '/pessoas?tipo=representante&busca=Importada');
+  const rede = lista.itens.find((x) => x.nome === 'Rede Importada');
+  assert.equal(rede.lider, 'Líder Importada');
+  assert.equal(rede.nivel, 'Nível Novo');
+});

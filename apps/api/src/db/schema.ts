@@ -138,6 +138,8 @@ export const pessoas = pgTable(
     observacaoInterna: text('observacao_interna'),
     /** Endereço do catálogo da representante: /catalogo/<slug> */
     slug: text('slug'),
+    /** Cliente correspondente no Asaas, criado na primeira cobrança. */
+    asaasClienteId: text('asaas_cliente_id'),
     /** Id no Jueri, para conferência da migração. */
     idJueri: text('id_jueri'),
     criadoEm: criadoEm(),
@@ -366,6 +368,9 @@ export const titulos = pgTable(
     valorPago: integer('valor_pago'),
     /** Id da cobrança no Asaas, quando houver. */
     cobrancaExternaId: text('cobranca_externa_id'),
+    cobrancaTipo: text('cobranca_tipo'),
+    cobrancaUrl: text('cobranca_url'),
+    pixCopiaCola: text('pix_copia_cola'),
     criadoEm: criadoEm(),
   },
   (t) => ({
@@ -382,6 +387,188 @@ export const creditos = pgTable('creditos', {
   descricao: text('descricao').notNull(),
   origemTipo: text('origem_tipo'),
   origemId: uuid('origem_id'),
+  usuarioId: uuid('usuario_id').references(() => usuarios.id),
+  criadoEm: criadoEm(),
+});
+
+// ───────────────────────── Loja: caixas e vendas ─────────────────────────
+
+export const statusCaixa = pgEnum('status_caixa', ['aberto', 'fechado']);
+
+/** Caixa de um ponto de venda (loja ou evento), do abrir ao fechar do dia. */
+export const caixas = pgTable(
+  'caixas',
+  {
+    id: id(),
+    empresaId: uuid('empresa_id').notNull().references(() => empresas.id),
+    localId: uuid('local_id').notNull().references(() => locaisEstoque.id),
+    status: statusCaixa('status').notNull().default('aberto'),
+    valorAbertura: integer('valor_abertura').notNull().default(0),
+    abertoEm: timestamp('aberto_em', { withTimezone: true }).notNull().defaultNow(),
+    abertoPor: uuid('aberto_por').references(() => usuarios.id),
+    fechadoEm: timestamp('fechado_em', { withTimezone: true }),
+    fechadoPor: uuid('fechado_por').references(() => usuarios.id),
+    /** { dinheiro: 15000, pix: 32000, ... } contado no fechamento */
+    contado: jsonb('contado').$type<Record<string, number>>(),
+    esperado: jsonb('esperado').$type<Record<string, number>>(),
+    diferenca: integer('diferenca'),
+    observacao: text('observacao'),
+  },
+  (t) => ({ porLocal: index('caixas_local_idx').on(t.localId, t.status) }),
+);
+
+export const caixaMovimentos = pgTable('caixa_movimentos', {
+  id: id(),
+  caixaId: uuid('caixa_id').notNull().references(() => caixas.id),
+  tipo: text('tipo').notNull(), // abertura | venda | sangria | reforco | devolucao | cancelamento
+  forma: text('forma').notNull(),
+  valor: integer('valor').notNull(),
+  descricao: text('descricao'),
+  vendaId: uuid('venda_id'),
+  usuarioId: uuid('usuario_id').references(() => usuarios.id),
+  criadoEm: criadoEm(),
+});
+
+export const statusVenda = pgEnum('status_venda', ['concluida', 'cancelada']);
+
+export const vendas = pgTable(
+  'vendas',
+  {
+    id: id(),
+    numero: serial('numero').notNull(),
+    empresaId: uuid('empresa_id').notNull().references(() => empresas.id),
+    localId: uuid('local_id').notNull().references(() => locaisEstoque.id),
+    caixaId: uuid('caixa_id').references(() => caixas.id),
+    /** balcao (PDV da loja/evento), avulsa (matriz), revenda (representante no modelo revenda) */
+    tipo: text('tipo').notNull().default('balcao'),
+    clienteId: uuid('cliente_id').references(() => pessoas.id),
+    vendedorId: uuid('vendedor_id').references(() => usuarios.id),
+    subtotal: integer('subtotal').notNull(),
+    desconto: integer('desconto').notNull().default(0),
+    total: integer('total').notNull(),
+    troco: integer('troco').notNull().default(0),
+    status: statusVenda('status').notNull().default('concluida'),
+    observacao: text('observacao'),
+    motivoCancelamento: text('motivo_cancelamento'),
+    canceladaEm: timestamp('cancelada_em', { withTimezone: true }),
+    criadoEm: criadoEm(),
+  },
+  (t) => ({ porData: index('vendas_data_idx').on(t.criadoEm), porCliente: index('vendas_cliente_idx').on(t.clienteId) }),
+);
+
+export const vendaItens = pgTable('venda_itens', {
+  id: id(),
+  vendaId: uuid('venda_id').notNull().references(() => vendas.id, { onDelete: 'cascade' }),
+  produtoId: uuid('produto_id').notNull().references(() => produtos.id),
+  quantidade: integer('quantidade').notNull(),
+  preco: integer('preco').notNull(),
+  custo: integer('custo').notNull(),
+  desconto: integer('desconto').notNull().default(0),
+  total: integer('total').notNull(),
+  devolvida: integer('devolvida').notNull().default(0),
+});
+
+export const vendaPagamentos = pgTable('venda_pagamentos', {
+  id: id(),
+  vendaId: uuid('venda_id').notNull().references(() => vendas.id, { onDelete: 'cascade' }),
+  /** dinheiro | pix | debito | credito | credito_loja | boleto */
+  forma: text('forma').notNull(),
+  valor: integer('valor').notNull(),
+  parcelas: integer('parcelas').notNull().default(1),
+  maquininha: text('maquininha'),
+  autorizacao: text('autorizacao'),
+});
+
+// ───────────────────────── Fiscal ─────────────────────────
+
+/** Natureza e CFOP de cada operação. Valores iniciais a validar pelo contador da Aritana. */
+export const regrasFiscais = pgTable('regras_fiscais', {
+  operacao: text('operacao').primaryKey(),
+  natureza: text('natureza').notNull(),
+  cfopDentro: text('cfop_dentro').notNull(),
+  cfopFora: text('cfop_fora').notNull(),
+  csosn: text('csosn').notNull().default('102'),
+  /** Preço usado na nota: venda (preço de etiqueta) ou custo. */
+  base: text('base').notNull().default('venda'),
+  observacao: text('observacao'),
+  atualizadoEm: atualizadoEm(),
+});
+
+export const statusNota = pgEnum('status_nota', ['pendente', 'processando', 'autorizada', 'erro', 'cancelada', 'denegada']);
+
+export const notasFiscais = pgTable(
+  'notas_fiscais',
+  {
+    id: id(),
+    empresaId: uuid('empresa_id').notNull().references(() => empresas.id),
+    modelo: text('modelo').notNull(), // nfce | nfe
+    operacao: text('operacao').notNull(),
+    /** Referência única enviada ao emissor (também evita nota duplicada). */
+    ref: text('ref').notNull(),
+    origemTipo: text('origem_tipo').notNull(),
+    origemId: uuid('origem_id').notNull(),
+    destinatarioId: uuid('destinatario_id').references(() => pessoas.id),
+    valor: integer('valor').notNull(),
+    status: statusNota('status').notNull().default('pendente'),
+    numero: text('numero'),
+    serie: text('serie'),
+    chave: text('chave'),
+    mensagem: text('mensagem'),
+    urlDanfe: text('url_danfe'),
+    urlXml: text('url_xml'),
+    payload: jsonb('payload'),
+    resposta: jsonb('resposta'),
+    usuarioId: uuid('usuario_id').references(() => usuarios.id),
+    criadoEm: criadoEm(),
+    atualizadoEm: atualizadoEm(),
+  },
+  (t) => ({ ref: uniqueIndex('notas_ref_uq').on(t.ref), porOrigem: index('notas_origem_idx').on(t.origemTipo, t.origemId) }),
+);
+
+// ───────────────────────── Integrações, suporte e importação ─────────────────────────
+
+/** Avisos recebidos de serviços externos (ex.: pagamento no Asaas), guardados para não processar duas vezes. */
+export const eventosIntegracao = pgTable('eventos_integracao', {
+  id: text('id').primaryKey(),
+  origem: text('origem').notNull(),
+  tipo: text('tipo').notNull(),
+  payload: jsonb('payload').notNull(),
+  resultado: text('resultado'),
+  criadoEm: criadoEm(),
+});
+
+export const chamados = pgTable('chamados', {
+  id: id(),
+  numero: serial('numero').notNull(),
+  titulo: text('titulo').notNull(),
+  tipo: text('tipo').notNull().default('duvida'), // duvida | erro | melhoria
+  modulo: text('modulo'),
+  tela: text('tela'),
+  prioridade: text('prioridade').notNull().default('normal'),
+  status: text('status').notNull().default('aberto'), // aberto | em_analise | em_desenvolvimento | resolvido
+  usuarioId: uuid('usuario_id').references(() => usuarios.id),
+  criadoEm: criadoEm(),
+  atualizadoEm: atualizadoEm(),
+});
+
+export const chamadoMensagens = pgTable('chamado_mensagens', {
+  id: id(),
+  chamadoId: uuid('chamado_id').notNull().references(() => chamados.id, { onDelete: 'cascade' }),
+  usuarioId: uuid('usuario_id').references(() => usuarios.id),
+  /** Resposta da equipe da Wide (fora do sistema da Aritana). */
+  daWide: boolean('da_wide').notNull().default(false),
+  texto: text('texto').notNull(),
+  criadoEm: criadoEm(),
+});
+
+export const importacoes = pgTable('importacoes', {
+  id: id(),
+  tipo: text('tipo').notNull(),
+  arquivo: text('arquivo'),
+  linhas: integer('linhas').notNull(),
+  criados: integer('criados').notNull().default(0),
+  atualizados: integer('atualizados').notNull().default(0),
+  erros: jsonb('erros').$type<{ linha: number; mensagem: string }[]>().notNull().default([]),
   usuarioId: uuid('usuario_id').references(() => usuarios.id),
   criadoEm: criadoEm(),
 });
