@@ -655,6 +655,45 @@ test('implantação: lista o que falta e confirma itens manuais', async () => {
   assert.equal(j.feitos, i.feitos + 1);
 });
 
+test('portal da representante: entra por CPF e código, vê só o que é dela', async () => {
+  const salvo = token;
+  token = '';
+  const nada = await ok('POST', '/portal/entrar', { cpf: '111.444.777-35' });
+  assert.equal(nada.codigoDev, undefined, 'CPF não cadastrado não recebe código, mas a resposta não denuncia');
+  const e = await ok('POST', '/portal/entrar', { cpf: '390.533.447-05' });
+  assert.ok(e.codigoDev);
+  assert.equal((await chamar('POST', '/portal/confirmar', { cpf: '39053344705', codigo: e.codigoDev === '000000' ? '000001' : '000000' })).status, 400);
+  const s = await ok('POST', '/portal/confirmar', { cpf: '39053344705', codigo: e.codigoDev });
+  assert.equal((await chamar('POST', '/portal/confirmar', { cpf: '39053344705', codigo: e.codigoDev })).status, 400, 'código de uso único');
+  token = s.token;
+  assert.equal((await chamar('GET', '/maletas')).status, 401, 'token do portal não abre a área da equipe');
+  const eu = await ok('GET', '/portal/eu');
+  assert.equal(eu.nome, 'Representante Teste E2E');
+  const ms = await ok('GET', '/portal/maletas');
+  assert.ok(ms.length >= 1);
+  const m = await ok('GET', `/portal/maletas/${ms[0].id}`);
+  assert.ok(!JSON.stringify(m).includes('"custo"'), 'sem custo');
+  const outra = (await (async () => { const t = token; token = salvo; const l = await ok('GET', '/maletas?aba=todas'); token = t; return l; })()).find((x) => x.representanteId !== ctx.rep.id);
+  if (outra) assert.equal((await chamar('GET', `/portal/maletas/${outra.id}`)).status, 404, 'maleta de outra representante');
+  const fin = await ok('GET', '/portal/financeiro');
+  assert.ok(Array.isArray(fin.titulos));
+  const cat = await ok('GET', '/portal/catalogo');
+  assert.ok(cat.itens.length > 0);
+  assert.ok(!('custo' in cat.itens[0]));
+  const ped = await ok('POST', '/portal/pedidos', { itens: [{ produtoId: cat.itens[0].id, quantidade: 2 }], observacao: 'Para o evento de sábado' });
+  assert.equal(ped.status, 'novo');
+  token = salvo;
+  const lista = await ok('GET', '/portal/admin/pedidos');
+  assert.ok(lista.some((p) => p.id === ped.id));
+  await ok('POST', `/portal/admin/pedidos/${ped.id}`, { status: 'atendido', resposta: 'Vai na próxima maleta' });
+  const link = await ok('POST', `/portal/gerar-link/${ctx.rep.id}`);
+  token = '';
+  const s2 = await ok('POST', `/portal/link/${link.token}`);
+  assert.ok(s2.token);
+  assert.equal((await chamar('POST', `/portal/link/${link.token}`)).status, 400, 'link de uso único');
+  token = salvo;
+});
+
 // Este fica por último: apaga os dados de teste.
 test('implantação: apagar dados de teste exige APAGAR e mantém o que é configuração', async () => {
   assert.equal((await chamar('POST', '/implantacao/apagar-dados-de-teste', { confirmacao: 'apagar' })).status, 400);

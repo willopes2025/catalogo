@@ -145,6 +145,7 @@ export function FichaRepresentante() {
           <>
             {!nova && f.slug && f.status === 'ativo' && <a className="botao claro" href={`/catalogo/${f.slug}`} target="_blank" rel="noreferrer">Ver catálogo</a>}
             {!nova && f.status === 'ativo' && pode('maletas', 'criar') && <Link className="botao claro" to={`/maletas/nova?representante=${id}`}>Nova maleta</Link>}
+            {!nova && pode('rede', 'editar') && <AcessoPortal id={id!} />}
             {editavel && <button className="botao" onClick={() => salvar.mutate()} disabled={salvar.isPending}>{salvar.isPending ? 'Salvando…' : 'Salvar'}</button>}
           </>
         }
@@ -241,6 +242,24 @@ export function FichaRepresentante() {
           ) : <p className="muted">Nenhum título.</p>
         )}
       </div>
+    </>
+  );
+}
+
+/** Link de acesso ao portal (vale 7 dias, uso único), para mandar à representante pelo WhatsApp. */
+function AcessoPortal({ id }: { id: string }) {
+  const [link, setLink] = useState<{ url: string; telefone: string | null; nome: string } | null>(null);
+  const gerar = useMutation({
+    mutationFn: () => api<{ caminho: string; telefone: string | null; nome: string }>(`/portal/gerar-link/${id}`, { corpo: {} }),
+    onSuccess: (r) => setLink({ url: `${window.location.origin}${r.caminho}`, telefone: r.telefone, nome: r.nome }),
+  });
+  if (!link) return <button className="botao claro" disabled={gerar.isPending} title={gerar.error ? String((gerar.error as Error).message) : 'Gera um link de acesso ao portal da representante'} onClick={() => gerar.mutate()}>Acesso ao portal</button>;
+  const texto = `Olá, ${link.nome.split(' ')[0]}! Este é o seu acesso ao portal da Aritana, onde você acompanha a maleta, marca as vendas, paga as parcelas e pede peças: ${link.url}\nO link vale por 7 dias e funciona uma vez; depois, entre com o seu CPF.`;
+  const fone = (link.telefone ?? '').replace(/\D/g, '');
+  return (
+    <>
+      {fone && <a className="botao" href={`https://wa.me/55${fone}?text=${encodeURIComponent(texto)}`} target="_blank" rel="noreferrer">Enviar pelo WhatsApp</a>}
+      <button className="botao claro" onClick={async () => { try { await navigator.clipboard.writeText(texto); } catch { window.prompt('Copie a mensagem:', texto); } }}>Copiar link</button>
     </>
   );
 }

@@ -57,6 +57,16 @@ Desenvolvido pela Wide Inteligência Comercial. **O código pertence à Aritana.
 | **Integrações** | E-mail (SMTP), Asaas, Focus NFe e Assertiva preenchidos pela tela, com teste de conexão. Senhas cifradas no banco (AES-256-GCM, chave `CHAVE_CRIPTOGRAFIA` do servidor) e nunca devolvidas à tela. O que estiver salvo na tela vale mais que o `.env`. |
 | **Apagar dados de teste** | Só a Diretoria, digitando APAGAR: zera movimento (maletas, vendas, títulos, estoque) e, se quiser, cadastros e produtos; mantém configuração, usuários e auditoria. |
 
+**Portal da representante** (`/portal`, instalável no celular como app)
+
+| Parte | O que faz |
+|---|---|
+| **Entrada** | CPF + código de 6 dígitos no e-mail do cadastro, ou link de acesso (7 dias, uso único) que a matriz manda pelo WhatsApp a partir da ficha. |
+| **Maleta** | Peças com foto e preço, confirmação de recebimento, pré-baixa das vendidas, histórico de acertos com a comissão. |
+| **Parcelas** | Em aberto e pagas, Pix copia e cola (gera no Asaas na hora), vendas e comissão por mês. |
+| **Pedir peças** | Vitrine do que há no depósito (sem custo nem quantidade exata); o pedido aparece em Maletas › Pedidos das representantes. |
+| **Catálogo** | Botão para compartilhar o catálogo dela com as clientes. |
+
 As naturezas de operação e os CFOPs que vêm instalados são um **ponto de partida** para empresa do Simples Nacional e **precisam ser conferidos pelo contador** antes de emitir em produção.
 
 Os modelos de contrato e promissória que vêm instalados são **provisórios** e devem ser trocados pelos textos revisados pelo jurídico da Aritana, em Configurações › Modelos de documento.

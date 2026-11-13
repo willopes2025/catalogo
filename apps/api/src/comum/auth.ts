@@ -13,7 +13,7 @@ import { JwtService } from '@nestjs/jwt';
 import { eq } from 'drizzle-orm';
 import type { Acao, ChaveModulo } from '@aritana/regras';
 import { DB, type Db } from './db.module';
-import { grupos, usuarios } from '../db/schema';
+import { grupos, pessoas, usuarios } from '../db/schema';
 
 export interface UsuarioLogado {
   id: string;
@@ -25,6 +25,16 @@ export interface UsuarioLogado {
 
 const CHAVE_PUBLICO = 'publico';
 const CHAVE_PERMISSAO = 'permissao';
+
+/** Rota do portal da representante: exige o token do portal (não o da equipe). */
+const CHAVE_PORTAL = 'portal';
+export const RotaPortal = () => SetMetadata(CHAVE_PORTAL, true);
+export interface RepresentanteLogada {
+  tipo: 'portal';
+  rep: string;
+  nome: string;
+}
+export const Representante = createParamDecorator((_: unknown, ctx: ExecutionContext): RepresentanteLogada => ctx.switchToHttp().getRequest().representante);
 
 /** Rota aberta, sem login (ex.: link do pedido da representante). */
 export const Publico = () => SetMetadata(CHAVE_PUBLICO, true);
@@ -94,12 +104,22 @@ export class AuthGuard implements CanActivate {
     const req = ctx.switchToHttp().getRequest();
     const [tipo, token] = String(req.headers.authorization ?? '').split(' ');
     if (tipo !== 'Bearer' || !token) throw new UnauthorizedException('Faça login para continuar.');
-    let doToken: UsuarioLogado;
+    let doToken: UsuarioLogado & { tipo?: string; rep?: string };
     try {
-      doToken = this.jwt.verify<UsuarioLogado>(token);
+      doToken = this.jwt.verify(token);
     } catch {
       throw new UnauthorizedException('Sessão expirada. Faça login de novo.');
     }
+    const rotaPortal = this.reflector.getAllAndOverride<boolean>(CHAVE_PORTAL, alvo);
+    if (rotaPortal) {
+      if (doToken.tipo !== 'portal' || !doToken.rep) throw new UnauthorizedException('Entre pelo portal da representante.');
+      const [p] = await this.db.select({ status: pessoas.status, tipo: pessoas.tipo, nome: pessoas.nome }).from(pessoas).where(eq(pessoas.id, doToken.rep));
+      if (!p || p.tipo !== 'representante' || ['inativo', 'recusado'].includes(p.status)) throw new UnauthorizedException('Seu acesso ao portal está desativado. Fale com a Aritana.');
+      req.representante = { tipo: 'portal', rep: doToken.rep, nome: p.nome } satisfies RepresentanteLogada;
+      return true;
+    }
+    // Token do portal não abre as telas da equipe.
+    if (doToken.tipo === 'portal' || !doToken.id) throw new UnauthorizedException('Faça login para continuar.');
     // Usuário desativado perde o acesso na hora; mudança de grupo vale sem precisar sair e entrar.
     const a = await this.atual(doToken.id);
     if (!a || !a.ativo) throw new UnauthorizedException('Seu acesso foi desativado. Fale com a gerência.');

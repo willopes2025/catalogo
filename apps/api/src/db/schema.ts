@@ -725,6 +725,39 @@ export const configuracoes = pgTable('configuracoes', {
   atualizadoEm: atualizadoEm(),
 });
 
+// ───────────────────────── Portal da representante ─────────────────────────
+
+/** Código de acesso (6 dígitos por e-mail) ou link de acesso gerado pela matriz. Só o hash fica guardado. */
+export const portalAcessos = pgTable(
+  'portal_acessos',
+  {
+    id: id(),
+    pessoaId: uuid('pessoa_id').notNull().references(() => pessoas.id, { onDelete: 'cascade' }),
+    tipo: text('tipo').notNull(), // codigo | link
+    hash: text('hash').notNull(),
+    expiraEm: timestamp('expira_em', { withTimezone: true }).notNull(),
+    tentativas: integer('tentativas').notNull().default(0),
+    usadoEm: timestamp('usado_em', { withTimezone: true }),
+    criadoPor: uuid('criado_por').references(() => usuarios.id),
+    criadoEm: criadoEm(),
+  },
+  (t) => ({ porHash: index('portal_acessos_hash_idx').on(t.hash) }),
+);
+
+/** Peças que a representante pede pelo portal para a próxima maleta ou para incluir na atual. */
+export const pedidosPecas = pgTable('pedidos_pecas', {
+  id: id(),
+  numero: serial('numero').notNull(),
+  pessoaId: uuid('pessoa_id').notNull().references(() => pessoas.id, { onDelete: 'cascade' }),
+  itens: jsonb('itens').$type<{ produtoId: string; referencia: string; descricao: string; quantidade: number }[]>().notNull(),
+  observacao: text('observacao'),
+  status: text('status').notNull().default('novo'), // novo | atendido | recusado
+  resposta: text('resposta'),
+  atendidoPor: uuid('atendido_por').references(() => usuarios.id),
+  atendidoEm: timestamp('atendido_em', { withTimezone: true }),
+  criadoEm: criadoEm(),
+});
+
 /** Credenciais das integrações preenchidas pela tela, cifradas (AES-256-GCM) com a CHAVE_CRIPTOGRAFIA do servidor. */
 export const segredos = pgTable('segredos', {
   chave: text('chave').primaryKey(),

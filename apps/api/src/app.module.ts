@@ -44,6 +44,7 @@ import { AvisosService } from './avisos/avisos.service';
 import { AuditoriaController } from './auditoria/auditoria.controller';
 import { SegredosService } from './segredos/segredos.service';
 import { ImplantacaoController } from './implantacao/implantacao.controller';
+import { PortalController } from './portal/portal.controller';
 
 const segredo = process.env.JWT_SECRET;
 if (!segredo || (process.env.NODE_ENV === 'production' && segredo.length < 32)) {
@@ -83,6 +84,7 @@ if (!segredo || (process.env.NODE_ENV === 'production' && segredo.length < 32)) 
     AvisosController,
     AuditoriaController,
     ImplantacaoController,
+    PortalController,
   ],
   providers: [
     SegredosService,
