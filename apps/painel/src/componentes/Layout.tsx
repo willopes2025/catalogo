@@ -30,6 +30,7 @@ export function Layout() {
         <div className="rodape">
           <div style={{ fontWeight: 600, color: '#faf6ef' }}>{sessao?.usuario.nome}</div>
           <div style={{ marginBottom: 8 }}>{sessao?.usuario.grupo}</div>
+          <NavLink to="/minha-senha" style={{ color: 'var(--areia)', display: 'block', marginBottom: 6 }}>Trocar senha</NavLink>
           <button
             onClick={() => {
               salvarSessao(null);

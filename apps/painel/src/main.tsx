@@ -31,6 +31,7 @@ import { DetalheVenda, NovaVenda, Vendas } from './paginas/Vendas';
 import { Fiscal } from './paginas/Fiscal';
 import { Relatorios } from './paginas/Relatorios';
 import { Suporte } from './paginas/Suporte';
+import { MinhaSenha } from './paginas/MinhaSenha';
 
 const cliente = new QueryClient({ defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: false, staleTime: 15_000 } } });
 
@@ -81,6 +82,7 @@ ReactDOM.createRoot(document.getElementById('raiz')!).render(
             <Route path="fiscal" element={<Fiscal />} />
             <Route path="relatorios" element={<Relatorios />} />
             <Route path="suporte" element={<Suporte />} />
+            <Route path="minha-senha" element={<MinhaSenha />} />
             <Route path="configuracoes" element={<Configuracoes />} />
             <Route path=":modulo" element={<EmConstrucao />} />
           </Route>
