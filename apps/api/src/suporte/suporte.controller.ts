@@ -9,6 +9,7 @@ import { EmailService } from '../integracoes/email.service';
 import { AsaasService } from '../integracoes/asaas.service';
 import { AssertivaService } from '../integracoes/assertiva.service';
 import { FiscalService } from '../fiscal/fiscal.service';
+import { SegredosService } from '../segredos/segredos.service';
 
 /** Canal da Aritana com a Wide durante os 12 meses de suporte. Qualquer usuário pode abrir chamado. */
 @Controller('suporte')
@@ -19,6 +20,7 @@ export class SuporteController {
     private readonly asaas: AsaasService,
     private readonly assertiva: AssertivaService,
     private readonly fiscal: FiscalService,
+    private readonly segredos: SegredosService,
   ) {}
 
   private veTodos(u: UsuarioLogado) {
@@ -64,8 +66,9 @@ export class SuporteController {
     );
     const [c] = await this.db.insert(chamados).values({ titulo: d.titulo, tipo: d.tipo, modulo: d.modulo ?? null, tela: d.tela ?? null, prioridade: d.prioridade, usuarioId: u.id }).returning();
     await this.db.insert(chamadoMensagens).values({ chamadoId: c.id, usuarioId: u.id, texto: d.descricao });
-    if (process.env.EMAIL_SUPORTE) {
-      await this.email.enviar(process.env.EMAIL_SUPORTE, `[Aritana] Chamado nº ${c.numero} · ${d.titulo}`, `${u.nome} (${u.email}) abriu um chamado de ${d.tipo}, prioridade ${d.prioridade}.\nMódulo: ${d.modulo ?? '—'}\nTela: ${d.tela ?? '—'}\n\n${d.descricao}`).catch(() => undefined);
+    const destino = this.segredos.v('EMAIL_SUPORTE');
+    if (destino) {
+      await this.email.enviar(destino, `[Aritana] Chamado nº ${c.numero} · ${d.titulo}`, `${u.nome} (${u.email}) abriu um chamado de ${d.tipo}, prioridade ${d.prioridade}.\nMódulo: ${d.modulo ?? '—'}\nTela: ${d.tela ?? '—'}\n\n${d.descricao}`).catch(() => undefined);
     }
     return c;
   }

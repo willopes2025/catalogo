@@ -1,4 +1,5 @@
 import { HttpException, Injectable, Logger, ServiceUnavailableException } from '@nestjs/common';
+import { SegredosService } from '../segredos/segredos.service';
 
 /**
  * Consulta de CPF na Assertiva (já usada hoje pela Aritana no Jueri).
@@ -26,10 +27,18 @@ export interface DadosCpf {
 @Injectable()
 export class AssertivaService {
   private readonly log = new Logger('Assertiva');
-  private token: { valor: string; expira: number } | null = null;
+  private token: { valor: string; expira: number; versao: number } | null = null;
+  constructor(private readonly segredos: SegredosService) {}
 
   get configurada() {
-    return !!(process.env.ASSERTIVA_CLIENT_ID && process.env.ASSERTIVA_CLIENT_SECRET);
+    return !!(this.segredos.v('ASSERTIVA_CLIENT_ID') && this.segredos.v('ASSERTIVA_CLIENT_SECRET'));
+  }
+
+  async testar() {
+    if (!this.configurada) throw new ServiceUnavailableException('Preencha o Client ID e o Client secret.');
+    this.token = null;
+    await this.obterToken();
+    return { ok: true, mensagem: 'Credenciais aceitas pela Assertiva.' };
   }
 
   private get url() {
@@ -37,8 +46,8 @@ export class AssertivaService {
   }
 
   private async obterToken(): Promise<string> {
-    if (this.token && this.token.expira > Date.now() + 30_000) return this.token.valor;
-    const basic = Buffer.from(`${process.env.ASSERTIVA_CLIENT_ID}:${process.env.ASSERTIVA_CLIENT_SECRET}`).toString('base64');
+    if (this.token && this.token.versao === this.segredos.versao && this.token.expira > Date.now() + 30_000) return this.token.valor;
+    const basic = Buffer.from(`${this.segredos.v('ASSERTIVA_CLIENT_ID')}:${this.segredos.v('ASSERTIVA_CLIENT_SECRET')}`).toString('base64');
     const r = await fetch(this.url + (process.env.ASSERTIVA_TOKEN_PATH ?? '/oauth2/v3/token'), {
       method: 'POST',
       headers: { authorization: `Basic ${basic}`, 'content-type': 'application/x-www-form-urlencoded' },
@@ -50,7 +59,7 @@ export class AssertivaService {
       throw new ServiceUnavailableException('A Assertiva recusou as credenciais. Confira a chave em Configurações › Integrações.');
     }
     const j = (await r.json()) as { access_token: string; expires_in?: number };
-    this.token = { valor: j.access_token, expira: Date.now() + (j.expires_in ?? 3600) * 1000 };
+    this.token = { valor: j.access_token, expira: Date.now() + (j.expires_in ?? 3600) * 1000, versao: this.segredos.versao };
     return j.access_token;
   }
 

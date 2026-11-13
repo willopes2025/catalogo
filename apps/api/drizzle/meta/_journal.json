@@ -36,6 +36,13 @@
       "when": 1794590602110,
       "tag": "0004_senha_provisoria",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1794591054437,
+      "tag": "0005_segredos",
+      "breakpoints": true
     }
   ]
 }

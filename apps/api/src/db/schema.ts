@@ -725,6 +725,16 @@ export const configuracoes = pgTable('configuracoes', {
   atualizadoEm: atualizadoEm(),
 });
 
+/** Credenciais das integrações preenchidas pela tela, cifradas (AES-256-GCM) com a CHAVE_CRIPTOGRAFIA do servidor. */
+export const segredos = pgTable('segredos', {
+  chave: text('chave').primaryKey(),
+  valorCifrado: text('valor_cifrado').notNull(),
+  /** Últimos caracteres, para a tela mostrar "••••1234" sem revelar o resto. */
+  final: text('final'),
+  usuarioId: uuid('usuario_id').references(() => usuarios.id),
+  atualizadoEm: timestamp('atualizado_em', { withTimezone: true }).notNull().defaultNow(),
+});
+
 export const auditoria = pgTable(
   'auditoria',
   {

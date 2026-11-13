@@ -621,3 +621,55 @@ test('revisão: baixa parcial abre o saldo; cancelamento e estorno', async () =>
   const e = await ok('POST', `/financeiro/titulos/${t.id}/estornar`, { motivo: 'Baixa por engano' });
   assert.equal(e.status, 'aberto');
 });
+
+
+test('integrações: senha salva pela tela nunca volta; teste de conexão do Asaas', async () => {
+  await ok('PUT', '/integracoes/assertiva', { valores: { ASSERTIVA_CLIENT_ID: 'id-teste', ASSERTIVA_CLIENT_SECRET: 'segredo-muito-secreto-1234' } });
+  const lista = await ok('GET', '/integracoes');
+  const a = lista.find((i) => i.chave === 'assertiva');
+  const sec = a.campos.find((c) => c.nome === 'ASSERTIVA_CLIENT_SECRET');
+  assert.equal(sec.valor, null);
+  assert.equal(sec.final, '1234');
+  assert.equal(sec.origem, 'tela');
+  assert.equal(a.ligada, true);
+  assert.ok(!JSON.stringify(lista).includes('segredo-muito-secreto'));
+  // senha em branco mantém a atual; null apaga
+  await ok('PUT', '/integracoes/assertiva', { valores: { ASSERTIVA_CLIENT_SECRET: '' } });
+  assert.equal((await ok('GET', '/integracoes')).find((i) => i.chave === 'assertiva').ligada, true);
+  await ok('PUT', '/integracoes/assertiva', { valores: { ASSERTIVA_CLIENT_ID: null, ASSERTIVA_CLIENT_SECRET: null } });
+  assert.equal((await ok('GET', '/integracoes')).find((i) => i.chave === 'assertiva').ligada, false);
+  assert.equal((await chamar('PUT', '/integracoes/asaas', { valores: { ASAAS_AMBIENTE: 'marte' } })).status, 400);
+  const t = await ok('POST', '/integracoes/asaas/testar');
+  assert.ok(t.ok);
+  const aud = await ok('GET', '/auditoria?entidade=integracao:assertiva');
+  assert.ok(!JSON.stringify(aud).includes('segredo-muito-secreto'), 'auditoria não guarda a senha');
+});
+
+test('implantação: lista o que falta e confirma itens manuais', async () => {
+  const i = await ok('GET', '/implantacao');
+  assert.ok(i.total > 10);
+  assert.equal(i.itens.find((x) => x.chave === 'dados_teste').status, 'pendente');
+  await ok('POST', '/implantacao/confirmar', { chave: 'cfop_contador', feito: true });
+  const j = await ok('GET', '/implantacao');
+  assert.equal(j.itens.find((x) => x.chave === 'cfop_contador').status, 'ok');
+  assert.equal(j.feitos, i.feitos + 1);
+});
+
+// Este fica por último: apaga os dados de teste.
+test('implantação: apagar dados de teste exige APAGAR e mantém o que é configuração', async () => {
+  assert.equal((await chamar('POST', '/implantacao/apagar-dados-de-teste', { confirmacao: 'apagar' })).status, 400);
+  const r = await ok('POST', '/implantacao/apagar-dados-de-teste', { confirmacao: 'APAGAR', manterProdutos: true });
+  assert.ok(r.antes.maletas > 0);
+  assert.equal(r.depois.maletas, 0);
+  assert.equal(r.depois.pessoas, 0);
+  assert.equal(r.depois.produtos, r.antes.produtos, 'produtos mantidos');
+  assert.equal((await ok('GET', '/implantacao')).itens.find((x) => x.chave === 'dados_teste').status, 'ok');
+  assert.ok((await ok('GET', '/usuarios')).length > 1, 'usuários mantidos');
+  assert.ok((await ok('GET', '/estoque/locais')).length >= 3, 'locais mantidos');
+  // e o sistema continua funcionando depois: nova entrada de estoque e venda começam do nº 1
+  const p = (await ok('GET', '/produtos')).itens[0];
+  const loja = (await ok('GET', '/estoque/locais')).find((l) => l.tipo === 'loja');
+  await ok('POST', '/estoque/entradas', { destinoId: loja.id, itens: [{ codigoBarras: p.codigoBarras, quantidade: 2 }] });
+  const v = await ok('POST', '/vendas', { localId: loja.id, tipo: 'avulsa', itens: [{ codigoBarras: p.codigoBarras, quantidade: 1 }], pagamentos: [{ forma: 'pix', valor: p.preco }] });
+  assert.equal(v.numero, 1);
+});

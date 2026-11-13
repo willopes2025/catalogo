@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { api } from '../api';
 import { reais, data, dataHora, pct } from '../formato';
 import { Carregando, Erro, Indicador, Topo } from '../componentes/ui';
+import { usarImplantacao } from './Implantacao';
 
 interface Inicio {
   data: string;
@@ -27,6 +28,7 @@ export function Inicio() {
   return (
     <>
       <Topo eb={`Início · ${data(d.data)}`} titulo="O que precisa de atenção hoje" acoes={<Link className="botao" to="/maletas/nova">Nova maleta</Link>} />
+      <AvisoImplantacao />
       <div className="grade g4" style={{ marginBottom: 14 }}>
         <Indicador tipo="destaque" rotulo="Valor em maletas na rua" valor={reais(d.maletas.valorNaRua)} detalhe={`${d.maletas.pecasNaRua} peças em ${d.maletas.abertas} maletas`} />
         <Indicador tipo={d.maletas.atrasadas ? 'atencao' : undefined} rotulo="Maletas atrasadas" valor={d.maletas.atrasadas} detalhe={<Link to="/maletas?aba=atrasadas">ver lista</Link>} />
@@ -63,5 +65,18 @@ export function Inicio() {
         </div>
       </div>
     </>
+  );
+}
+
+/** Enquanto houver pendência de implantação, lembra a gerência no Início. */
+function AvisoImplantacao() {
+  const q = usarImplantacao();
+  if (!q.data || q.data.feitos >= q.data.total) return null;
+  const faltam = q.data.itens.filter((i) => i.status === 'pendente').length;
+  return (
+    <div className="aviso alerta flex entre" style={{ marginBottom: 16, flexWrap: 'wrap' }}>
+      <span><b>Implantação: {q.data.feitos} de {q.data.total} itens prontos.</b> Faltam {faltam} item(ns), como acessos das integrações, CNPJs e confirmações do contador e do jurídico.</span>
+      <Link className="botao claro pequeno" to="/configuracoes?aba=implantacao">Ver o que falta</Link>
+    </div>
   );
 }

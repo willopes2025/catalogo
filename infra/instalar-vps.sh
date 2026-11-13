@@ -73,6 +73,12 @@ EOF
   chmod 600 .env
 fi
 
+# Chave que cifra as credenciais salvas pela tela (Configurações › Integrações). Criada uma vez; nunca troque.
+if ! grep -q '^CHAVE_CRIPTOGRAFIA=' .env; then
+  echo "CHAVE_CRIPTOGRAFIA=$(openssl rand -hex 32)" >> .env
+  echo "Chave de criptografia criada no .env (guarde uma cópia do .env junto com o backup)."
+fi
+
 passo "Montando e subindo os containers (a primeira vez demora alguns minutos)"
 docker compose -f docker-compose.vps.yml --env-file .env up -d --build
 
@@ -147,10 +153,12 @@ else
 fi
 
 passo "Cópia de segurança diária do banco"
-mkdir -p /opt/aritana-backups
+mkdir -p /opt/aritana-backups && chmod 700 /opt/aritana-backups
 cat > /etc/cron.d/aritana-backup <<EOF
 # Todo dia às 03:17: cópia do banco da Aritana, guardando 30 dias
 17 3 * * * root docker exec aritana-db pg_dump -U aritana aritana | gzip > /opt/aritana-backups/aritana-\$(date +\%F).sql.gz && find /opt/aritana-backups -name '*.sql.gz' -mtime +30 -delete
+# Cópia do .env (tem a chave que abre as credenciais salvas no banco)
+20 3 * * * root install -m 600 /opt/aritana/.env /opt/aritana-backups/env-copia
 EOF
 
 passo "Pronto"

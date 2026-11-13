@@ -49,6 +49,14 @@ Desenvolvido pela Wide Inteligência Comercial. **O código pertence à Aritana.
 | **Auditoria** | Tela com filtros por usuário, ação, área e período. |
 | **Manual de uso** | Passo a passo de cada rotina dentro do sistema (link no menu lateral). |
 
+**Implantação e credenciais pela tela**
+
+| Parte | O que faz |
+|---|---|
+| **Implantação** | Configurações › Implantação: lista o que falta para usar em produção (CNPJs, integrações, NCM, modelos jurídicos, usuários, senhas provisórias, dados de teste, importação do Jueri) e itens que a Aritana confirma à mão (certificado A1, CFOPs do contador, webhook do Asaas, regras, jurídico, piloto). Aviso no Início enquanto houver pendência. |
+| **Integrações** | E-mail (SMTP), Asaas, Focus NFe e Assertiva preenchidos pela tela, com teste de conexão. Senhas cifradas no banco (AES-256-GCM, chave `CHAVE_CRIPTOGRAFIA` do servidor) e nunca devolvidas à tela. O que estiver salvo na tela vale mais que o `.env`. |
+| **Apagar dados de teste** | Só a Diretoria, digitando APAGAR: zera movimento (maletas, vendas, títulos, estoque) e, se quiser, cadastros e produtos; mantém configuração, usuários e auditoria. |
+
 As naturezas de operação e os CFOPs que vêm instalados são um **ponto de partida** para empresa do Simples Nacional e **precisam ser conferidos pelo contador** antes de emitir em produção.
 
 Os modelos de contrato e promissória que vêm instalados são **provisórios** e devem ser trocados pelos textos revisados pelo jurídico da Aritana, em Configurações › Modelos de documento.

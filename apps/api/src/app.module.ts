@@ -42,6 +42,8 @@ import { ComissoesService } from './comissoes/comissoes.service';
 import { AvisosController } from './avisos/avisos.controller';
 import { AvisosService } from './avisos/avisos.service';
 import { AuditoriaController } from './auditoria/auditoria.controller';
+import { SegredosService } from './segredos/segredos.service';
+import { ImplantacaoController } from './implantacao/implantacao.controller';
 
 const segredo = process.env.JWT_SECRET;
 if (!segredo || (process.env.NODE_ENV === 'production' && segredo.length < 32)) {
@@ -80,8 +82,10 @@ if (!segredo || (process.env.NODE_ENV === 'production' && segredo.length < 32)) 
     ComissoesController,
     AvisosController,
     AuditoriaController,
+    ImplantacaoController,
   ],
   providers: [
+    SegredosService,
     AuditoriaService,
     EstoqueService,
     MaletasService,

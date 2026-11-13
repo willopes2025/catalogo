@@ -3,6 +3,7 @@ import { randomBytes } from 'node:crypto';
 import { and, eq, inArray, sql } from 'drizzle-orm';
 import { DB, type Db } from '../comum/db.module';
 import { AuditoriaService } from '../comum/auditoria.service';
+import { SegredosService } from '../segredos/segredos.service';
 import { empresas, maletaItens, maletas, notasFiscais, pessoas, produtos, regrasFiscais, vendaItens, vendaPagamentos, vendas, acertos } from '../db/schema';
 
 /**
@@ -30,23 +31,31 @@ type ItemNota = { codigo: string; descricao: string; ncm: string | null; quantid
 @Injectable()
 export class FiscalService {
   private readonly log = new Logger('Fiscal');
-  constructor(@Inject(DB) private readonly db: Db, private readonly auditoria: AuditoriaService) {}
+  constructor(@Inject(DB) private readonly db: Db, private readonly auditoria: AuditoriaService, private readonly segredos: SegredosService) {}
 
   get configurado() {
-    return !!process.env.FOCUS_NFE_TOKEN;
+    return !!this.segredos.v('FOCUS_NFE_TOKEN');
   }
   get ambiente() {
-    return /\/\/api\.focusnfe\.com\.br/.test(process.env.FOCUS_NFE_URL ?? '') ? 'produção' : 'homologação';
+    return /\/\/api\.focusnfe\.com\.br/.test(this.url) ? 'produção' : 'homologação';
   }
   private get url() {
+    if (this.segredos.origem('FOCUS_NFE_AMBIENTE') === 'tela') return this.segredos.v('FOCUS_NFE_AMBIENTE') === 'producao' ? 'https://api.focusnfe.com.br' : 'https://homologacao.focusnfe.com.br';
     return (process.env.FOCUS_NFE_URL ?? 'https://homologacao.focusnfe.com.br').replace(/\/$/, '');
+  }
+
+  /** Teste de conexão: consulta uma nota inexistente; 404 = token aceito, 401/403 = token recusado. */
+  async testar() {
+    const { status } = await this.focus('GET', '/v2/nfce/teste-de-conexao-aritana');
+    if (status === 401 || status === 403) throw new BadRequestException('A Focus NFe recusou o token. Confira se é o token do ambiente escolhido.');
+    return { ok: true, mensagem: `Token aceito pela Focus NFe (${this.ambiente}). Lembre de enviar o certificado A1 no painel da Focus.` };
   }
 
   private async focus(metodo: string, caminho: string, corpo?: unknown) {
     if (!this.configurado) throw new ServiceUnavailableException('O emissor fiscal ainda não foi ligado: falta o token da Focus NFe e o certificado digital da Aritana.');
     const r = await fetch(this.url + caminho, {
       method: metodo,
-      headers: { authorization: `Basic ${Buffer.from(`${process.env.FOCUS_NFE_TOKEN}:`).toString('base64')}`, 'content-type': 'application/json' },
+      headers: { authorization: `Basic ${Buffer.from(`${this.segredos.v('FOCUS_NFE_TOKEN')}:`).toString('base64')}`, 'content-type': 'application/json' },
       body: corpo ? JSON.stringify(corpo) : undefined,
       signal: AbortSignal.timeout(60_000),
     });

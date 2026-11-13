@@ -184,15 +184,93 @@ export function Modelos() {
 // ───────────── Integrações ─────────────
 
 export function Integracoes() {
-  const q = useQuery({ queryKey: ['integracoes'], queryFn: () => api<any[]>('/integracoes/status') });
+  const q = useQuery({ queryKey: ['integracoes-campos'], queryFn: () => api<any[]>('/integracoes') });
   if (q.isLoading) return <Carregando />;
+  if (q.error) return <Erro erro={q.error} />;
   return (
     <div className="coluna">
-      <table className="tabela">
-        <thead><tr><th>Integração</th><th>Versão</th><th>Situação</th></tr></thead>
-        <tbody>{q.data!.map((i) => <tr key={i.chave}><td>{i.nome}</td><td>V{i.versao}</td><td>{i.ligada ? <span className="etiqueta ok">Ligada</span> : <span className="etiqueta neutra">Aguardando credenciais</span>}</td></tr>)}</tbody>
-      </table>
-      <p className="muted">As chaves ficam guardadas no servidor (arquivo .env da VPS), nunca no navegador. A Wide liga cada integração quando a Aritana enviar o acesso.</p>
+      <p className="muted" style={{ margin: 0 }}>
+        Preencha cada integração quando a Aritana tiver o acesso. As senhas e chaves ficam cifradas no servidor e nunca voltam para a tela: depois de salvas, aparecem só os últimos caracteres.
+      </p>
+      {q.data!.map((i) => <CartaoIntegracao key={i.chave} i={i} />)}
+      <div className="cartao">
+        <div className="secao" style={{ marginTop: 0 }}>Próximas integrações (Versão 2)</div>
+        <p className="muted" style={{ margin: 0 }}>WhatsApp oficial, Serasa, Meta Ads e Google Ads, PagBank e Sicoob.</p>
+      </div>
+    </div>
+  );
+}
+
+function CartaoIntegracao({ i }: { i: any }) {
+  const qc = useQueryClient();
+  const editavel = pode('configuracoes', 'editar');
+  const [v, setV] = useState<Record<string, string>>({});
+  const [msg, setMsg] = useState<string | null>(null);
+  const salvar = useMutation({
+    mutationFn: () => api<{ ligada: boolean }>(`/integracoes/${i.chave}`, { metodo: 'PUT', corpo: { valores: v } }),
+    onSuccess: (r) => { setV({}); setMsg(r.ligada ? 'Salvo. Integração ligada.' : 'Salvo.'); qc.invalidateQueries({ queryKey: ['integracoes-campos'] }); qc.invalidateQueries({ queryKey: ['implantacao'] }); },
+  });
+  const apagar = useMutation({
+    mutationFn: (nome: string) => api(`/integracoes/${i.chave}`, { metodo: 'PUT', corpo: { valores: { [nome]: null } } }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['integracoes-campos'] }),
+  });
+  const gerar = useMutation({ mutationFn: (nome: string) => api(`/integracoes/${i.chave}/gerar/${nome}`, { corpo: {} }), onSuccess: () => qc.invalidateQueries({ queryKey: ['integracoes-campos'] }) });
+  const testar = useMutation({ mutationFn: () => api<{ mensagem: string }>(`/integracoes/${i.chave}/testar`, { corpo: {} }) });
+  const mudou = Object.keys(v).length > 0;
+  const copiar = async (t: string) => { try { await navigator.clipboard.writeText(t); } catch { window.prompt('Copie:', t); } };
+  return (
+    <div className="cartao form">
+      <div className="secao flex entre" style={{ gridColumn: 'span 4' }}>
+        <span>{i.nome}</span>
+        <span>{i.ligada ? <span className="etiqueta ok">Ligada{i.ambiente ? ` · ${i.ambiente}` : ''}</span> : <span className="etiqueta neutra">Aguardando acesso</span>}</span>
+      </div>
+      <p className="muted" style={{ gridColumn: 'span 4', margin: 0 }}>{i.descricao} <b>Onde conseguir:</b> {i.ondeConseguir}</p>
+      {i.campos.map((c: any) => {
+        const ajuda = [c.ajuda, c.origem === 'servidor' ? 'Hoje vem do arquivo do servidor; o que for salvo aqui passa a valer.' : null, c.ilegivel ? 'Não foi possível ler o valor salvo; preencha de novo.' : null].filter(Boolean).join(' ');
+        return (
+          <Campo key={c.nome} rotulo={c.rotulo} ajuda={ajuda || undefined} className={c.nome.includes('REMETENTE') || c.nome.includes('SUPORTE') ? 'l2' : ''}>
+            {c.opcoes ? (
+              <select disabled={!editavel} value={v[c.nome] ?? c.valor ?? ''} onChange={(e) => setV({ ...v, [c.nome]: e.target.value })}>
+                <option value="">{c.origem === 'servidor' ? 'Definido no servidor' : 'Escolha'}</option>
+                {c.opcoes.map(([o, r]: [string, string]) => <option key={o} value={o}>{r}</option>)}
+              </select>
+            ) : c.secreto ? (
+              <div className="flex" style={{ gap: 6 }}>
+                <input
+                  type={c.mostrar && c.valor ? 'text' : 'password'}
+                  autoComplete="new-password"
+                  disabled={!editavel}
+                  style={{ flex: 1, minWidth: 0 }}
+                  placeholder={c.preenchido ? `Salvo${c.final ? ` (final ${c.final})` : ''}; em branco mantém` : ''}
+                  value={v[c.nome] ?? (c.mostrar ? c.valor ?? '' : '')}
+                  onChange={(e) => setV({ ...v, [c.nome]: e.target.value })}
+                />
+                {c.mostrar && c.valor && <button type="button" className="botao claro pequeno" onClick={() => void copiar(c.valor)}>Copiar</button>}
+                {c.gerar && editavel && <button type="button" className="botao claro pequeno" disabled={gerar.isPending} onClick={() => (!c.preenchido || window.confirm('Gerar um token novo? O antigo para de valer e precisa ser trocado no Asaas.')) && gerar.mutate(c.nome)}>Gerar</button>}
+                {c.preenchido && c.origem === 'tela' && editavel && !c.gerar && <button type="button" className="botao claro pequeno" onClick={() => window.confirm(`Apagar ${c.rotulo}?`) && apagar.mutate(c.nome)}>Apagar</button>}
+              </div>
+            ) : (
+              <input disabled={!editavel} value={v[c.nome] ?? c.valor ?? ''} onChange={(e) => setV({ ...v, [c.nome]: e.target.value })} />
+            )}
+          </Campo>
+        );
+      })}
+      {i.extra?.webhookUrl && (
+        <Campo rotulo="Endereço do webhook (cole no Asaas)" className="l2">
+          <div className="flex" style={{ gap: 6 }}><input readOnly value={i.extra.webhookUrl} style={{ flex: 1, minWidth: 0 }} /><button type="button" className="botao claro pequeno" onClick={() => void copiar(i.extra.webhookUrl)}>Copiar</button></div>
+        </Campo>
+      )}
+      <div className="coluna" style={{ gridColumn: 'span 4', gap: 8 }}>
+        {(salvar.error || testar.error || gerar.error || apagar.error) && <Erro erro={salvar.error ?? testar.error ?? gerar.error ?? apagar.error} />}
+        {msg && !mudou && <div className="aviso ok">{msg}</div>}
+        {testar.data && <div className="aviso ok">{testar.data.mensagem}</div>}
+        {editavel && (
+          <div className="flex">
+            <button className="botao" disabled={!mudou || salvar.isPending} onClick={() => { setMsg(null); testar.reset(); salvar.mutate(); }}>Salvar</button>
+            <button className="botao claro" disabled={!i.ligada || mudou || testar.isPending} onClick={() => testar.mutate()}>{testar.isPending ? 'Testando…' : 'Testar conexão'}</button>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -211,7 +289,7 @@ export function Empresas() {
   const editavel = pode('configuracoes', 'editar');
   return (
     <div className="coluna">
-      <p className="muted">Razão social, CNPJ e cidade entram nos contratos e promissórias e, na semana 3, nas notas fiscais.</p>
+      <p className="muted">Razão social, CNPJ, inscrição estadual e cidade entram nos contratos, nas promissórias e nas notas fiscais.</p>
       {salvar.error && <Erro erro={salvar.error} />}
       {q.data!.map((e0) => {
         const e = edit[e0.id] ?? e0;
