@@ -4,7 +4,7 @@
  */
 export const MODULOS = [
   { chave: 'inicio', nome: 'Início', versao: 1 },
-  { chave: 'crm', nome: 'CRM', versao: 2 },
+  { chave: 'crm', nome: 'Candidatas', versao: 1 },
   { chave: 'marketing', nome: 'Marketing', versao: 2 },
   { chave: 'rede', nome: 'Rede', versao: 1 },
   { chave: 'cadastros', nome: 'Cadastros', versao: 1 },

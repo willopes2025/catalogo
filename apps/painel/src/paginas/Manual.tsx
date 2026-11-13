@@ -15,6 +15,27 @@ const SECOES: Secao[] = [
     ],
   },
   {
+    id: 'candidatas',
+    titulo: 'Candidatas: do anúncio à aprovação',
+    passos: [
+      { t: 'Divulgue o formulário', d: 'Em Candidatas, "Copiar link do formulário". Nos anúncios, acrescente ?utm_source=instagram&utm_campaign=nome-da-campanha ao link: o sistema mostra de onde vem cada candidata e quantas foram aprovadas.' },
+      { t: 'Faça o primeiro contato', d: 'Abra o cartão da candidata, toque em WhatsApp (a mensagem já vem pronta), anote o que combinaram e marque a data de retorno.' },
+      { t: 'Mova pelo quadro', d: 'Novas → Em contato → Entrevista → Documentos. Recusa sempre com o motivo.' },
+      { t: 'Aprove', d: '"Aprovar e criar representante" cria o cadastro com o limite inicial das regras e abre a ficha para completar CPF, endereço e contrato.' },
+    ],
+  },
+  {
+    id: 'portal',
+    titulo: 'Portal da representante (app)',
+    passos: [
+      { t: 'Mande o acesso', d: 'Na ficha da representante, "Acesso ao portal" e depois "Enviar pelo WhatsApp". O link vale 7 dias e funciona uma vez; depois ela entra com o CPF e um código que chega no e-mail.' },
+      { t: 'O que ela vê', d: 'A maleta com fotos e preços, a data do acerto, as parcelas com Pix copia e cola, as vendas e a comissão de cada mês, e o botão para compartilhar o catálogo.' },
+      { t: 'Pré-baixa', d: 'Ela marca o que já vendeu; no acerto isso aparece para conferência.' },
+      { t: 'Pedidos de peças', d: 'Ela escolhe peças do depósito; o pedido chega em Maletas › Pedidos das representantes, onde você monta a maleta ou responde.' },
+      { t: 'Instalar no celular', d: 'No Android aparece "Instalar o app"; no iPhone, Compartilhar › Adicionar à Tela de Início.' },
+    ],
+  },
+  {
     id: 'rede',
     titulo: 'Cadastrar uma representante',
     passos: [
@@ -102,6 +123,16 @@ const SECOES: Secao[] = [
       { t: 'Configurações → Avisos e regras', d: 'Ligue os avisos, escolha a hora e quantos dias antes lembrar o acerto e a parcela.' },
       { t: 'Resumo da equipe', d: 'Informe os e-mails que recebem, toda manhã, o resumo de maletas atrasadas, parcelas vencidas e garantias paradas.' },
       { t: 'Enviar agora', d: 'O botão envia na hora o que estiver pendente. Cada aviso sai uma vez só.' },
+    ],
+  },
+  {
+    id: 'implantacao',
+    titulo: 'Implantação: o que falta para começar',
+    passos: [
+      { t: 'Configurações › Implantação', d: 'Mostra o que falta: CNPJs, integrações, NCM dos produtos, textos jurídicos, usuários, senhas provisórias e importação do Jueri.' },
+      { t: 'Integrações', d: 'Quando a Aritana tiver os acessos (e-mail, Asaas, Focus NFe, Assertiva), preencha em Configurações › Integrações e use "Testar conexão".' },
+      { t: 'Confirmações', d: 'Itens que só a Aritana pode garantir (certificado A1, CFOPs do contador, jurídico, regras) são marcados como "Feito" por quem confirmou.' },
+      { t: 'Apagar os dados de teste', d: 'No dia da virada, a Diretoria apaga os dados de teste (digitando APAGAR) e importa os dados reais.' },
     ],
   },
   {

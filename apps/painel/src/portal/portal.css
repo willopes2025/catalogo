@@ -58,3 +58,7 @@ a.p-aviso { text-decoration: none; }
 .p-selo.atendido { background: var(--ok-fundo); color: var(--ok); }
 .p-selo.recusado { background: var(--erro-fundo); color: var(--erro); }
 details.p-cartao summary { cursor: pointer; margin-bottom: 0; }
+.p-col label.p-check { flex-direction: row !important; align-items: flex-start; gap: 10px !important; font-weight: 400 !important; }
+.p-col label.p-check input { width: 22px; height: 22px; min-height: 0 !important; margin-top: 2px; flex-shrink: 0; }
+.campo-oculto { position: absolute; left: -9999px; width: 1px; height: 1px; opacity: 0; }
+select.p-busca { appearance: auto; }

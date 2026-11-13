@@ -67,6 +67,14 @@ Desenvolvido pela Wide Inteligência Comercial. **O código pertence à Aritana.
 | **Pedir peças** | Vitrine do que há no depósito (sem custo nem quantidade exata); o pedido aparece em Maletas › Pedidos das representantes. |
 | **Catálogo** | Botão para compartilhar o catálogo dela com as clientes. |
 
+**Candidatas (CRM de captação)**
+
+| Parte | O que faz |
+|---|---|
+| **Formulário público** | `/cadastro` ("Seja uma revendedora"), com origem dos anúncios pelos `utm_*`, consentimento LGPD, proteção contra robô e sem duplicar quem envia de novo. Avisa a equipe por e-mail. |
+| **Quadro de triagem** | Novas → Em contato → Entrevista → Documentos → Aprovadas/Recusadas, com responsável, data de retorno, histórico de anotações, WhatsApp com mensagem pronta e números por origem. |
+| **Aprovação** | Cria a representante com o limite inicial das regras, sem duplicar CPF. |
+
 As naturezas de operação e os CFOPs que vêm instalados são um **ponto de partida** para empresa do Simples Nacional e **precisam ser conferidos pelo contador** antes de emitir em produção.
 
 Os modelos de contrato e promissória que vêm instalados são **provisórios** e devem ser trocados pelos textos revisados pelo jurídico da Aritana, em Configurações › Modelos de documento.

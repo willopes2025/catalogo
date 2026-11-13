@@ -694,6 +694,35 @@ test('portal da representante: entra por CPF e código, vê só o que é dela', 
   token = salvo;
 });
 
+test('CRM: formulário público, quadro, recusa e aprovação que vira representante', async () => {
+  const salvo = token;
+  token = '';
+  const ruim = await chamar('POST', '/publico/candidaturas', { nome: 'Ana', telefone: '27', cidade: 'Serra', uf: 'ES' });
+  assert.equal(ruim.status, 400);
+  assert.ok(ruim.dados.campos.consentimentoLgpd);
+  await ok('POST', '/publico/candidaturas', { nome: 'Candidata Formulário Teste', telefone: '(27) 99888-1234', email: 'cand@exemplo.com', cidade: 'Serra', uf: 'es', modeloInteresse: 'consignado', consentimentoLgpd: true, origem: { utm_source: 'instagram', utm_campaign: 'novembro' } });
+  await ok('POST', '/publico/candidaturas', { nome: 'Candidata Formulário Teste', telefone: '27998881234', cidade: 'Serra', uf: 'ES', consentimentoLgpd: true, experiencia: 'Vendo roupas' });
+  await ok('POST', '/publico/candidaturas', { nome: 'Robô Preenchendo', telefone: '27911112222', cidade: 'X', uf: 'ES', consentimentoLgpd: true, site: 'http://spam' });
+  token = salvo;
+  const lista = await ok('GET', '/crm/candidaturas?busca=Formulário');
+  assert.equal(lista.length, 1, 'reenvio não duplica');
+  assert.equal(lista[0].origem.utm_source, 'instagram');
+  assert.ok(!(await ok('GET', '/crm/candidaturas?busca=Robô')).length, 'robô ignorado');
+  const id = lista[0].id;
+  await ok('PATCH', `/crm/candidaturas/${id}`, { etapa: 'entrevista', nota: 'Conversamos pelo WhatsApp' });
+  assert.equal((await chamar('PATCH', `/crm/candidaturas/${id}`, { etapa: 'recusada' })).status, 400, 'recusa exige motivo');
+  const c = await ok('GET', `/crm/candidaturas/${id}`);
+  assert.equal(c.etapa, 'entrevista');
+  assert.ok(c.notas.length >= 2);
+  const r = await ok('POST', `/crm/candidaturas/${id}/aprovar`, { modeloTrabalho: 'consignado' });
+  const p = await ok('GET', `/pessoas/${r.pessoaId}`);
+  assert.equal(p.status, 'ativo');
+  assert.equal(p.telefone1, '27998881234');
+  assert.equal((await chamar('POST', `/crm/candidaturas/${id}/aprovar`, { modeloTrabalho: 'consignado' })).status, 400);
+  const res = await ok('GET', '/crm/resumo');
+  assert.ok(res.porOrigem.some((o) => o.origem === 'instagram' && o.aprovadas === 1));
+});
+
 // Este fica por último: apaga os dados de teste.
 test('implantação: apagar dados de teste exige APAGAR e mantém o que é configuração', async () => {
   assert.equal((await chamar('POST', '/implantacao/apagar-dados-de-teste', { confirmacao: 'apagar' })).status, 400);

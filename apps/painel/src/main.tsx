@@ -38,6 +38,8 @@ import { Auditoria } from './paginas/Auditoria';
 import { Manual } from './paginas/Manual';
 import { ImprimirEtiquetas } from './paginas/ImprimirEtiquetas';
 import { Portal } from './portal/Portal';
+import { Crm } from './paginas/Crm';
+import { Cadastro } from './paginas/Cadastro';
 
 const cliente = new QueryClient({ defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: false, staleTime: 15_000 } } });
 
@@ -55,6 +57,7 @@ ReactDOM.createRoot(document.getElementById('raiz')!).render(
           <Route path="/assinar/:token" element={<Assinar />} />
           <Route path="/catalogo/:slug" element={<Catalogo />} />
           <Route path="/portal/*" element={<Portal />} />
+          <Route path="/cadastro" element={<Cadastro />} />
           <Route path="/imprimir/maleta/:id" element={<Protegido><ImprimirMaleta /></Protegido>} />
           <Route path="/imprimir/documento/:id" element={<Protegido><ImprimirDocumento /></Protegido>} />
           <Route path="/imprimir/venda/:id" element={<Protegido><ImprimirVenda /></Protegido>} />
@@ -92,6 +95,7 @@ ReactDOM.createRoot(document.getElementById('raiz')!).render(
             <Route path="suporte" element={<Suporte />} />
             <Route path="minha-senha" element={<MinhaSenha />} />
             <Route path="garantia" element={<Garantia />} />
+            <Route path="crm" element={<Crm />} />
             <Route path="comissoes" element={<Comissoes />} />
             <Route path="auditoria" element={<Auditoria />} />
             <Route path="manual" element={<Manual />} />

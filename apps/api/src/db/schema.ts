@@ -725,6 +725,47 @@ export const configuracoes = pgTable('configuracoes', {
   atualizadoEm: atualizadoEm(),
 });
 
+// ───────────────────────── CRM: candidatas a representante ─────────────────────────
+
+/** Quem preencheu o formulário "Quero ser revendedora" (ou foi cadastrada pela equipe), antes de virar representante. */
+export const candidaturas = pgTable(
+  'candidaturas',
+  {
+    id: id(),
+    numero: serial('numero').notNull(),
+    nome: text('nome').notNull(),
+    telefone: text('telefone').notNull(),
+    email: text('email'),
+    cpf: text('cpf'),
+    cidade: text('cidade'),
+    uf: text('uf'),
+    instagram: text('instagram'),
+    modeloInteresse: text('modelo_interesse'), // consignado | revenda | afiliado | nao_sei
+    experiencia: text('experiencia'),
+    comoConheceu: text('como_conheceu'),
+    indicadaPor: text('indicada_por'),
+    /** utm_source, utm_medium, utm_campaign, utm_content, página de origem. */
+    origem: jsonb('origem').$type<Record<string, string>>().notNull().default({}),
+    etapa: text('etapa').notNull().default('nova'), // nova | contato | entrevista | documentos | aprovada | recusada
+    responsavelId: uuid('responsavel_id').references(() => usuarios.id),
+    motivoRecusa: text('motivo_recusa'),
+    pessoaId: uuid('pessoa_id').references(() => pessoas.id, { onDelete: 'set null' }),
+    consentimentoLgpd: boolean('consentimento_lgpd').notNull().default(false),
+    proximoContato: date('proximo_contato'),
+    criadoEm: criadoEm(),
+    atualizadoEm: timestamp('atualizado_em', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({ porEtapa: index('candidaturas_etapa_idx').on(t.etapa) }),
+);
+
+export const candidaturaNotas = pgTable('candidatura_notas', {
+  id: id(),
+  candidaturaId: uuid('candidatura_id').notNull().references(() => candidaturas.id, { onDelete: 'cascade' }),
+  usuarioId: uuid('usuario_id').references(() => usuarios.id),
+  texto: text('texto').notNull(),
+  criadoEm: criadoEm(),
+});
+
 // ───────────────────────── Portal da representante ─────────────────────────
 
 /** Código de acesso (6 dígitos por e-mail) ou link de acesso gerado pela matriz. Só o hash fica guardado. */
