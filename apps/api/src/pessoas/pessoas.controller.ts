@@ -187,6 +187,16 @@ export class PessoasController {
     const { referencias: refs, ...dados } = validar(pessoaSchema, { ...atual, ...(body as object), tipo: atual.tipo });
     if (dados.documento) dados.documento = soDigitos(dados.documento);
     if (dados.liderId === id) throw new ForbiddenException('A representante não pode ser líder dela mesma.');
+    // Evita ciclo na rede (A líder de B e B líder de A).
+    for (let l = dados.liderId ?? null, passos = 0; l && passos < 50; passos++) {
+      if (l === id) throw new ForbiddenException('Essa liderança criaria um ciclo na rede.');
+      const [x] = await this.db.select({ liderId: pessoas.liderId }).from(pessoas).where(eq(pessoas.id, l));
+      l = x?.liderId ?? null;
+    }
+    if (dados.documento && dados.documento !== atual.documento) {
+      const [dup] = await this.db.select({ id: pessoas.id, nome: pessoas.nome }).from(pessoas).where(and(eq(pessoas.documento, dados.documento), eq(pessoas.tipo, atual.tipo), sql`${pessoas.id} <> ${id}`));
+      if (dup) throw new ForbiddenException({ mensagem: `Já existe um cadastro com esse documento: ${dup.nome}.`, id: dup.id });
+    }
     return this.db.transaction(async (tx) => {
       const slug = atual.tipo === 'representante' && !atual.slug ? await this.slugLivre(tx, dados.nome) : atual.slug;
       const [p] = await tx.update(pessoas).set({ ...dados, slug, atualizadoEm: new Date() }).where(eq(pessoas.id, id)).returning();

@@ -1,5 +1,5 @@
-import { Body, Controller, Get, Inject, NotFoundException, Param, ParseUUIDPipe, Post, Query } from '@nestjs/common';
-import { and, asc, desc, eq, ilike, ne, or, sql } from 'drizzle-orm';
+import { BadRequestException, Body, Controller, Get, Inject, NotFoundException, Param, ParseUUIDPipe, Post, Query } from '@nestjs/common';
+import { and, asc, desc, eq, ilike, inArray, ne, or, sql } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 import { z } from 'zod';
 import { DB, type Db } from '../comum/db.module';
@@ -22,6 +22,16 @@ const transferenciaSchema = z.object({ origemId: z.string().uuid(), destinoId: z
 @Controller('estoque')
 export class EstoqueController {
   constructor(@Inject(DB) private readonly db: Db, private readonly estoque: EstoqueService, private readonly auditoria: AuditoriaService) {}
+
+  /** Entrada, ajuste e transferência não mexem em maleta: maleta só muda pela própria tela (incluir, retirar, acerto). */
+  private async exigirLocaisComuns(...ids: string[]) {
+    const ls = await this.db.select({ id: locaisEstoque.id, tipo: locaisEstoque.tipo, ativo: locaisEstoque.ativo }).from(locaisEstoque).where(inArray(locaisEstoque.id, ids));
+    for (const id of ids) {
+      const l = ls.find((x) => x.id === id);
+      if (!l || !l.ativo) throw new BadRequestException('Local de estoque inválido.');
+      if (l.tipo === 'maleta') throw new BadRequestException('O estoque de uma maleta só muda pela própria maleta (incluir, retirar ou acerto).');
+    }
+  }
 
   @Get('locais')
   @Permissao('estoque', 'ver')
@@ -163,6 +173,7 @@ export class EstoqueController {
   @Permissao('estoque', 'criar')
   async entrada(@Usuario() u: UsuarioLogado, @Body() body: unknown) {
     const d = validar(entradaSchema, body);
+    await this.exigirLocaisComuns(d.destinoId);
     const mapa = await this.produtosPorCodigo(d.itens.map((i) => i.codigoBarras));
     const motivo = [d.motivo, d.chaveNota && `NF ${d.chaveNota}`].filter(Boolean).join(' · ') || 'Entrada de mercadoria';
     await this.db.transaction(async (tx) => {
@@ -179,6 +190,7 @@ export class EstoqueController {
   @Permissao('estoque', 'editar')
   async ajuste(@Usuario() u: UsuarioLogado, @Body() body: unknown) {
     const d = validar(ajusteSchema, body);
+    await this.exigirLocaisComuns(d.localId);
     const mapa = await this.produtosPorCodigo(d.itens.map((i) => i.codigoBarras));
     const diferencas: { codigoBarras: string; antes: number; depois: number }[] = [];
     await this.db.transaction(async (tx) => {
@@ -207,7 +219,8 @@ export class EstoqueController {
   @Permissao('estoque', 'criar')
   async transferencia(@Usuario() u: UsuarioLogado, @Body() body: unknown) {
     const d = validar(transferenciaSchema, body);
-    if (d.origemId === d.destinoId) throw new NotFoundException('Origem e destino são o mesmo local.');
+    if (d.origemId === d.destinoId) throw new BadRequestException('Origem e destino são o mesmo local.');
+    await this.exigirLocaisComuns(d.origemId, d.destinoId);
     const mapa = await this.produtosPorCodigo(d.itens.map((i) => i.codigoBarras));
     await this.db.transaction(async (tx) => {
       for (const i of d.itens) {

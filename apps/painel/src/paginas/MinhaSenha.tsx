@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useMutation } from '@tanstack/react-query';
+import { useMutation, useQuery } from '@tanstack/react-query';
 import { api, lerSessao } from '../api';
 import { Campo, Erro, Topo } from '../componentes/ui';
 
@@ -7,11 +7,13 @@ export function MinhaSenha() {
   const [atual, setAtual] = useState('');
   const [nova, setNova] = useState('');
   const [repete, setRepete] = useState('');
-  const trocar = useMutation({ mutationFn: () => api('/auth/trocar-senha', { corpo: { atual, nova } }), onSuccess: () => { setAtual(''); setNova(''); setRepete(''); } });
+  const eu = useQuery({ queryKey: ['eu'], queryFn: () => api<{ trocarSenha: boolean }>('/auth/eu') });
+  const trocar = useMutation({ mutationFn: () => api('/auth/trocar-senha', { corpo: { atual, nova } }), onSuccess: () => { setAtual(''); setNova(''); setRepete(''); eu.refetch(); } });
   const s = lerSessao();
   return (
     <>
       <Topo eb="Meu perfil" titulo="Trocar senha" sub={`${s?.usuario.nome} · ${s?.usuario.email}`} />
+      {eu.data?.trocarSenha && <div className="aviso alerta" style={{ maxWidth: 440, marginBottom: 14 }}>Sua senha é provisória. Crie uma senha sua para liberar o sistema.</div>}
       <div className="cartao coluna" style={{ maxWidth: 440 }}>
         <Campo rotulo="Senha atual"><input type="password" autoComplete="current-password" value={atual} onChange={(e) => setAtual(e.target.value)} /></Campo>
         <Campo rotulo="Nova senha" ajuda="Pelo menos 10 caracteres"><input type="password" autoComplete="new-password" value={nova} onChange={(e) => setNova(e.target.value)} /></Campo>

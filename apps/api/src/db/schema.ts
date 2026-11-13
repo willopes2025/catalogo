@@ -74,6 +74,8 @@ export const usuarios = pgTable('usuarios', {
   empresas: jsonb('empresas').$type<string[]>().notNull().default([]),
   ativo: boolean('ativo').notNull().default(true),
   ultimoAcesso: timestamp('ultimo_acesso', { withTimezone: true }),
+  /** Senha criada por outra pessoa: precisa ser trocada no primeiro acesso. */
+  senhaProvisoria: boolean('senha_provisoria').notNull().default(false),
   /** Vendedora de loja: comissão própria (pontos-base) e meta mensal em centavos. */
   comissaoPb: integer('comissao_pb'),
   metaMensal: integer('meta_mensal'),

@@ -1,3 +1,4 @@
+import { Limitador } from '../comum/limitador';
 import { BadRequestException, Body, Controller, Get, Inject, NotFoundException, Param, ParseUUIDPipe, Patch, Post, Req } from '@nestjs/common';
 import type { Request } from 'express';
 import { and, eq } from 'drizzle-orm';
@@ -89,6 +90,8 @@ export class DocumentosController {
   }
 }
 
+const pedidosCodigo = new Limitador(10, 60 * 60_000, 'Muitos pedidos de código.');
+
 /** Páginas que a representante abre pelo link, sem login. */
 @Controller('publico/documentos')
 export class DocumentoPublicoController {
@@ -102,7 +105,8 @@ export class DocumentoPublicoController {
 
   @Publico()
   @Post(':token/codigo')
-  codigo(@Param('token') token: string) {
+  codigo(@Param('token') token: string, @Req() req: Request) {
+    pedidosCodigo.usar(req.ip ?? '?');
     return this.svc.enviarCodigo(token);
   }
 
@@ -110,7 +114,8 @@ export class DocumentoPublicoController {
   @Post(':token/assinar')
   assinar(@Param('token') token: string, @Body() body: unknown, @Req() req: Request) {
     const d = validar(z.object({ codigo: z.string().regex(/^\d{6}$/, 'O código tem 6 números'), nome: z.string().min(3), cpf: z.string().optional(), aceite: z.boolean() }), body);
-    const ip = (String(req.headers['x-forwarded-for'] ?? '').split(',')[0].trim() || req.ip) ?? null;
+    // req.ip já considera o proxy confiável (Caddy); o cabeçalho cru poderia ser forjado.
+    const ip = req.ip ?? null;
     return this.svc.assinar(token, d, ip, String(req.headers['user-agent'] ?? '') || null);
   }
 }

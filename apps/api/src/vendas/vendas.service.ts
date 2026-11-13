@@ -244,7 +244,8 @@ export class VendasService {
       const [v] = await tx.select().from(vendas).where(eq(vendas.id, id)).for('update');
       if (!v) throw new NotFoundException('Venda não encontrada.');
       if (v.status !== 'concluida') throw new BadRequestException('Venda já cancelada.');
-      if (v.criadoEm.toISOString().slice(0, 10) !== new Date().toISOString().slice(0, 10)) throw new BadRequestException('Só dá para cancelar no mesmo dia. Depois disso, use devolução.');
+      const diaBR = (d: Date) => new Date(d.getTime() - 3 * 3600_000).toISOString().slice(0, 10);
+      if (diaBR(v.criadoEm) !== hoje()) throw new BadRequestException('Só dá para cancelar no mesmo dia. Depois disso, use devolução.');
       const itens = await tx.select().from(vendaItens).where(eq(vendaItens.vendaId, id));
       if (itens.some((i) => i.devolvida > 0)) throw new BadRequestException('A venda já teve devolução; não pode ser cancelada.');
       for (const i of itens) await this.estoque.mover(tx, { produtoId: i.produtoId, destinoId: v.localId, quantidade: i.quantidade, tipo: 'ajuste', motivo: `Cancelamento da venda nº ${v.numero}`, referenciaTipo: 'venda', referenciaId: id, usuarioId });
@@ -276,6 +277,9 @@ export class VendasService {
       const somaItens = todos.reduce((a, i) => a + i.total, 0);
       const fator = somaItens > 0 ? v.total / somaItens : 1;
       let valor = 0;
+      const pedidos = new Map<string, number>();
+      for (const d of itens) pedidos.set(d.produtoId, (pedidos.get(d.produtoId) ?? 0) + d.quantidade);
+      itens = [...pedidos].map(([produtoId, quantidade]) => ({ produtoId, quantidade }));
       for (const d of itens) {
         const it = todos.find((i) => i.produtoId === d.produtoId);
         if (!it) throw new BadRequestException('Peça não faz parte desta venda.');
@@ -284,16 +288,39 @@ export class VendasService {
         await tx.update(vendaItens).set({ devolvida: it.devolvida + d.quantidade }).where(eq(vendaItens.id, it.id));
         await this.estoque.mover(tx, { produtoId: d.produtoId, destinoId: v.localId, quantidade: d.quantidade, tipo: 'ajuste', motivo: `Devolução da venda nº ${v.numero}`, referenciaTipo: 'venda', referenciaId: id, usuarioId });
       }
+      // Venda no boleto/crediário ainda em aberto: a devolução primeiro abate as parcelas (da última para a primeira).
+      const total = valor;
+      const abertos = await tx
+        .select()
+        .from(titulos)
+        .where(and(eq(titulos.origemTipo, 'venda'), eq(titulos.origemId, id), eq(titulos.status, 'aberto'), eq(titulos.formaPagamento, 'boleto')))
+        .orderBy(sql`${titulos.vencimento} desc`);
+      let abatido = 0;
+      for (const t of abertos) {
+        if (valor <= 0) break;
+        if (t.cobrancaExternaId) continue; // já tem boleto emitido no Asaas: ajuste pelo financeiro
+        const parte = Math.min(valor, t.valor);
+        if (parte === t.valor) await tx.update(titulos).set({ status: 'cancelado' }).where(eq(titulos.id, t.id));
+        else await tx.update(titulos).set({ valor: t.valor - parte }).where(eq(titulos.id, t.id));
+        valor -= parte;
+        abatido += parte;
+      }
+      if (valor <= 0) {
+        await this.auditoria.registrar({ usuarioId, acao: 'devolucao', entidade: 'venda', entidadeId: id, dados: { valor: total, abatido, destino: 'parcelas' } }, tx);
+        return { ok: true, valor: total, abatidoEmParcelas: abatido, destino };
+      }
       if (destino === 'credito') {
         await tx.insert(creditos).values({ pessoaId: v.clienteId!, valor, descricao: `Devolução da venda nº ${v.numero}`, origemTipo: 'devolucao', origemId: id, usuarioId });
       } else {
         const caixa = await this.caixaAberto(v.localId, tx);
         if (!caixa) throw new BadRequestException('Para devolver em dinheiro, abra o caixa.');
+        const { porForma } = await this.resumoCaixa(caixa.id, tx);
+        if ((porForma.dinheiro ?? 0) < valor) throw new BadRequestException('Não há dinheiro suficiente no caixa para esta devolução; devolva como crédito.');
         await tx.insert(caixaMovimentos).values({ caixaId: caixa.id, tipo: 'devolucao', forma: 'dinheiro', valor: -valor, descricao: `Devolução da venda nº ${v.numero}`, vendaId: id, usuarioId });
         await tx.insert(titulos).values({ empresaId: v.empresaId, tipo: 'pagar', pessoaId: v.clienteId, descricao: `Devolução da venda nº ${v.numero}`, categoria: 'Devoluções', valor, vencimento: hoje(), status: 'pago', pagoEm: hoje(), valorPago: valor, origemTipo: 'devolucao', origemId: id });
       }
-      await this.auditoria.registrar({ usuarioId, acao: 'devolucao', entidade: 'venda', entidadeId: id, dados: { valor, destino } }, tx);
-      return { ok: true, valor, destino };
+      await this.auditoria.registrar({ usuarioId, acao: 'devolucao', entidade: 'venda', entidadeId: id, dados: { valor: total, abatido, destino } }, tx);
+      return { ok: true, valor: total, abatidoEmParcelas: abatido, destino };
     });
   }
 }

@@ -29,6 +29,13 @@
       "when": 1794587167977,
       "tag": "0003_garantia_comissoes_avisos",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1794590602110,
+      "tag": "0004_senha_provisoria",
+      "breakpoints": true
     }
   ]
 }

@@ -7,6 +7,7 @@ import { centavos, dataISO, validar } from '../comum/validacao';
 import { AuditoriaService } from '../comum/auditoria.service';
 import { contas, empresas, pessoas, titulos } from '../db/schema';
 import { hoje } from '../maletas/maletas.service';
+import { AsaasService } from '../integracoes/asaas.service';
 
 const tituloSchema = z.object({
   empresaId: z.string().uuid(),
@@ -25,11 +26,13 @@ const baixaSchema = z.object({
   valorPago: centavos.optional(),
   contaId: z.string().uuid().optional().nullable(),
   formaPagamento: z.string().max(30).optional(),
+  /** Pagou menos, mas a matriz dá o resto como desconto (não abre saldo). */
+  quitarComDesconto: z.boolean().default(false),
 });
 
 @Controller('financeiro')
 export class FinanceiroController {
-  constructor(@Inject(DB) private readonly db: Db, private readonly auditoria: AuditoriaService) {}
+  constructor(@Inject(DB) private readonly db: Db, private readonly auditoria: AuditoriaService, private readonly asaas: AsaasService) {}
 
   @Get('titulos')
   @Permissao('financeiro', 'ver')
@@ -106,7 +109,9 @@ export class FinanceiroController {
     const resto = d.valor - base * d.parcelas;
     const [a, m, dia] = d.vencimento.split('-').map(Number);
     const linhas = Array.from({ length: d.parcelas }, (_, i) => {
-      const venc = new Date(Date.UTC(a, m - 1 + i, dia)).toISOString().slice(0, 10);
+      // Mesmo dia nos meses seguintes; em mês mais curto, cai no último dia (31/01 → 28/02).
+      const ultimo = new Date(Date.UTC(a, m + i, 0)).getUTCDate();
+      const venc = new Date(Date.UTC(a, m - 1 + i, Math.min(dia, ultimo))).toISOString().slice(0, 10);
       return {
         empresaId: d.empresaId,
         tipo: d.tipo,
@@ -129,15 +134,59 @@ export class FinanceiroController {
   @Permissao('financeiro', 'editar')
   async baixar(@Usuario() u: UsuarioLogado, @Param('id', ParseUUIDPipe) id: string, @Body() body: unknown) {
     const d = validar(baixaSchema, body);
+    const pagoEm = d.pagoEm ?? hoje();
+    const r = await this.db.transaction(async (tx) => {
+      const [t] = await tx.select().from(titulos).where(eq(titulos.id, id)).for('update');
+      if (!t) throw new NotFoundException('Título não encontrado.');
+      if (t.status !== 'aberto') throw new BadRequestException(`Título está ${t.status}.`);
+      const valorPago = d.valorPago ?? t.valor;
+      if (valorPago <= 0) throw new BadRequestException('Informe o valor pago.');
+      // Pagamento parcial: baixa o que foi pago e abre um título com o saldo, no mesmo vencimento.
+      const parcial = !d.quitarComDesconto && valorPago < t.valor;
+      const [baixado] = await tx
+        .update(titulos)
+        .set({ status: 'pago', pagoEm, valor: parcial ? valorPago : t.valor, valorPago, contaId: d.contaId ?? null, formaPagamento: d.formaPagamento ?? t.formaPagamento })
+        .where(eq(titulos.id, id))
+        .returning();
+      let saldo = null;
+      if (parcial) {
+        const { id: _i, criadoEm: _c, cobrancaExternaId: _e, cobrancaUrl: _u, pixCopiaCola: _p, cobrancaTipo: _t, ...resto } = t;
+        [saldo] = await tx.insert(titulos).values({ ...resto, valor: t.valor - valorPago, descricao: `${t.descricao} · saldo`, status: 'aberto', pagoEm: null, valorPago: null, contaId: null }).returning();
+      }
+      await this.auditoria.registrar({ usuarioId: u.id, acao: 'baixar', entidade: 'titulo', entidadeId: id, dados: { ...d, parcial, saldoId: saldo?.id } }, tx);
+      return { ...baixado, saldo, cobrancaAnterior: t.cobrancaExternaId };
+    });
+    // Se havia boleto/Pix no Asaas, avisa que foi pago por fora (ou, no parcial, apaga a cobrança do valor cheio).
+    if (r.cobrancaAnterior) {
+      if (r.saldo) await this.asaas.cancelarCobranca(r.cobrancaAnterior);
+      else await this.asaas.informarPagamentoManual(r.cobrancaAnterior, pagoEm, r.valorPago ?? r.valor);
+    }
+    return r;
+  }
+
+  /** Cancela um título em aberto (lançado errado, renegociado). Apaga também a cobrança no Asaas. */
+  @Post('titulos/:id/cancelar')
+  @Permissao('financeiro', 'excluir')
+  async cancelar(@Usuario() u: UsuarioLogado, @Param('id', ParseUUIDPipe) id: string, @Body() body: unknown) {
+    const { motivo } = validar(z.object({ motivo: z.string().trim().min(3, 'Informe o motivo') }), body);
+    const [t] = await this.db.update(titulos).set({ status: 'cancelado' }).where(and(eq(titulos.id, id), eq(titulos.status, 'aberto'))).returning();
+    if (!t) throw new BadRequestException('Só títulos em aberto podem ser cancelados.');
+    await this.asaas.cancelarCobranca(t.cobrancaExternaId);
+    await this.auditoria.registrar({ usuarioId: u.id, acao: 'cancelar', entidade: 'titulo', entidadeId: id, dados: { motivo, valor: t.valor } });
+    return t;
+  }
+
+  /** Desfaz uma baixa manual feita por engano (baixas automáticas do Asaas não são desfeitas aqui). */
+  @Post('titulos/:id/estornar')
+  @Permissao('financeiro', 'excluir')
+  async estornar(@Usuario() u: UsuarioLogado, @Param('id', ParseUUIDPipe) id: string, @Body() body: unknown) {
+    const { motivo } = validar(z.object({ motivo: z.string().trim().min(3, 'Informe o motivo') }), body);
     const [t] = await this.db.select().from(titulos).where(eq(titulos.id, id));
-    if (!t) throw new NotFoundException('Título não encontrado.');
-    if (t.status !== 'aberto') throw new BadRequestException(`Título está ${t.status}.`);
-    const [r] = await this.db
-      .update(titulos)
-      .set({ status: 'pago', pagoEm: d.pagoEm ?? hoje(), valorPago: d.valorPago ?? t.valor, contaId: d.contaId ?? null, formaPagamento: d.formaPagamento ?? t.formaPagamento })
-      .where(eq(titulos.id, id))
-      .returning();
-    await this.auditoria.registrar({ usuarioId: u.id, acao: 'baixar', entidade: 'titulo', entidadeId: id, dados: d });
+    if (!t || t.status !== 'pago') throw new BadRequestException('Só títulos pagos podem ter a baixa estornada.');
+    if (t.cobrancaExternaId && (t.formaPagamento === 'pix' || t.formaPagamento === 'boleto')) throw new BadRequestException('Este título foi pago pelo Asaas; o estorno é feito no próprio Asaas.');
+    if (t.origemTipo === 'venda' && (t.formaPagamento === 'dinheiro' || t.formaPagamento === 'pix')) throw new BadRequestException('Recebimento de venda no caixa: use o cancelamento ou a devolução da venda.');
+    const [r] = await this.db.update(titulos).set({ status: 'aberto', pagoEm: null, valorPago: null, contaId: null }).where(eq(titulos.id, id)).returning();
+    await this.auditoria.registrar({ usuarioId: u.id, acao: 'estornar', entidade: 'titulo', entidadeId: id, dados: { motivo, pagoEm: t.pagoEm, valorPago: t.valorPago } });
     return r;
   }
 }

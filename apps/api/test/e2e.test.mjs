@@ -255,6 +255,13 @@ test('usuário do Financeiro: senha provisória e permissões por módulo', asyn
   const salvo = token;
   const login = await ok('POST', '/auth/login', { email: 'fin.teste@aritana.local', senha: u.senhaProvisoria });
   token = login.token;
+  assert.equal(login.trocarSenha, true);
+  const bloq = await chamar('GET', '/financeiro/titulos');
+  assert.equal(bloq.status, 403, 'senha provisória bloqueia até trocar');
+  assert.equal(bloq.dados.trocarSenha, true);
+  await ok('POST', '/auth/trocar-senha', { atual: u.senhaProvisoria, nova: 'SenhaDoFinanceiro2026' });
+  ctx.finId = u.id;
+  ctx.finToken = token;
   await ok('GET', '/financeiro/titulos');
   assert.equal((await chamar('POST', '/maletas', { representanteId: ctx.rep.id, origemId: ctx.deposito.id, itens: [{ codigoBarras: 'x', quantidade: 1 }] })).status, 403);
   assert.equal((await chamar('GET', '/usuarios')).status, 403);
@@ -325,6 +332,7 @@ test('venda recusada: falta pagamento, troco sem dinheiro e desconto acima do li
   const u = await ok('POST', '/usuarios', { nome: 'Vendedora Loja', email: 'loja.teste@aritana.local', grupoId: grupos.find((g) => g.nome === 'Loja').id });
   const salvo = token;
   token = (await ok('POST', '/auth/login', { email: 'loja.teste@aritana.local', senha: u.senhaProvisoria })).token;
+  await ok('POST', '/auth/trocar-senha', { atual: u.senhaProvisoria, nova: 'SenhaDaLoja20260' });
   const desc = await chamar('POST', '/vendas', { localId: ctx.loja.id, descontoTotal: Math.round(a.preco * 0.5), itens: [{ codigoBarras: a.codigoBarras, quantidade: 1 }], pagamentos: [{ forma: 'pix', valor: a.preco }] });
   assert.equal(desc.status, 403);
   assert.match(desc.dados.mensagem, /limite/);
@@ -566,4 +574,50 @@ test('auditoria registra e filtra', async () => {
   assert.ok(r.linhas.every((l) => l.entidade === 'ordem_servico'));
   const f = await ok('GET', '/auditoria/filtros');
   assert.ok(f.entidades.includes('comissoes'));
+});
+
+
+test('revisão: usuário desativado perde o acesso na hora', async () => {
+  await ok('PATCH', `/usuarios/${ctx.finId}`, { ativo: false });
+  const salvo = token;
+  token = ctx.finToken;
+  assert.equal((await chamar('GET', '/financeiro/titulos')).status, 401);
+  token = salvo;
+  await ok('PATCH', `/usuarios/${ctx.finId}`, { ativo: true });
+});
+
+test('revisão: ninguém se dá mais acesso do que tem', async () => {
+  const g = await ok('POST', '/grupos', { nome: 'Gerência teste', permissoes: { configuracoes: ['ver', 'criar', 'editar'], financeiro: ['ver'] } });
+  const u = await ok('POST', '/usuarios', { nome: 'Gerente Teste', email: 'gerente.teste@aritana.local', grupoId: g.id });
+  const salvo = token;
+  token = (await ok('POST', '/auth/login', { email: 'gerente.teste@aritana.local', senha: u.senhaProvisoria })).token;
+  await ok('POST', '/auth/trocar-senha', { atual: u.senhaProvisoria, nova: 'SenhaDoGerente2026' });
+  const diretoria = (await ok('GET', '/grupos')).find((x) => x.nome === 'Diretoria');
+  assert.equal((await chamar('PATCH', `/usuarios/${u.id}`, { grupoId: diretoria.id })).status, 403, 'não se coloca na Diretoria');
+  assert.equal((await chamar('POST', '/grupos', { nome: 'Total', permissoes: { '*': ['*'] } })).status, 403, 'não cria grupo com tudo');
+  assert.equal((await chamar('PATCH', `/grupos/${g.id}`, { permissoes: { configuracoes: ['*'], maletas: ['*'] } })).status, 403, 'não aumenta o próprio grupo');
+  token = salvo;
+});
+
+test('revisão: data impossível e local de maleta são recusados', async () => {
+  const r = await chamar('POST', '/financeiro/titulos', { empresaId: (await ok('GET', '/empresas'))[0].id, tipo: 'pagar', descricao: 'Teste', valor: 1000, vencimento: '2026-02-31' });
+  assert.equal(r.status, 400);
+  const maletaLocal = (await ok('GET', '/estoque/locais?incluirMaletas=1')).find((l) => l.tipo === 'maleta');
+  const p = (await ok('GET', '/produtos')).itens[0];
+  assert.equal((await chamar('POST', '/estoque/ajustes', { localId: maletaLocal.id, motivo: 'tentativa', itens: [{ codigoBarras: p.codigoBarras, quantidadeContada: 99 }] })).status, 400);
+  assert.equal((await chamar('POST', '/estoque/entradas', { destinoId: maletaLocal.id, itens: [{ codigoBarras: p.codigoBarras, quantidade: 1 }] })).status, 400);
+});
+
+test('revisão: baixa parcial abre o saldo; cancelamento e estorno', async () => {
+  const emp = (await ok('GET', '/empresas'))[0];
+  const [t] = await ok('POST', '/financeiro/titulos', { empresaId: emp.id, tipo: 'receber', descricao: 'Parcial teste', valor: 10000, vencimento: '2027-01-31', parcelas: 2 });
+  const lista = await ok('GET', '/financeiro/titulos?tipo=receber&aba=abertos');
+  assert.ok(lista.itens.some((x) => x.descricao === 'Parcial teste (2/2)' && x.vencimento === '2027-02-28'), '31/01 + 1 mês cai em 28/02');
+  const b = await ok('POST', `/financeiro/titulos/${t.id}/baixar`, { valorPago: 2000 });
+  assert.equal(b.saldo.valor, 3000);
+  assert.equal(b.valorPago, 2000);
+  await ok('POST', `/financeiro/titulos/${b.saldo.id}/cancelar`, { motivo: 'Renegociado' });
+  assert.equal((await chamar('POST', `/financeiro/titulos/${b.saldo.id}/cancelar`, { motivo: 'de novo' })).status, 400);
+  const e = await ok('POST', `/financeiro/titulos/${t.id}/estornar`, { motivo: 'Baixa por engano' });
+  assert.equal(e.status, 'aberto');
 });

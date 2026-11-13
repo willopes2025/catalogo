@@ -1,9 +1,15 @@
 export { formatarReais as reais } from '@aritana/regras';
 
-/** "129,90" ou "1.299,90" → centavos */
+/**
+ * Texto digitado → centavos. Aceita "129,90", "1.299,90", "129.90" e "1299".
+ * Com vírgula, os pontos são milhar; sem vírgula, um ponto seguido de 1 ou 2 dígitos é a casa decimal.
+ */
 export function paraCentavos(v: string): number {
-  const limpo = v.replace(/[^\d,.-]/g, '').replace(/\./g, '').replace(',', '.');
-  const n = Number(limpo);
+  let t = v.replace(/[^\d,.-]/g, '');
+  if (t.includes(',')) t = t.replace(/\./g, '').replace(',', '.');
+  else if (/\.\d{1,2}$/.test(t) && (t.match(/\./g) ?? []).length === 1) t = t;
+  else t = t.replace(/\./g, '');
+  const n = Number(t);
   return Number.isFinite(n) ? Math.round(n * 100) : 0;
 }
 export const centavosParaTexto = (c?: number | null) => (c == null ? '' : (c / 100).toFixed(2).replace('.', ','));

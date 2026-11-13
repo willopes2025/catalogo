@@ -105,6 +105,8 @@ export class MaletasService {
     podeLiberarExcecao: boolean,
   ) {
     return this.db.transaction(async (tx) => {
+      // Trava a representante: duas maletas montadas ao mesmo tempo não podem furar o limite juntas.
+      await tx.select({ id: pessoas.id }).from(pessoas).where(eq(pessoas.id, d.representanteId)).for('update');
       const sit = await this.situacao(d.representanteId, tx);
       if (sit.representante.status !== 'ativo') throw new BadRequestException('A representante precisa estar ativa (aprovada na triagem).');
       if (sit.representante.modeloTrabalho && sit.representante.modeloTrabalho !== 'consignado') {
@@ -163,6 +165,7 @@ export class MaletasService {
   async incluirItens(id: string, itens: ItemCodigo[], usuarioId: string, podeLiberarExcecao: boolean, liberarExcecao = false) {
     return this.db.transaction(async (tx) => {
       const m = await this.maletaAberta(tx, id);
+      await tx.select({ id: pessoas.id }).from(pessoas).where(eq(pessoas.id, m.representanteId)).for('update');
       const resolvidos = await this.resolverItens(tx, itens);
       const valor = resolvidos.reduce((a, i) => a + i.produto.preco * i.quantidade, 0);
       const sit = await this.situacao(m.representanteId, tx);
@@ -195,6 +198,8 @@ export class MaletasService {
         await this.estoque.mover(tx, { produtoId: i.produto.id, origemId: m.localId, destinoId: m.origemId, quantidade: i.quantidade, tipo: 'maleta_devolucao', motivo: 'Retirada durante o ciclo', referenciaTipo: 'maleta', referenciaId: id, usuarioId });
       }
       await this.auditoria.registrar({ usuarioId, acao: 'retirar_itens', entidade: 'maleta', entidadeId: id, dados: { itens } }, tx);
+      // A promissória acompanha o novo valor da maleta.
+      await this.documentos.gerar(tx, { pessoaId: m.representanteId, tipo: 'promissoria', maletaId: id }, usuarioId, false);
       return { ok: true };
     });
   }

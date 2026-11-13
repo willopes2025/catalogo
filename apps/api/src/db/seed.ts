@@ -63,7 +63,7 @@ async function main() {
 
     const email = process.env.ADMIN_EMAIL ?? 'admin@aritana.local';
     const senha = process.env.ADMIN_SENHA ?? randomBytes(9).toString('base64url');
-    await tx.insert(s.usuarios).values({ nome: 'Administrador', email, senhaHash: await bcrypt.hash(senha, 10), grupoId: diretoria.id });
+    await tx.insert(s.usuarios).values({ nome: 'Administrador', email, senhaHash: await bcrypt.hash(senha, 10), grupoId: diretoria.id, senhaProvisoria: !process.env.ADMIN_SENHA });
     if (!process.env.ADMIN_SENHA) console.log(`\nUsuário inicial: ${email}\nSenha inicial:   ${senha}\nTroque a senha no primeiro acesso.\n`);
 
     await tx.insert(s.niveis).values([

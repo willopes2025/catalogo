@@ -1,13 +1,16 @@
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import { MODULOS } from '@aritana/regras';
-import { lerSessao, pode, salvarSessao } from '../api';
+import { useQuery } from '@tanstack/react-query';
+import { api, atualizarUsuario, lerSessao, pode, salvarSessao } from '../api';
 
 /** Rotas já construídas nesta etapa; as demais abrem a página "em construção". */
 const ROTAS: Record<string, string> = { inicio: '/', rede: '/rede', cadastros: '/cadastros', produtos: '/produtos', estoque: '/estoque', maletas: '/maletas', vendas: '/vendas', lojas: '/lojas', financeiro: '/financeiro', fiscal: '/fiscal', relatorios: '/relatorios', configuracoes: '/configuracoes', suporte: '/suporte', garantia: '/garantia', comissoes: '/comissoes' };
 
 export function Layout() {
-  const sessao = lerSessao();
   const navegar = useNavigate();
+  // Relê as permissões do servidor (a gerência pode ter mudado o grupo desde o login).
+  useQuery({ queryKey: ['eu'], queryFn: async () => { const u = await api<any>('/auth/eu'); atualizarUsuario({ id: u.id, nome: u.nome, email: u.email, grupo: u.grupo, permissoes: u.permissoes }); return u; }, staleTime: 60_000 });
+  const sessao = lerSessao();
   return (
     <div className="app">
       <aside className="lateral">

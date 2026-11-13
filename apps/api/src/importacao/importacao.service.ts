@@ -1,3 +1,4 @@
+import { proximoCodigoInterno } from '../comum/codigos';
 import { BadRequestException, Inject, Injectable } from '@nestjs/common';
 import { and, eq, ilike } from 'drizzle-orm';
 import { gerarSlug } from '@aritana/regras';
@@ -197,7 +198,7 @@ export class ImportacaoService {
             produtoId = existente.id;
             r.atualizados++;
           } else {
-            const [p] = await tx.insert(produtos).values({ ...valores, codigoBarras: codigo ?? `200${String(Date.now()).slice(-6)}${String(i).padStart(4, '0')}`.slice(0, 13) }).returning();
+            const [p] = await tx.insert(produtos).values({ ...valores, codigoBarras: codigo ?? (await proximoCodigoInterno(tx)) }).returning();
             produtoId = p.id;
             r.criados++;
           }

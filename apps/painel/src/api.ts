@@ -43,8 +43,16 @@ export async function api<T = unknown>(rota: string, opcoes: { metodo?: string; 
     salvarSessao(null);
     window.location.href = '/entrar';
   }
+  // Senha provisória: o sistema só libera depois da troca.
+  if (r.status === 403 && dados?.trocarSenha && window.location.pathname !== '/minha-senha') window.location.href = '/minha-senha';
   if (!r.ok) throw new ErroApi(r.status, dados);
   return dados as T;
+}
+
+/** Atualiza nome, grupo e permissões guardados (mudam quando a gerência edita o usuário ou o grupo). */
+export function atualizarUsuario(u: Sessao['usuario']) {
+  if (!memoria) return;
+  salvarSessao({ ...memoria, usuario: { ...memoria.usuario, ...u } });
 }
 
 export function pode(modulo: string, acao: string): boolean {

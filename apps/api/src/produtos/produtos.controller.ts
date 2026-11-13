@@ -1,10 +1,11 @@
-import { Body, Controller, Get, Inject, NotFoundException, Param, ParseUUIDPipe, Patch, Post, Query } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, Inject, NotFoundException, Param, ParseUUIDPipe, Patch, Post, Query } from '@nestjs/common';
 import { and, asc, eq, ilike, or, sql, type SQL } from 'drizzle-orm';
 import { z } from 'zod';
 import { DB, type Db } from '../comum/db.module';
 import { Permissao, Usuario, type UsuarioLogado } from '../comum/auth';
 import { centavos, opcional, validar } from '../comum/validacao';
 import { AuditoriaService } from '../comum/auditoria.service';
+import { proximoCodigoInterno } from '../comum/codigos';
 import { categorias, locaisEstoque, pessoas, produtos, saldos } from '../db/schema';
 
 const produtoSchema = z.object({
@@ -31,12 +32,6 @@ const produtoSchema = z.object({
   ativo: z.boolean().default(true),
 });
 
-/** EAN-13 com prefixo interno 200 (uso restrito): gerado quando o produto não tem código. */
-function gerarEan13(seq: number): string {
-  const base = `200${String(seq).padStart(9, '0')}`.slice(0, 12);
-  const soma = [...base].reduce((a, d, i) => a + Number(d) * (i % 2 ? 3 : 1), 0);
-  return base + ((10 - (soma % 10)) % 10);
-}
 
 @Controller('produtos')
 export class ProdutosController {
@@ -85,9 +80,13 @@ export class ProdutosController {
   @Get('codigo/:codigo')
   @Permissao('produtos', 'ver')
   async porCodigo(@Param('codigo') codigo: string) {
-    const [p] = await this.db.select().from(produtos).where(or(eq(produtos.codigoBarras, codigo), eq(produtos.referencia, codigo)));
-    if (!p) throw new NotFoundException(`Código ${codigo} não cadastrado.`);
-    return p;
+    // Primeiro o código de barras (único). A referência pode se repetir entre variações (cor, tamanho).
+    const [p] = await this.db.select().from(produtos).where(eq(produtos.codigoBarras, codigo));
+    if (p) return p;
+    const porRef = await this.db.select().from(produtos).where(and(eq(produtos.referencia, codigo), eq(produtos.ativo, true))).limit(2);
+    if (porRef.length > 1) throw new BadRequestException(`A referência ${codigo} tem mais de uma peça (cores ou tamanhos). Bipe o código de barras.`);
+    if (!porRef.length) throw new NotFoundException(`Código ${codigo} não cadastrado.`);
+    return porRef[0];
   }
 
   @Get('categorias')
@@ -112,10 +111,7 @@ export class ProdutosController {
   @Permissao('produtos', 'criar')
   async criar(@Usuario() u: UsuarioLogado, @Body() body: unknown) {
     const d = validar(produtoSchema, body);
-    if (!d.codigoBarras) {
-      const [{ n }] = await this.db.select({ n: sql<number>`count(*)::int` }).from(produtos);
-      d.codigoBarras = gerarEan13(n + 1);
-    }
+    if (!d.codigoBarras) d.codigoBarras = await proximoCodigoInterno(this.db);
     const [p] = await this.db.insert(produtos).values({ ...d, codigoBarras: d.codigoBarras }).returning();
     await this.auditoria.registrar({ usuarioId: u.id, acao: 'criar', entidade: 'produto', entidadeId: p.id });
     return p;

@@ -1,0 +1,1 @@
+ALTER TABLE "usuarios" ADD COLUMN "senha_provisoria" boolean DEFAULT false NOT NULL;

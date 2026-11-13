@@ -6,6 +6,10 @@ import { Permissao, Publico, Usuario, temPermissao, type UsuarioLogado } from '.
 import { dataISO, validar } from '../comum/validacao';
 import { maletaItens, maletas, pessoas, produtos } from '../db/schema';
 import { MaletasService, hoje, type DadosAcerto } from './maletas.service';
+import { AuditoriaService } from '../comum/auditoria.service';
+import { Limitador } from '../comum/limitador';
+
+const acessosLink = new Limitador(120, 10 * 60_000, 'Muitos acessos a este link.');
 import { somarDias } from '@aritana/regras';
 
 const itensSchema = z.array(z.object({ codigoBarras: z.string().trim().min(1), quantidade: z.number().int().positive().default(1) })).min(1, 'Inclua ao menos uma peça');
@@ -39,7 +43,7 @@ const prebaixaSchema = z.object({ itens: z.array(z.object({ produtoId: z.string(
 
 @Controller('maletas')
 export class MaletasController {
-  constructor(@Inject(DB) private readonly db: Db, private readonly svc: MaletasService) {}
+  constructor(@Inject(DB) private readonly db: Db, private readonly svc: MaletasService, private readonly auditoria: AuditoriaService) {}
 
   @Get()
   @Permissao('maletas', 'ver')
@@ -141,9 +145,11 @@ export class MaletasController {
 
   @Post(':id/envio')
   @Permissao('maletas', 'editar')
-  async envio(@Param('id', ParseUUIDPipe) id: string, @Body() body: unknown) {
+  async envio(@Usuario() u: UsuarioLogado, @Param('id', ParseUUIDPipe) id: string, @Body() body: unknown) {
     const { codigoRastreio } = validar(z.object({ codigoRastreio: z.string().trim().min(5).max(40) }), body);
-    await this.db.update(maletas).set({ codigoRastreio, entrega: 'envio' }).where(eq(maletas.id, id));
+    const [r] = await this.db.update(maletas).set({ codigoRastreio, entrega: 'envio' }).where(and(eq(maletas.id, id), eq(maletas.status, 'aberta'))).returning({ id: maletas.id });
+    if (!r) throw new NotFoundException('Maleta aberta não encontrada.');
+    await this.auditoria.registrar({ usuarioId: u.id, acao: 'envio', entidade: 'maleta', entidadeId: id, dados: { codigoRastreio } });
     return { ok: true };
   }
 }
@@ -157,6 +163,7 @@ export class MaletaPublicaController {
   constructor(@Inject(DB) private readonly db: Db, private readonly svc: MaletasService) {}
 
   private async porToken(token: string) {
+    acessosLink.usar(token.slice(0, 40));
     if (!/^[A-Za-z0-9_-]{20,40}$/.test(token)) throw new NotFoundException('Link inválido.');
     const [m] = await this.db.select({ id: maletas.id }).from(maletas).where(eq(maletas.linkToken, token));
     if (!m) throw new NotFoundException('Link inválido ou expirado.');

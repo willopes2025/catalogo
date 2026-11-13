@@ -15,9 +15,9 @@ export function Entrar() {
     setEnviando(true);
     setErro(null);
     try {
-      const s = await api<Sessao>('/auth/login', { corpo: { email, senha } });
-      salvarSessao(s);
-      navegar('/');
+      const s = await api<Sessao & { trocarSenha?: boolean }>('/auth/login', { corpo: { email, senha } });
+      salvarSessao({ token: s.token, usuario: s.usuario });
+      navegar(s.trocarSenha ? '/minha-senha' : '/');
     } catch (err) {
       setErro(err);
     } finally {

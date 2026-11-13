@@ -8,7 +8,7 @@ export type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
 
 export function criarConexao(url = process.env.DATABASE_URL) {
   if (!url) throw new Error('DATABASE_URL não definido');
-  const pool = new Pool({ connectionString: url, max: 10 });
+  const pool = new Pool({ connectionString: url, max: 10, options: '-c timezone=America/Sao_Paulo' });
   return { pool, db: drizzle(pool, { schema }) };
 }
 

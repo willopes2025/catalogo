@@ -2,8 +2,8 @@ import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { api, pode } from '../api';
-import { data, reais } from '../formato';
-import { Abas, Carregando, Erro, Indicador, Topo } from '../componentes/ui';
+import { data, paraCentavos, reais } from '../formato';
+import { Abas, Campo, Carregando, Erro, Indicador, Topo } from '../componentes/ui';
 
 type Aba = 'abertos' | 'vencidos' | 'pagos';
 
@@ -19,10 +19,19 @@ export function Financeiro() {
     mutationFn: ({ id, tipo }: { id: string; tipo: 'PIX' | 'BOLETO' }) => api<any>(`/financeiro/titulos/${id}/cobranca`, { corpo: { tipo } }),
     onSuccess: (r) => { setCobranca(r); qc.invalidateQueries({ queryKey: ['titulos'] }); },
   });
+  const [baixa, setBaixa] = useState<{ id: string; valor: string; pagoEm: string; desconto: boolean; total: number } | null>(null);
   const baixar = useMutation({
-    mutationFn: (id: string) => api(`/financeiro/titulos/${id}/baixar`, { corpo: { contaId: contaId || null } }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['titulos'] }),
+    mutationFn: () => api(`/financeiro/titulos/${baixa!.id}/baixar`, { corpo: { contaId: contaId || null, valorPago: baixa!.valor ? paraCentavos(baixa!.valor) : undefined, pagoEm: baixa!.pagoEm || undefined, quitarComDesconto: baixa!.desconto } }),
+    onSuccess: () => { setBaixa(null); qc.invalidateQueries({ queryKey: ['titulos'] }); qc.invalidateQueries({ queryKey: ['contas'] }); },
   });
+  const acao = useMutation({
+    mutationFn: ({ id, tipo, motivo }: { id: string; tipo: 'cancelar' | 'estornar'; motivo: string }) => api(`/financeiro/titulos/${id}/${tipo}`, { corpo: { motivo } }),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['titulos'] }); qc.invalidateQueries({ queryKey: ['contas'] }); },
+  });
+  const pedirMotivo = (id: string, tipo: 'cancelar' | 'estornar') => {
+    const motivo = window.prompt(tipo === 'cancelar' ? 'Motivo do cancelamento do título:' : 'Motivo do estorno da baixa:');
+    if (motivo && motivo.trim().length >= 3) acao.mutate({ id, tipo, motivo: motivo.trim() });
+  };
   return (
     <>
       <Topo eb="Financeiro" titulo={tipo === 'receber' ? 'Contas a receber' : 'Contas a pagar'} acoes={<div className="flex"><button className={`botao ${tipo === 'receber' ? '' : 'claro'}`} onClick={() => setTipo('receber')}>A receber</button><button className={`botao ${tipo === 'pagar' ? '' : 'claro'}`} onClick={() => setTipo('pagar')}>A pagar</button></div>} />
@@ -38,7 +47,18 @@ export function Financeiro() {
           <span className="muted" style={{ alignSelf: 'center' }}>Boleto e Pix são gerados no Asaas; quando a pessoa paga, o título baixa sozinho.</span>
         </div>
       )}
-      {(baixar.error || cobrar.error) && <Erro erro={baixar.error ?? cobrar.error} />}
+      {(baixar.error || cobrar.error || acao.error) && <Erro erro={baixar.error ?? cobrar.error ?? acao.error} />}
+      {baixa && (
+        <div className="cartao form" style={{ marginBottom: 14 }}>
+          <div className="secao">Baixar título de {reais(baixa.total)}</div>
+          <Campo rotulo="Valor pago (R$)" ajuda="Em branco = valor cheio"><input inputMode="decimal" autoFocus value={baixa.valor} onChange={(e) => setBaixa({ ...baixa, valor: e.target.value })} /></Campo>
+          <Campo rotulo="Data do pagamento"><input type="date" value={baixa.pagoEm} onChange={(e) => setBaixa({ ...baixa, pagoEm: e.target.value })} /></Campo>
+          {baixa.valor && paraCentavos(baixa.valor) < baixa.total ? (
+            <label className="check l2"><input type="checkbox" checked={baixa.desconto} onChange={(e) => setBaixa({ ...baixa, desconto: e.target.checked })} /> Dar o restante como desconto (sem isso, abre um título com o saldo de {reais(baixa.total - paraCentavos(baixa.valor))})</label>
+          ) : <div className="l2" />}
+          <div className="flex" style={{ gridColumn: 'span 4' }}><button className="botao" disabled={baixar.isPending} onClick={() => baixar.mutate()}>Confirmar baixa</button><button className="botao claro" onClick={() => setBaixa(null)}>Voltar</button></div>
+        </div>
+      )}
       {cobranca && (
         <div className="aviso ok" style={{ marginBottom: 12 }}>
           Cobrança gerada. <a href={cobranca.url} target="_blank" rel="noreferrer">Abrir link de pagamento</a>
@@ -66,7 +86,9 @@ export function Financeiro() {
                         <button className="botao claro pequeno" disabled={cobrar.isPending} onClick={() => cobrar.mutate({ id: t.id, tipo: 'BOLETO' })}>Gerar boleto</button>
                       </>
                     )}
-                    {t.status === 'aberto' && pode('financeiro', 'editar') && <button className="botao claro pequeno" disabled={baixar.isPending} onClick={() => baixar.mutate(t.id)}>Baixar</button>}
+                    {t.status === 'aberto' && pode('financeiro', 'editar') && <button className="botao claro pequeno" onClick={() => { setBaixa({ id: t.id, valor: '', pagoEm: '', desconto: false, total: t.valor }); window.scrollTo(0, 0); }}>Baixar</button>}
+                    {t.status === 'aberto' && pode('financeiro', 'excluir') && <button className="botao claro pequeno" disabled={acao.isPending} onClick={() => pedirMotivo(t.id, 'cancelar')}>Cancelar</button>}
+                    {t.status === 'pago' && pode('financeiro', 'excluir') && !(t.cobrancaUrl && ['pix', 'boleto'].includes(t.formaPagamento)) && <button className="botao claro pequeno" disabled={acao.isPending} onClick={() => pedirMotivo(t.id, 'estornar')}>Estornar</button>}
                   </div>
                 </td>
               </tr>

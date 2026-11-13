@@ -223,7 +223,8 @@ export class FiscalService {
       join produtos p on p.id = mv.produto_id
       join maleta_itens mi on mi.maleta_id = ${m.id} and mi.produto_id = mv.produto_id
       where mv.referencia_tipo = 'maleta' and mv.referencia_id = ${m.id} and mv.tipo = ${tipoMov}
-        and mv.criado_em between ${a.criadoEm} - interval '5 minutes' and ${a.criadoEm} + interval '5 minutes'
+        -- o acerto e os movimentos dele são gravados na mesma transação, com o mesmo horário
+        and mv.criado_em = (select ac.criado_em from acertos ac where ac.id = ${a.id})
       group by p.referencia, p.descricao, p.ncm, mi.preco`);
     const itens: ItemNota[] = linhas.rows.map((r) => ({ codigo: r.codigo, descricao: r.descricao, ncm: r.ncm, quantidade: r.quantidade, valorUnitario: r.valor_unitario }));
     if (!itens.length) throw new BadRequestException(operacao === 'retorno_consignacao' ? 'Nenhuma peça devolvida neste acerto.' : 'Nenhuma peça vendida neste acerto.');
