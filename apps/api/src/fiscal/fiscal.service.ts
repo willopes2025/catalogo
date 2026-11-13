@@ -36,7 +36,7 @@ export class FiscalService {
     return !!process.env.FOCUS_NFE_TOKEN;
   }
   get ambiente() {
-    return (process.env.FOCUS_NFE_URL ?? '').includes('homologacao') || !process.env.FOCUS_NFE_URL ? 'homologação' : 'produção';
+    return /\/\/api\.focusnfe\.com\.br/.test(process.env.FOCUS_NFE_URL ?? '') ? 'produção' : 'homologação';
   }
   private get url() {
     return (process.env.FOCUS_NFE_URL ?? 'https://homologacao.focusnfe.com.br').replace(/\/$/, '');

@@ -4,6 +4,7 @@ import { api, pode } from '../api';
 import { centavosParaTexto, paraCentavos } from '../formato';
 import { Abas, Campo, Carregando, Erro, Topo } from '../componentes/ui';
 import { Usuarios, Grupos, Modelos, Integracoes, Empresas } from './ConfiguracoesOutras';
+import { Importacao } from './Importacao';
 
 type Regras = Record<string, number | boolean>;
 
@@ -27,20 +28,21 @@ const CAMPOS: [string, string, string][] = [
   ['maletasSimultaneas', 'Maletas abertas ao mesmo tempo', 'Por representante'],
 ];
 
-type Aba = 'regras' | 'empresas' | 'usuarios' | 'grupos' | 'modelos' | 'integracoes';
+type Aba = 'regras' | 'empresas' | 'usuarios' | 'grupos' | 'modelos' | 'integracoes' | 'importacao';
 
 export function Configuracoes() {
   const [aba, setAba] = useState<Aba>('regras');
   return (
     <>
-      <Topo eb="Configurações" titulo={{ regras: 'Regras do consignado', empresas: 'Empresas', usuarios: 'Usuários', grupos: 'Grupos e permissões', modelos: 'Modelos de documento', integracoes: 'Integrações' }[aba]} />
-      <Abas ativa={aba} mudar={setAba} abas={[['regras', 'Regras do consignado'], ['empresas', 'Empresas'], ['usuarios', 'Usuários'], ['grupos', 'Grupos e permissões'], ['modelos', 'Modelos de documento'], ['integracoes', 'Integrações']]} />
+      <Topo eb="Configurações" titulo={{ regras: 'Regras do consignado', empresas: 'Empresas', usuarios: 'Usuários', grupos: 'Grupos e permissões', modelos: 'Modelos de documento', integracoes: 'Integrações', importacao: 'Importar planilhas' }[aba]} />
+      <Abas ativa={aba} mudar={setAba} abas={[['regras', 'Regras do consignado'], ['empresas', 'Empresas'], ['usuarios', 'Usuários'], ['grupos', 'Grupos e permissões'], ['modelos', 'Modelos de documento'], ['integracoes', 'Integrações'], ['importacao', 'Importar planilhas']]} />
       {aba === 'regras' && <Regras />}
       {aba === 'empresas' && <Empresas />}
       {aba === 'usuarios' && <Usuarios />}
       {aba === 'grupos' && <Grupos />}
       {aba === 'modelos' && <Modelos />}
       {aba === 'integracoes' && <Integracoes />}
+      {aba === 'importacao' && <Importacao />}
     </>
   );
 }
@@ -78,6 +80,26 @@ function Regras() {
         <div className="campo"><label>Peça perdida ou quebrada</label><select value={perdida ? 'custo' : 'preco'} onChange={(e) => setPerdida(e.target.value === 'custo')} disabled={!editavel}><option value="custo">Cobrada pelo custo</option><option value="preco">Cobrada pelo preço de venda</option></select></div>
         <p className="muted l4">A comissão de cada nível (Bronze, Prata, Ouro, Líder) pode substituir a comissão padrão, em Rede › Níveis e metas.</p>
       </div>
+      <RegrasVenda />
     </>
+  );
+}
+
+function RegrasVenda() {
+  const q = useQuery({ queryKey: ['regras-venda'], queryFn: () => api<Record<string, number>>('/configuracoes/regras-venda') });
+  const [t, setT] = useState<Record<string, string>>({});
+  useEffect(() => { if (q.data) setT({ descontoMaximoPb: String(q.data.descontoMaximoPb / 100).replace('.', ','), prazoTrocaDias: String(q.data.prazoTrocaDias), prazoDebitoDias: String(q.data.prazoDebitoDias), prazoCreditoDias: String(q.data.prazoCreditoDias) }); }, [q.data]);
+  const salvar = useMutation({ mutationFn: () => api('/configuracoes/regras-venda', { metodo: 'PUT', corpo: { descontoMaximoPb: Math.round(Number((t.descontoMaximoPb ?? '0').replace(',', '.')) * 100), prazoTrocaDias: Number(t.prazoTrocaDias), prazoDebitoDias: Number(t.prazoDebitoDias), prazoCreditoDias: Number(t.prazoCreditoDias) } }) });
+  const editavel = pode('configuracoes', 'editar');
+  const campo = (k: string, r: string, a: string) => <Campo rotulo={r} ajuda={a}><input value={t[k] ?? ''} onChange={(e) => setT({ ...t, [k]: e.target.value })} inputMode="decimal" disabled={!editavel} /></Campo>;
+  return (
+    <div className="cartao form" style={{ marginTop: 14 }}>
+      <div className="secao">Regras de venda (loja, eventos e vendas avulsas)</div>
+      {campo('descontoMaximoPb', 'Desconto máximo (%)', 'Acima disso, só a gerência')}
+      {campo('prazoTrocaDias', 'Prazo de troca (dias)', 'Devolução depois da compra')}
+      {campo('prazoDebitoDias', 'Débito cai em (dias)', 'Previsão no financeiro')}
+      {campo('prazoCreditoDias', 'Crédito cai em (dias)', 'Por parcela')}
+      <div className="l4">{salvar.isSuccess && <span className="muted">Salvo. </span>}{salvar.error && <Erro erro={salvar.error} />}{editavel && <button className="botao claro" onClick={() => salvar.mutate()} disabled={salvar.isPending}>Salvar regras de venda</button>}</div>
+    </div>
   );
 }

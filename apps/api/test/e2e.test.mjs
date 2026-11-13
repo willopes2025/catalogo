@@ -350,6 +350,10 @@ test('devolução vira crédito e o crédito paga outra venda', async () => {
   const [, , c] = ctx.pv;
   const v = await ok('POST', '/vendas', { localId: ctx.loja.id, clienteId: ctx.cliente.id, itens: [{ codigoBarras: c.codigoBarras, quantidade: 2 }], pagamentos: [{ forma: 'credito', valor: c.preco * 2, parcelas: 2, maquininha: 'Stone' }] });
   const det = await ok('GET', `/vendas/${v.id}`);
+  const titCartao = (await ok('GET', '/financeiro/titulos?tipo=receber')).itens.filter((t) => t.descricao.startsWith(`Venda nº ${v.numero}`));
+  assert.equal(titCartao.length, 2, 'crédito em 2x vira 2 previsões de recebimento');
+  assert.ok(titCartao.every((t) => t.pessoaId === null && /Stone/.test(t.descricao)), 'cartão é cobrado da maquininha, não da cliente');
+  assert.equal((await chamar('POST', `/financeiro/titulos/${titCartao[0].id}/cobranca`, { tipo: 'PIX' })).status, 400);
   const d = await ok('POST', `/vendas/${v.id}/devolver`, { itens: [{ produtoId: det.itens[0].produtoId, quantidade: 1 }], destino: 'credito' });
   assert.equal(d.valor, c.preco);
   const mais = await chamar('POST', `/vendas/${v.id}/devolver`, { itens: [{ produtoId: det.itens[0].produtoId, quantidade: 2 }], destino: 'credito' });

@@ -12,11 +12,14 @@
     "@aritana/regras": "workspace:*",
     "@fontsource/titillium-web": "^5.3.0",
     "@tanstack/react-query": "^5.107.1",
+    "papaparse": "^5.7.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "react-router-dom": "^6.30.6"
+    "react-router-dom": "^6.30.6",
+    "read-excel-file": "^9.3.15"
   },
   "devDependencies": {
+    "@types/papaparse": "^5.5.2",
     "@types/react": "^18.3.31",
     "@types/react-dom": "^18.3.7",
     "@vitejs/plugin-react": "^4.7.0",

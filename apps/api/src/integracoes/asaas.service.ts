@@ -67,6 +67,7 @@ export class AsaasService {
     if (!t) throw new BadRequestException('Título não encontrado.');
     if (t.tipo !== 'receber' || t.status !== 'aberto') throw new BadRequestException('Só títulos a receber em aberto podem ser cobrados.');
     if (!t.pessoaId) throw new BadRequestException('O título não tem pagador.');
+    if (t.formaPagamento === 'debito' || t.formaPagamento === 'credito') throw new BadRequestException('Título de cartão é pago pela maquininha; não gera boleto nem Pix.');
     if (t.cobrancaExternaId) return { id: t.cobrancaExternaId, url: t.cobrancaUrl, pixCopiaCola: t.pixCopiaCola, jaExistia: true };
     const customer = await this.clienteAsaas(t.pessoaId);
     const venc = t.vencimento < hoje() ? hoje() : t.vencimento;

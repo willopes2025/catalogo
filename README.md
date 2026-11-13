@@ -3,7 +3,7 @@
 Sistema da Aritana Semijoias: matriz, representantes, lojas e eventos, substituindo o Jueri.
 Desenvolvido pela Wide Inteligência Comercial. **O código pertence à Aritana.**
 
-## O que já está pronto (Versão 1 · semanas 1 e 2)
+## O que já está pronto (Versão 1 · semanas 1, 2 e 3)
 
 | Parte | O que faz |
 |---|---|
@@ -23,6 +23,20 @@ Desenvolvido pela Wide Inteligência Comercial. **O código pertence à Aritana.
 | **Contrato e promissória** | Modelos editáveis com variáveis (comissão, multa, juros e limite vêm das regras). Promissória gerada com cada maleta, com valor por extenso. Assinatura eletrônica por link, com código por e-mail, nome e CPF, e registro de data, IP, aparelho e hash SHA-256. |
 | **Impressão** | Pedido da maleta, lista de separação, contrato e promissória, para imprimir ou salvar em PDF. |
 | **Catálogo** | `/catalogo/<nome-da-representante>`: peças da maleta, filtros e botão de pedir pelo WhatsApp dela. |
+
+**Semana 3**
+
+| Parte | O que faz |
+|---|---|
+| **Frente de caixa** | Loja e eventos: abrir caixa, vender com leitor, desconto dentro do limite, várias formas de pagamento na mesma venda (dinheiro com troco, Pix, débito e crédito por maquininha, crédito da cliente, boleto/crediário), sangria, reforço e fechamento conferido forma por forma. |
+| **Vendas** | Vendas avulsas da matriz e de revenda para representantes (preço de atacado), cancelamento no mesmo dia, devolução e troca com crédito ou dinheiro, recibo para imprimir. |
+| **Asaas** | Gera Pix ou boleto para qualquer título a receber; quando a pessoa paga, o aviso do Asaas baixa o título sozinho (com proteção contra aviso repetido ou falso). |
+| **Notas fiscais** | NFC-e das vendas e NF-e de remessa da maleta, retorno e venda do acerto pela Focus NFe, com consulta, reenvio e cancelamento. Regras fiscais editáveis na tela. |
+| **Relatórios** | Desempenho da rede, maletas atrasadas, representantes sem maleta, produtos com curva ABC e giro, vendas por dia e por forma, fluxo de caixa e inadimplência por faixa. Tudo exporta para Excel. |
+| **Suporte** | Chamados com a Wide, conversa dentro do sistema e status das integrações. |
+| **Importação** | Planilhas do Jueri (.xlsx ou .csv) de produtos com estoque, representantes (com líder e nível), clientes e fornecedores. Simula antes de gravar; reimportar atualiza sem duplicar. |
+
+As naturezas de operação e os CFOPs que vêm instalados são um **ponto de partida** para empresa do Simples Nacional e **precisam ser conferidos pelo contador** antes de emitir em produção.
 
 Os modelos de contrato e promissória que vêm instalados são **provisórios** e devem ser trocados pelos textos revisados pelo jurídico da Aritana, em Configurações › Modelos de documento.
 
@@ -58,7 +72,7 @@ pnpm dev:painel                        # http://localhost:5173
 
 ```bash
 pnpm --filter @aritana/regras test     # regras do consignado e textos (34 testes)
-pnpm --filter @aritana/api test:e2e    # fluxo completo contra a API (19 etapas, banco de teste)
+pnpm --filter @aritana/api test:e2e    # fluxo completo contra a API (32 etapas, banco de teste e simuladores do Asaas e da Focus)
 ```
 
 ## Publicar na VPS
@@ -77,9 +91,13 @@ pnpm --filter @aritana/api test:e2e    # fluxo completo contra a API (19 etapas,
    ```
    O Caddy emite o certificado HTTPS sozinho. Atualizações: `git pull && docker compose --profile prod up -d --build`.
 
-## Próximas etapas da Versão 1
+## Para colocar no ar
 
-- Semana 3: frente de caixa da loja, caixas, boletos e Pix pelo Asaas, notas fiscais pelo emissor, relatórios, suporte e migração do Jueri.
+1. VPS e domínio (ver “Publicar na VPS”).
+2. Credenciais no `.env` da VPS: e-mail (SMTP), Asaas, Focus NFe e Assertiva.
+3. Dados da Aritana: razão social e CNPJ das empresas, modelos de contrato e promissória do jurídico, regras fiscais validadas pelo contador, percentuais de comissão, multa e juros.
+4. Migração: exportar as listas do Jueri em Excel e importar em Configurações › Importar planilhas (primeiro simular).
+5. Um ciclo de acerto (30 dias) em paralelo com o Jueri, com um grupo piloto.
 
 ## Estrutura
 

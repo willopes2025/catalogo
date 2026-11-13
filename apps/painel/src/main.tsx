@@ -25,7 +25,12 @@ import { Cadastros, FichaCadastro } from './paginas/Cadastros';
 import { Niveis } from './paginas/Niveis';
 import { Assinar } from './paginas/Assinar';
 import { Catalogo } from './paginas/Catalogo';
-import { ImprimirDocumento, ImprimirMaleta } from './paginas/Imprimir';
+import { ImprimirDocumento, ImprimirMaleta, ImprimirVenda } from './paginas/Imprimir';
+import { Lojas } from './paginas/Lojas';
+import { DetalheVenda, NovaVenda, Vendas } from './paginas/Vendas';
+import { Fiscal } from './paginas/Fiscal';
+import { Relatorios } from './paginas/Relatorios';
+import { Suporte } from './paginas/Suporte';
 
 const cliente = new QueryClient({ defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: false, staleTime: 15_000 } } });
 
@@ -44,6 +49,7 @@ ReactDOM.createRoot(document.getElementById('raiz')!).render(
           <Route path="/catalogo/:slug" element={<Catalogo />} />
           <Route path="/imprimir/maleta/:id" element={<Protegido><ImprimirMaleta /></Protegido>} />
           <Route path="/imprimir/documento/:id" element={<Protegido><ImprimirDocumento /></Protegido>} />
+          <Route path="/imprimir/venda/:id" element={<Protegido><ImprimirVenda /></Protegido>} />
           <Route
             element={
               <Protegido>
@@ -68,6 +74,13 @@ ReactDOM.createRoot(document.getElementById('raiz')!).render(
             <Route path="maletas/:id" element={<DetalheMaleta />} />
             <Route path="maletas/:id/acerto" element={<Acerto />} />
             <Route path="financeiro" element={<Financeiro />} />
+            <Route path="lojas" element={<Lojas />} />
+            <Route path="vendas" element={<Vendas />} />
+            <Route path="vendas/nova" element={<NovaVenda />} />
+            <Route path="vendas/:id" element={<DetalheVenda />} />
+            <Route path="fiscal" element={<Fiscal />} />
+            <Route path="relatorios" element={<Relatorios />} />
+            <Route path="suporte" element={<Suporte />} />
             <Route path="configuracoes" element={<Configuracoes />} />
             <Route path=":modulo" element={<EmConstrucao />} />
           </Route>

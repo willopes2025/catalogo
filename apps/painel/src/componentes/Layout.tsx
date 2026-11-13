@@ -3,7 +3,7 @@ import { MODULOS } from '@aritana/regras';
 import { lerSessao, pode, salvarSessao } from '../api';
 
 /** Rotas já construídas nesta etapa; as demais abrem a página "em construção". */
-const ROTAS: Record<string, string> = { inicio: '/', rede: '/rede', cadastros: '/cadastros', produtos: '/produtos', estoque: '/estoque', maletas: '/maletas', financeiro: '/financeiro', configuracoes: '/configuracoes' };
+const ROTAS: Record<string, string> = { inicio: '/', rede: '/rede', cadastros: '/cadastros', produtos: '/produtos', estoque: '/estoque', maletas: '/maletas', vendas: '/vendas', lojas: '/lojas', financeiro: '/financeiro', fiscal: '/fiscal', relatorios: '/relatorios', configuracoes: '/configuracoes', suporte: '/suporte' };
 
 export function Layout() {
   const sessao = lerSessao();
@@ -15,7 +15,7 @@ export function Layout() {
           <img src="/logo-creme.png" alt="Aritana Semijoias" />
         </div>
         <nav aria-label="Módulos">
-          {MODULOS.filter((m) => pode(m.chave, 'ver')).map((m) =>
+          {MODULOS.filter((m) => m.chave === 'suporte' || pode(m.chave, 'ver')).map((m) =>
             m.versao === 2 ? (
               <span key={m.chave} className="item" title="Entra na Versão 2">
                 {m.nome} <span className="v2">V2</span>

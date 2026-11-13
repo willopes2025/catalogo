@@ -199,7 +199,8 @@ export class VendasService {
           await tx.insert(titulos).values({
             empresaId: local.empresaId,
             tipo: 'receber',
-            pessoaId: p.forma === 'boleto' ? cliente!.id : cliente?.id ?? null,
+            // Cartão: quem paga é a operadora da maquininha, não a cliente.
+            pessoaId: p.forma === 'debito' || p.forma === 'credito' ? null : cliente?.id ?? null,
             descricao: `Venda nº ${venda.numero} · ${NOME_FORMA[p.forma]}${n > 1 ? ` (${i + 1}/${n})` : ''}${p.maquininha ? ` · ${p.maquininha}` : ''}`,
             categoria: d.tipo === 'revenda' ? 'Revenda' : 'Venda loja',
             valor,

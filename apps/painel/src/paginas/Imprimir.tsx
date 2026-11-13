@@ -111,3 +111,33 @@ export function ImprimirDocumento() {
     </Folha>
   );
 }
+
+/** Recibo da venda (não fiscal), para a cliente. */
+export function ImprimirVenda() {
+  const { id } = useParams();
+  const q = useQuery({ queryKey: ['venda', id], queryFn: () => api<any>(`/vendas/${id}`) });
+  if (q.isLoading) return <Carregando />;
+  if (q.error) return <Erro erro={q.error} />;
+  const v = q.data;
+  return (
+    <Folha>
+      <div style={{ maxWidth: 80 * 3.78, margin: '0 auto', fontSize: 12 }}>
+        <div style={{ textAlign: 'center' }}><img src="/logo-marrom.png" alt="Aritana" style={{ width: 120 }} /><div>{v.local}</div><div>Recibo da venda nº {v.numero}</div><div>{dataHora(v.criadoEm)}</div>{v.cliente && <div>Cliente: {v.cliente}</div>}</div>
+        <table>
+          <tbody>
+            {v.itens.map((i: any) => <tr key={i.id}><td>{i.quantidade}x {i.descricao}<div style={{ color: '#777' }}>ref. {i.referencia}</div></td><td className="num">{reais(i.total)}</td></tr>)}
+          </tbody>
+        </table>
+        <table><tbody>
+          <tr><td>Subtotal</td><td className="num">{reais(v.subtotal)}</td></tr>
+          {v.desconto > 0 && <tr><td>Desconto</td><td className="num">- {reais(v.desconto)}</td></tr>}
+          <tr><th>Total</th><th className="num">{reais(v.total)}</th></tr>
+          {v.pagamentos.map((p: any) => <tr key={p.id}><td>{({ dinheiro: 'Dinheiro', pix: 'Pix', debito: 'Cartão de débito', credito: 'Cartão de crédito', credito_loja: 'Crédito da loja', boleto: 'Boleto / crediário' } as Record<string, string>)[p.forma] ?? p.forma}{p.parcelas > 1 ? ` ${p.parcelas}x` : ''}</td><td className="num">{reais(p.valor)}</td></tr>)}
+          {v.troco > 0 && <tr><td>Troco</td><td className="num">{reais(v.troco)}</td></tr>}
+        </tbody></table>
+        <p style={{ textAlign: 'center', marginTop: 12 }}>Garantia conforme o Código de Defesa do Consumidor. Guarde este recibo para trocas.</p>
+        <p style={{ textAlign: 'center', color: '#777' }}>Este recibo não é documento fiscal.</p>
+      </div>
+    </Folha>
+  );
+}

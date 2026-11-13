@@ -13,6 +13,15 @@ export function DetalheMaleta() {
   const [itens, setItens] = useState<ItemLido[]>([]);
   const [copiado, setCopiado] = useState(false);
   const q = useQuery({ queryKey: ['maleta', id], queryFn: () => api<any>(`/maletas/${id}`) });
+  const notas = useQuery({ queryKey: ['notas-maleta', id, q.data?.acertos?.length], queryFn: async () => {
+    const daMaleta = await api<any[]>(`/fiscal/notas?origemId=${id}`);
+    const dosAcertos = (await Promise.all((q.data?.acertos ?? []).map((a: any) => api<any[]>(`/fiscal/notas?origemId=${a.id}`)))).flat();
+    return [...daMaleta, ...dosAcertos];
+  }, enabled: !!q.data && pode('fiscal', 'ver') });
+  const emitir = useMutation({
+    mutationFn: (alvo: { url: string; corpo?: any }) => api(alvo.url, { corpo: alvo.corpo ?? {} }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['notas-maleta', id] }),
+  });
   const troca = useMutation({
     mutationFn: () => api(`/maletas/${id}/${modo}`, { corpo: { itens: itens.map((i) => ({ codigoBarras: i.codigoBarras, quantidade: i.quantidade })) } }),
     onSuccess: () => { setItens([]); setModo('ver'); qc.invalidateQueries({ queryKey: ['maleta', id] }); },
@@ -110,6 +119,35 @@ export function DetalheMaleta() {
               <b>{reais(a.totalAPagar)}{a.parcelas > 1 ? ` em ${a.parcelas}x` : ''}</b>
             </div>
           ))}
+        </div>
+      )}
+
+      {pode('fiscal', 'ver') && (
+        <div className="cartao" style={{ marginTop: 14 }}>
+          <div className="flex entre" style={{ marginBottom: 8, flexWrap: 'wrap' }}>
+            <h3>Notas fiscais</h3>
+            {pode('fiscal', 'criar') && (
+              <div className="flex" style={{ flexWrap: 'wrap', gap: 6 }}>
+                {!notas.data?.some((n) => n.operacao === 'remessa_consignacao' && n.status !== 'cancelada') && <button className="botao claro pequeno" disabled={emitir.isPending} onClick={() => emitir.mutate({ url: `/fiscal/nfe/maleta/${id}` })}>Emitir NF-e de remessa</button>}
+                {m.acertos.map((a: any) => (
+                  <span key={a.id} className="flex" style={{ gap: 6 }}>
+                    {a.resultado.pecas.devolvidas > 0 && !notas.data?.some((n) => n.origemId === a.id && n.operacao === 'retorno_consignacao' && n.status !== 'cancelada') && <button className="botao claro pequeno" disabled={emitir.isPending} onClick={() => emitir.mutate({ url: `/fiscal/nfe/acerto/${a.id}`, corpo: { operacao: 'retorno_consignacao' } })}>Nota de retorno ({data(a.data)})</button>}
+                    {a.resultado.pecas.vendidas > 0 && !notas.data?.some((n) => n.origemId === a.id && n.operacao === 'venda_consignacao' && n.status !== 'cancelada') && <button className="botao claro pequeno" disabled={emitir.isPending} onClick={() => emitir.mutate({ url: `/fiscal/nfe/acerto/${a.id}`, corpo: { operacao: 'venda_consignacao' } })}>Nota de venda ({data(a.data)})</button>}
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+          {emitir.error && <Erro erro={emitir.error} />}
+          {notas.data?.length ? notas.data.map((n) => (
+            <div key={n.id} className="resumo-linha">
+              <span>{n.operacao.replace(/_/g, ' ')} · {n.numero ? `nº ${n.numero}` : 'sem número'} · {reais(n.valor)}{n.mensagem && n.status === 'erro' ? ` · ${n.mensagem}` : ''}</span>
+              <span className="flex" style={{ gap: 6 }}>
+                <span className={`etiqueta ${n.status === 'autorizada' ? 'ok' : n.status === 'erro' ? 'erro' : 'alerta'}`}>{n.status}</span>
+                {n.urlDanfe && <a className="botao claro pequeno" href={n.urlDanfe} target="_blank" rel="noreferrer">DANFE</a>}
+              </span>
+            </div>
+          )) : <p className="muted">Nenhuma nota emitida para esta maleta.</p>}
         </div>
       )}
 
