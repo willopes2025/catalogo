@@ -1,0 +1,51 @@
+# Instalação numa VPS que já tem outros sistemas e um Caddy próprio (ex.: VPS Hostinger da Wide).
+# Não publica as portas 80/443 nem a 5432: o banco fica só na rede interna,
+# a API e o painel ouvem apenas no 127.0.0.1, e o Caddy existente faz o HTTPS.
+name: aritana
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: aritana-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: aritana
+      POSTGRES_USER: aritana
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?defina DB_PASSWORD no .env}
+    volumes:
+      - aritana_db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aritana"]
+      interval: 5s
+      retries: 20
+    networks: [interna]
+
+  api:
+    build: { context: ., dockerfile: infra/api.Dockerfile }
+    container_name: aritana-api
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      NODE_ENV: production
+      PORT: "3000"
+      DATABASE_URL: postgres://aritana:${DB_PASSWORD}@db:5432/aritana
+    depends_on:
+      db: { condition: service_healthy }
+    ports:
+      - "127.0.0.1:${PORTA_API:-3310}:3000"
+    networks: [interna]
+
+  painel:
+    build: { context: ., dockerfile: infra/painel.Dockerfile }
+    container_name: aritana-painel
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${PORTA_PAINEL:-3311}:80"
+    networks: [interna]
+
+volumes:
+  aritana_db:
+
+networks:
+  interna:
+    name: aritana_interna
