@@ -61,7 +61,8 @@ export class CrmController {
       .from(candidaturas)
       .where(and(or(eq(candidaturas.telefone, d.telefone), d.cpf ? eq(candidaturas.cpf, d.cpf) : sql`false`), sql`${candidaturas.etapa} not in ('aprovada','recusada')`));
     if (aberta) {
-      await this.db.update(candidaturas).set({ ...dados, atualizadoEm: new Date() }).where(eq(candidaturas.id, aberta.id));
+      const preenchidos = Object.fromEntries(Object.entries(dados).filter(([, v]) => v !== null && v !== undefined && v !== ''));
+      await this.db.update(candidaturas).set({ ...preenchidos, atualizadoEm: new Date() }).where(eq(candidaturas.id, aberta.id));
       await this.db.insert(candidaturaNotas).values({ candidaturaId: aberta.id, texto: 'Preencheu o formulário de novo.' });
       return { ok: true };
     }

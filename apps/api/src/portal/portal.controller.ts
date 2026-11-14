@@ -1,4 +1,4 @@
-import { BadRequestException, Body, Controller, ForbiddenException, Get, Inject, NotFoundException, Param, ParseUUIDPipe, Post, Query, Req } from '@nestjs/common';
+import { BadRequestException, Body, Controller, ForbiddenException, Get, Inject, Logger, NotFoundException, Param, ParseUUIDPipe, Post, Query, Req } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import type { Request } from 'express';
 import { createHash, randomBytes, randomInt, timingSafeEqual } from 'node:crypto';
@@ -17,7 +17,6 @@ import { PontosService } from '../pontos/pontos.service';
 import { acertos, categorias, documentos, locaisEstoque, maletas, niveis, pedidosPecas, pessoas, portalAcessos, premios, produtos, resgates, saldos, titulos } from '../db/schema';
 
 const sha256 = (t: string) => createHash('sha256').update(t).digest('hex');
-const mascarar = (e: string) => e.replace(/^(.{2}).*(@.*)$/, '$1***$2');
 const pedidosDeCodigo = new Limitador(5, 30 * 60_000, 'Muitos pedidos de código.');
 const tentativasPorIp = new Limitador(30, 15 * 60_000, 'Muitas tentativas.');
 
@@ -28,6 +27,7 @@ const tentativasPorIp = new Limitador(30, 15 * 60_000, 'Muitas tentativas.');
  */
 @Controller('portal')
 export class PortalController {
+  private readonly log = new Logger('Portal');
   constructor(
     @Inject(DB) private readonly db: Db,
     private readonly jwt: JwtService,
@@ -52,13 +52,19 @@ export class PortalController {
     tentativasPorIp.usar(req.ip ?? '?');
     pedidosDeCodigo.usar(cpf);
     const [p] = await this.db.select().from(pessoas).where(and(eq(pessoas.documento, cpf), eq(pessoas.tipo, 'representante')));
-    // Mesma resposta exista ou não o CPF, para não revelar quem é representante.
-    const generica = { enviado: true, mensagem: 'Se o CPF estiver cadastrado, enviamos um código para o e-mail do cadastro.' };
+    // Resposta sempre igual (exista ou não o CPF, tenha ou não e-mail, funcione ou não o envio),
+    // para ninguém descobrir pelo formulário quem é representante da Aritana.
+    const generica = { enviado: true, mensagem: 'Se o CPF estiver cadastrado com e-mail, enviamos um código. Confira também a caixa de spam. Sem e-mail no cadastro? Peça à Aritana o link de acesso pelo WhatsApp.' };
     if (!p || ['inativo', 'recusado'].includes(p.status) || !p.email) return generica;
     const codigo = String(randomInt(0, 1_000_000)).padStart(6, '0');
     await this.db.insert(portalAcessos).values({ pessoaId: p.id, tipo: 'codigo', hash: sha256(`${p.id}:${codigo}`), expiraEm: new Date(Date.now() + 15 * 60_000) });
-    const r = await this.email.enviar(p.email, 'Seu código de acesso · Aritana', `Olá, ${p.nome.split(' ')[0]}!\n\nSeu código para entrar no portal da Aritana é: ${codigo}\nEle vale por 15 minutos.\n\nSe não foi você, ignore esta mensagem.\nAritana Semijoias`);
-    return { ...generica, mensagem: `Enviamos um código para ${mascarar(p.email)}.`, ...(r.simulado && process.env.NODE_ENV !== 'production' ? { codigoDev: codigo } : {}) };
+    try {
+      const r = await this.email.enviar(p.email, 'Seu código de acesso · Aritana', `Olá, ${p.nome.split(' ')[0]}!\n\nSeu código para entrar no portal da Aritana é: ${codigo}\nEle vale por 15 minutos.\n\nSe não foi você, ignore esta mensagem.\nAritana Semijoias`);
+      if (r.simulado && process.env.NODE_ENV !== 'production') return { ...generica, codigoDev: codigo };
+    } catch (e) {
+      this.log.warn(`Código do portal não enviado para a representante ${p.id}: ${(e as Error).message}`);
+    }
+    return generica;
   }
 
   @Publico()

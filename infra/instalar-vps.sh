@@ -90,6 +90,14 @@ for i in $(seq 1 60); do
 done
 echo "API no ar."
 
+passo "Conferindo o painel"
+for i in $(seq 1 20); do
+  curl -sf "http://127.0.0.1:$PORTA_PAINEL/" >/dev/null && curl -sf "http://127.0.0.1:$PORTA_PAINEL/portal" >/dev/null && break
+  sleep 2
+  [ "$i" = 20 ] && { docker logs --tail 40 aritana-painel; erro "O painel não respondeu. Veja o log acima."; }
+done
+echo "Painel no ar."
+
 if [ "$PRIMEIRA_VEZ" = 1 ]; then
   passo "Criando o administrador e os dados de exemplo (fictícios)"
   docker exec -e SEED_EXEMPLOS=1 -e ADMIN_EMAIL=admin@aritana.wideic.com aritana-api node dist/db/seed.js | tee /root/aritana-acesso-inicial.txt

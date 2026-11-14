@@ -7,6 +7,9 @@ import { ConfiguracoesService } from '../configuracoes/configuracoes.service';
 import { niveis, pessoas, pontos, premios, resgates } from '../db/schema';
 import { hoje } from '../maletas/maletas.service';
 
+/** Só conta como parcela o que é cobrança de verdade: parcelas do acerto e do crediário (boleto). */
+const PARCELAS = sql`(t.origem_tipo = 'acerto' or (t.origem_tipo = 'venda' and t.forma_pagamento = 'boleto'))`;
+
 /** "2026-11" → primeiro dia do mês e do mês seguinte. */
 export function limitesDoMes(mes: string) {
   if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(mes)) throw new BadRequestException('Mês no formato AAAA-MM.');
@@ -64,6 +67,7 @@ export class PontosService {
         select t.pessoa_id, ${r.porParcelaEmDia}, 'Parcela paga em dia', 'titulo', t.id, 'parcela'
         from titulos t join pessoas p on p.id = t.pessoa_id
         where p.tipo = 'representante' and t.tipo = 'receber' and t.status = 'pago' and t.pago_em <= t.vencimento and t.vencimento >= ${desde}::date
+          and (t.origem_tipo = 'acerto' or (t.origem_tipo = 'venda' and t.forma_pagamento = 'boleto'))
           and not exists (select 1 from pontos pt where pt.origem_tipo = 'titulo' and pt.origem_id = t.id)
         limit 5000
         on conflict do nothing`);
@@ -150,10 +154,10 @@ export class PontosService {
             'pecasNaMaleta', coalesce((a.resultado->'pecas'->>'emMaleta')::int, 0)))
           from acertos a join maletas m on m.id = a.maleta_id
           where m.representante_id = p.id and a.parcial = false and a.data >= current_date - interval '12 months') as acertos,
-        (select count(*) from titulos t where t.pessoa_id = p.id and t.tipo = 'receber' and t.status = 'pago' and t.pago_em <= t.vencimento and t.vencimento >= current_date - interval '12 months')::int as em_dia,
-        (select count(*) from titulos t where t.pessoa_id = p.id and t.tipo = 'receber' and t.status = 'pago' and t.pago_em > t.vencimento and t.vencimento >= current_date - interval '12 months')::int as com_atraso,
-        (select count(*) from titulos t where t.pessoa_id = p.id and t.tipo = 'receber' and t.status = 'aberto' and t.vencimento < current_date)::int as vencidas,
-        coalesce((select max(current_date - t.vencimento) from titulos t where t.pessoa_id = p.id and t.tipo = 'receber' and t.status = 'aberto' and t.vencimento < current_date), 0)::int as maior_atraso
+        (select count(*) from titulos t where t.pessoa_id = p.id and t.tipo = 'receber' and ${PARCELAS} and t.status = 'pago' and t.pago_em <= t.vencimento and t.vencimento >= current_date - interval '12 months')::int as em_dia,
+        (select count(*) from titulos t where t.pessoa_id = p.id and t.tipo = 'receber' and ${PARCELAS} and t.status = 'pago' and t.pago_em > t.vencimento and t.vencimento >= current_date - interval '12 months')::int as com_atraso,
+        (select count(*) from titulos t where t.pessoa_id = p.id and t.tipo = 'receber' and ${PARCELAS} and t.status = 'aberto' and t.vencimento < current_date)::int as vencidas,
+        coalesce((select max(current_date - t.vencimento) from titulos t where t.pessoa_id = p.id and t.tipo = 'receber' and ${PARCELAS} and t.status = 'aberto' and t.vencimento < current_date), 0)::int as maior_atraso
       from pessoas p left join niveis n on n.id = p.nivel_id
       where p.tipo = 'representante' ${filtro}
       order by p.nome`);
