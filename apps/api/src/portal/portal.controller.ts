@@ -12,8 +12,9 @@ import { Limitador } from '../comum/limitador';
 import { AuditoriaService } from '../comum/auditoria.service';
 import { EmailService } from '../integracoes/email.service';
 import { AsaasService } from '../integracoes/asaas.service';
-import { MaletasService } from '../maletas/maletas.service';
-import { acertos, categorias, documentos, locaisEstoque, maletas, niveis, pedidosPecas, pessoas, portalAcessos, produtos, saldos, titulos } from '../db/schema';
+import { MaletasService, hoje } from '../maletas/maletas.service';
+import { PontosService } from '../pontos/pontos.service';
+import { acertos, categorias, documentos, locaisEstoque, maletas, niveis, pedidosPecas, pessoas, portalAcessos, premios, produtos, resgates, saldos, titulos } from '../db/schema';
 
 const sha256 = (t: string) => createHash('sha256').update(t).digest('hex');
 const mascarar = (e: string) => e.replace(/^(.{2}).*(@.*)$/, '$1***$2');
@@ -34,6 +35,7 @@ export class PortalController {
     private readonly asaas: AsaasService,
     private readonly maletasSvc: MaletasService,
     private readonly auditoria: AuditoriaService,
+    private readonly pontosSvc: PontosService,
   ) {}
 
   private sessao(p: { id: string; nome: string }) {
@@ -275,6 +277,34 @@ export class PortalController {
     const [ped] = await this.db.insert(pedidosPecas).values({ pessoaId: r.rep, itens, observacao: d.observacao ?? null }).returning();
     await this.auditoria.registrar({ acao: 'pedido_pecas', entidade: 'pessoa', entidadeId: r.rep, dados: { pedido: ped.numero, pecas: itens.length } });
     return ped;
+  }
+
+  /** Pontos, prêmios e ranking do mês (no ranking, só o primeiro nome e a cidade das outras). */
+  @RotaPortal()
+  @Get('pontos')
+  async pontos(@Representante() r: RepresentanteLogada) {
+    await this.pontosSvc.apurar(true);
+    const [saldo, extrato, ranking] = await Promise.all([this.pontosSvc.saldo(r.rep), this.pontosSvc.extrato(r.rep), this.pontosSvc.ranking(hoje().slice(0, 7))]);
+    const ps = await this.db.select({ id: premios.id, nome: premios.nome, descricao: premios.descricao, pontos: premios.pontos, foto: premios.foto, esgotado: sql<boolean>`${premios.estoque} is not null and ${premios.estoque} <= 0` }).from(premios).where(eq(premios.ativo, true)).orderBy(asc(premios.pontos));
+    const meus = await this.db.select({ id: resgates.id, numero: resgates.numero, premio: premios.nome, pontos: resgates.pontos, status: resgates.status, observacao: resgates.observacao, criadoEm: resgates.criadoEm }).from(resgates).innerJoin(premios, eq(premios.id, resgates.premioId)).where(eq(resgates.pessoaId, r.rep)).orderBy(desc(resgates.criadoEm)).limit(20);
+    const eu = ranking.find((x) => x.pessoaId === r.rep);
+    return {
+      saldo,
+      extrato,
+      premios: ps,
+      resgates: meus,
+      ranking: {
+        minhaPosicao: eu?.posicao ?? null,
+        participantes: ranking.length,
+        top: ranking.slice(0, 10).map((x) => ({ posicao: x.posicao, nome: x.pessoaId === r.rep ? 'Você' : x.nome.split(' ')[0], cidade: x.cidade, eu: x.pessoaId === r.rep })),
+      },
+    };
+  }
+
+  @RotaPortal()
+  @Post('pontos/resgatar')
+  resgatar(@Representante() r: RepresentanteLogada, @Body() body: unknown) {
+    return this.pontosSvc.resgatar(r.rep, validar(z.object({ premioId: z.string().uuid() }), body).premioId);
   }
 
   // ───── Matriz: pedidos das representantes ─────

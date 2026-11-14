@@ -95,7 +95,9 @@ export function FichaRepresentante() {
   const nova = !id;
   const navegar = useNavigate();
   const qc = useQueryClient();
-  const [aba, setAba] = useState<'dados' | 'rede' | 'credito' | 'maletas' | 'financeiro' | 'documentos'>('dados');
+  type AbaFicha = 'dados' | 'rede' | 'credito' | 'maletas' | 'financeiro' | 'documentos';
+  const [busca] = useSearchParams();
+  const [aba, setAba] = useState<AbaFicha>(['rede', 'credito', 'maletas', 'financeiro', 'documentos'].includes(busca.get('aba') ?? '') ? (busca.get('aba') as AbaFicha) : 'dados');
   const [f, setF] = useState<Pessoa>(VAZIA);
   const [limiteTexto, setLimiteTexto] = useState(centavosParaTexto(VAZIA.limiteCredito));
 
@@ -220,7 +222,7 @@ export function FichaRepresentante() {
           <div className="grade g3">
             <div><div className="muted">Limite atual</div><div style={{ fontSize: 24, fontWeight: 700 }}>{reais(f.limiteCredito)}</div></div>
             <div><div className="muted">Crédito disponível (devoluções)</div><div style={{ fontSize: 24, fontWeight: 700 }}>{reais(f.saldoCredito ?? 0)}</div></div>
-            <div><div className="muted">Score interno</div><div style={{ fontSize: 16, marginTop: 6 }} className="muted">Entra na Versão 3</div></div>
+            <ScoreRepresentante id={id!} />
             <p className="muted" style={{ gridColumn: 'span 3' }}>O limite sobe sozinho depois de cada acerto em dia que bate a meta mínima, até o máximo definido nas Configurações. Atraso acima do prazo de bloqueio faz o limite voltar ao inicial.</p>
           </div>
         )}
@@ -261,5 +263,26 @@ function AcessoPortal({ id }: { id: string }) {
       {fone && <a className="botao" href={`https://wa.me/55${fone}?text=${encodeURIComponent(texto)}`} target="_blank" rel="noreferrer">Enviar pelo WhatsApp</a>}
       <button className="botao claro" onClick={async () => { try { await navigator.clipboard.writeText(texto); } catch { window.prompt('Copie a mensagem:', texto); } }}>Copiar link</button>
     </>
+  );
+}
+
+const FAIXA: Record<string, [string, string]> = { A: ['ok', 'Faixa A · excelente'], B: ['ok', 'Faixa B · boa'], C: ['alerta', 'Faixa C · atenção'], D: ['erro', 'Faixa D · risco'], nova: ['neutra', 'Sem histórico'] };
+
+/** Score interno (só a matriz vê): 0 a 1000 pelos últimos 12 meses. */
+function ScoreRepresentante({ id }: { id: string }) {
+  const q = useQuery({ queryKey: ['score', id], queryFn: () => api<any>(`/rede/${id}/score`) });
+  if (!q.data) return <div><div className="muted">Score interno</div><div className="muted">{q.error ? 'Indisponível' : '…'}</div></div>;
+  const s = q.data;
+  const nomes: Record<string, string> = { pontualidade: 'Pontualidade', pagamento: 'Pagamento', giro: 'Giro da maleta', perdas: 'Cuidado com as peças', casa: 'Tempo de casa' };
+  return (
+    <div>
+      <div className="muted">Score interno</div>
+      <div style={{ fontSize: 24, fontWeight: 700 }}>{s.score ?? '—'} <span className={`etiqueta ${FAIXA[s.faixa][0]}`} style={{ fontSize: 12, verticalAlign: 'middle' }}>{FAIXA[s.faixa][1]}</span></div>
+      <div className="muted" style={{ fontSize: 12.5, marginTop: 4 }}>
+        {s.score === null ? 'Aparece depois do primeiro acerto completo.' : Object.entries(s.componentes).map(([k, v]) => `${nomes[k]} ${Math.round((v as number) * 100)}%`).join(' · ')}
+      </div>
+      {s.pontosDeAtencao.length > 0 && <div style={{ fontSize: 13, color: 'var(--erro)', marginTop: 4 }}>Atenção: {s.pontosDeAtencao.join(', ')}</div>}
+      <div className="muted" style={{ fontSize: 13, marginTop: 4 }}>{s.saldoPontos} ponto(s) no programa de prêmios</div>
+    </div>
   );
 }

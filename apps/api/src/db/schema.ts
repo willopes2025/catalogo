@@ -725,6 +725,52 @@ export const configuracoes = pgTable('configuracoes', {
   atualizadoEm: atualizadoEm(),
 });
 
+// ───────────────────────── Pontos e prêmios ─────────────────────────
+
+/** Extrato de pontos da representante: créditos automáticos (acertos, parcelas), ajustes e resgates. */
+export const pontos = pgTable(
+  'pontos',
+  {
+    id: id(),
+    pessoaId: uuid('pessoa_id').notNull().references(() => pessoas.id, { onDelete: 'cascade' }),
+    pontos: integer('pontos').notNull(),
+    motivo: text('motivo').notNull(),
+    /** acerto | titulo | resgate | ajuste */
+    origemTipo: text('origem_tipo').notNull(),
+    origemId: uuid('origem_id'),
+    /** Qual regra gerou (vendas, em_dia, meta, parcela, resgate, estorno): impede crédito duplicado. */
+    regra: text('regra').notNull(),
+    usuarioId: uuid('usuario_id').references(() => usuarios.id),
+    criadoEm: criadoEm(),
+  },
+  (t) => ({ unico: uniqueIndex('pontos_origem_regra_idx').on(t.origemTipo, t.origemId, t.regra), porPessoa: index('pontos_pessoa_idx').on(t.pessoaId) }),
+);
+
+export const premios = pgTable('premios', {
+  id: id(),
+  nome: text('nome').notNull(),
+  descricao: text('descricao'),
+  pontos: integer('pontos').notNull(),
+  /** Quantos ainda há para resgatar (vazio = sem limite). */
+  estoque: integer('estoque'),
+  foto: text('foto'),
+  ativo: boolean('ativo').notNull().default(true),
+  criadoEm: criadoEm(),
+});
+
+export const resgates = pgTable('resgates', {
+  id: id(),
+  numero: serial('numero').notNull(),
+  pessoaId: uuid('pessoa_id').notNull().references(() => pessoas.id, { onDelete: 'cascade' }),
+  premioId: uuid('premio_id').notNull().references(() => premios.id),
+  pontos: integer('pontos').notNull(),
+  status: text('status').notNull().default('solicitado'), // solicitado | entregue | cancelado
+  observacao: text('observacao'),
+  atendidoPor: uuid('atendido_por').references(() => usuarios.id),
+  atendidoEm: timestamp('atendido_em', { withTimezone: true }),
+  criadoEm: criadoEm(),
+});
+
 // ───────────────────────── CRM: candidatas a representante ─────────────────────────
 
 /** Quem preencheu o formulário "Quero ser revendedora" (ou foi cadastrada pela equipe), antes de virar representante. */

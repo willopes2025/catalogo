@@ -46,6 +46,8 @@ import { SegredosService } from './segredos/segredos.service';
 import { ImplantacaoController } from './implantacao/implantacao.controller';
 import { PortalController } from './portal/portal.controller';
 import { CrmController } from './crm/crm.controller';
+import { PontosController } from './pontos/pontos.controller';
+import { PontosService } from './pontos/pontos.service';
 
 const segredo = process.env.JWT_SECRET;
 if (!segredo || (process.env.NODE_ENV === 'production' && segredo.length < 32)) {
@@ -87,9 +89,11 @@ if (!segredo || (process.env.NODE_ENV === 'production' && segredo.length < 32)) 
     ImplantacaoController,
     PortalController,
     CrmController,
+    PontosController,
   ],
   providers: [
     SegredosService,
+    PontosService,
     AuditoriaService,
     EstoqueService,
     MaletasService,

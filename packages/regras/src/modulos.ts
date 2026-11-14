@@ -14,7 +14,7 @@ export const MODULOS = [
   { chave: 'vendas', nome: 'Vendas', versao: 1 },
   { chave: 'lojas', nome: 'Lojas e eventos', versao: 1 },
   { chave: 'garantia', nome: 'Garantia', versao: 1 },
-  { chave: 'pontos', nome: 'Pontos e prêmios', versao: 2 },
+  { chave: 'pontos', nome: 'Pontos e prêmios', versao: 1 },
   { chave: 'financeiro', nome: 'Financeiro', versao: 1 },
   { chave: 'comissoes', nome: 'Comissões', versao: 1 },
   { chave: 'fiscal', nome: 'Fiscal', versao: 1 },

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { REGRAS_PONTOS_PADRAO } from '@aritana/regras';
 
 /**
  * Configurações simples guardadas por chave, com valor padrão e validação.
@@ -25,6 +26,17 @@ export const CONFIGS = {
       emailsEquipe: z.array(z.string().email('E-mail inválido')).max(20),
       diasAntesMaleta: z.number().int().min(0).max(15),
       diasAntesTitulo: z.number().int().min(0).max(15),
+    }),
+  },
+  regras_pontos: {
+    padrao: { ...REGRAS_PONTOS_PADRAO },
+    schema: z.object({
+      ativo: z.boolean(),
+      porAcertoEmDia: z.number().int().min(0).max(10000),
+      porCemReaisVendidos: z.number().int().min(0).max(10000),
+      porMetaBatida: z.number().int().min(0).max(10000),
+      porParcelaEmDia: z.number().int().min(0).max(10000),
+      desde: z.union([z.literal(''), z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Data no formato AAAA-MM-DD')]),
     }),
   },
   regras_garantia: {

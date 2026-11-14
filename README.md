@@ -75,6 +75,16 @@ Desenvolvido pela Wide Inteligência Comercial. **O código pertence à Aritana.
 | **Quadro de triagem** | Novas → Em contato → Entrevista → Documentos → Aprovadas/Recusadas, com responsável, data de retorno, histórico de anotações, WhatsApp com mensagem pronta e números por origem. |
 | **Aprovação** | Cria a representante com o limite inicial das regras, sem duplicar CPF. |
 
+**Pontos e prêmios (gamificação da rede)**
+
+| Parte | O que faz |
+|---|---|
+| **Score interno** | 0 a 1000 pelos últimos 12 meses (35% pontualidade, 25% pagamento, 25% giro da maleta, 10% perdas, 5% tempo de casa), faixas A a D e pontos de atenção. Só a matriz vê: na ficha (aba Crédito) e em Pontos e prêmios › Score da rede. |
+| **Pontos automáticos** | Por R$ 100 vendidos no acerto, acerto em dia, meta do nível batida e parcela paga em dia, apurados a partir do histórico sem crédito duplicado. Regras e data de início configuráveis; ajustes manuais com motivo. |
+| **Prêmios e resgates** | Catálogo com quantidade; a representante resgata pelo app (débito na hora), a matriz entrega ou cancela (pontos e prêmio voltam). |
+| **Ranking do mês** | Pelo vendido nos acertos; no app, a própria posição e as outras só pelo primeiro nome. |
+| **Revisão de níveis** | Sugestão pela média dos 3 últimos meses completos contra a meta de cada nível; aplicada uma a uma. |
+
 As naturezas de operação e os CFOPs que vêm instalados são um **ponto de partida** para empresa do Simples Nacional e **precisam ser conferidos pelo contador** antes de emitir em produção.
 
 Os modelos de contrato e promissória que vêm instalados são **provisórios** e devem ser trocados pelos textos revisados pelo jurídico da Aritana, em Configurações › Modelos de documento.

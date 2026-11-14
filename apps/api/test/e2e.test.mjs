@@ -723,6 +723,48 @@ test('CRM: formulário público, quadro, recusa e aprovação que vira represent
   assert.ok(res.porOrigem.some((o) => o.origem === 'instagram' && o.aprovadas === 1));
 });
 
+test('gamificação: score, pontos automáticos sem duplicar, prêmio, resgate e cancelamento', async () => {
+  const sc = await ok('GET', `/rede/${ctx.rep.id}/score`);
+  assert.ok(['A', 'B', 'C', 'D', 'nova'].includes(sc.faixa));
+  assert.ok(sc.score === null || (sc.score >= 0 && sc.score <= 1000));
+  const rede = await ok('GET', '/rede/score');
+  assert.ok(rede.some((x) => x.pessoaId === ctx.rep.id));
+
+  await ok('POST', '/pontos/apurar');
+  const s1 = (await ok('GET', `/rede/${ctx.rep.id}/score`)).saldoPontos;
+  await ok('POST', '/pontos/apurar');
+  assert.equal((await ok('GET', `/rede/${ctx.rep.id}/score`)).saldoPontos, s1, 'apurar de novo não duplica');
+
+  await ok('POST', '/pontos/ajuste', { pessoaId: ctx.rep.id, pontos: 500, motivo: 'Bônus de boas-vindas' });
+  assert.equal((await chamar('POST', '/pontos/ajuste', { pessoaId: ctx.rep.id, pontos: -999999, motivo: 'Erro' })).status, 400, 'não fica negativo');
+  const premio = await ok('POST', '/pontos/premios', { nome: 'Kit de vitrine', pontos: 300, estoque: 1 });
+
+  const salvo = token;
+  const link = await ok('POST', `/portal/gerar-link/${ctx.rep.id}`);
+  token = '';
+  token = (await ok('POST', `/portal/link/${link.token}`)).token;
+  const antes = await ok('GET', '/portal/pontos');
+  assert.equal(antes.saldo, s1 + 500);
+  assert.ok(antes.premios.some((p) => p.id === premio.id));
+  const r = await ok('POST', '/portal/pontos/resgatar', { premioId: premio.id });
+  assert.equal((await ok('GET', '/portal/pontos')).saldo, s1 + 200);
+  assert.equal((await chamar('POST', '/portal/pontos/resgatar', { premioId: premio.id })).status, 400, 'estoque acabou');
+  token = salvo;
+
+  const pend = await ok('GET', '/pontos/resgates');
+  assert.ok(pend.some((x) => x.id === r.id));
+  await ok('POST', `/pontos/resgates/${r.id}`, { status: 'cancelado', observacao: 'Sem estoque físico' });
+  assert.equal((await chamar('POST', `/pontos/resgates/${r.id}`, { status: 'entregue' })).status, 400);
+  assert.equal((await ok('GET', `/rede/${ctx.rep.id}/score`)).saldoPontos, s1 + 500, 'cancelamento devolve os pontos');
+  assert.equal((await ok('GET', '/pontos/premios')).find((p) => p.id === premio.id).estoque, 1, 'e o prêmio volta');
+
+  const mes = new Date(Date.now() - 3 * 3600_000).toISOString().slice(0, 7);
+  const rk = await ok('GET', `/pontos/ranking?mes=${mes}`);
+  assert.ok(Array.isArray(rk));
+  assert.ok(Array.isArray(await ok('GET', '/pontos/niveis/sugestoes')));
+  assert.equal((await chamar('GET', '/pontos/ranking?mes=2026-13')).status, 400);
+});
+
 // Este fica por último: apaga os dados de teste.
 test('implantação: apagar dados de teste exige APAGAR e mantém o que é configuração', async () => {
   assert.equal((await chamar('POST', '/implantacao/apagar-dados-de-teste', { confirmacao: 'apagar' })).status, 400);

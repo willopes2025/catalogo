@@ -39,6 +39,7 @@ import { Manual } from './paginas/Manual';
 import { ImprimirEtiquetas } from './paginas/ImprimirEtiquetas';
 import { Portal } from './portal/Portal';
 import { Crm } from './paginas/Crm';
+import { Pontos } from './paginas/Pontos';
 import { Cadastro } from './paginas/Cadastro';
 
 const cliente = new QueryClient({ defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: false, staleTime: 15_000 } } });
@@ -96,6 +97,7 @@ ReactDOM.createRoot(document.getElementById('raiz')!).render(
             <Route path="minha-senha" element={<MinhaSenha />} />
             <Route path="garantia" element={<Garantia />} />
             <Route path="crm" element={<Crm />} />
+            <Route path="pontos" element={<Pontos />} />
             <Route path="comissoes" element={<Comissoes />} />
             <Route path="auditoria" element={<Auditoria />} />
             <Route path="manual" element={<Manual />} />

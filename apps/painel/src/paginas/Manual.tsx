@@ -126,6 +126,18 @@ const SECOES: Secao[] = [
     ],
   },
   {
+    id: 'pontos',
+    titulo: 'Pontos, prêmios, ranking e score',
+    passos: [
+      { t: 'Regras dos pontos', d: 'Pontos e prêmios › Regras dos pontos: quanto vale cada R$ 100 vendidos, o acerto em dia, a meta do nível batida e a parcela paga no prazo. Os pontos entram sozinhos.' },
+      { t: 'Prêmios', d: 'Cadastre os prêmios e quantos há de cada um. Eles aparecem no app da representante, que resgata quando tiver pontos.' },
+      { t: 'Resgates', d: 'O pedido chega em Resgates. Marque como entregue ou cancele; no cancelamento, os pontos e o prêmio voltam.' },
+      { t: 'Ranking do mês', d: 'Quem mais vendeu nos acertos do mês. No app, cada uma vê a própria posição e as outras só pelo primeiro nome.' },
+      { t: 'Score interno', d: 'De 0 a 1000, só a matriz vê: pontualidade, pagamento, giro da maleta, perdas e tempo de casa. Ajuda a decidir limite e quem precisa de acompanhamento.' },
+      { t: 'Revisão de níveis', d: 'O sistema sugere subir ou descer de nível pela média de vendas dos 3 últimos meses; você aplica uma a uma.' },
+    ],
+  },
+  {
     id: 'implantacao',
     titulo: 'Implantação: o que falta para começar',
     passos: [

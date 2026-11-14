@@ -112,6 +112,7 @@ function Area() {
           <Route path="maletas/:id" element={<Maleta />} />
           <Route path="pedir" element={<Pedir />} />
           <Route path="financeiro" element={<Financeiro />} />
+          <Route path="pontos" element={<PontosRep />} />
           <Route path="*" element={<Navigate to="/portal" replace />} />
         </Routes>
       </main>
@@ -120,6 +121,7 @@ function Area() {
         <NavLink to="/portal/maletas">Maleta</NavLink>
         <NavLink to="/portal/pedir">Pedir peças</NavLink>
         <NavLink to="/portal/financeiro">Parcelas</NavLink>
+        <NavLink to="/portal/pontos">Pontos</NavLink>
       </nav>
     </>
   );
@@ -421,6 +423,69 @@ function Financeiro() {
         <details className="p-cartao">
           <summary className="p-rotulo">Pagas ({pagos.length})</summary>
           {pagos.map((t: any) => <div key={t.id} className="p-linha"><span>{t.descricao}<br /><span className="p-suave">paga em {data(t.pagoEm)}</span></span><span>{reais(t.valorPago ?? t.valor)}</span></div>)}
+        </details>
+      )}
+    </>
+  );
+}
+
+function PontosRep() {
+  const qc = useQueryClient();
+  const q = useQuery({ queryKey: ['p-pontos'], queryFn: () => apiPortal('/pontos') });
+  const resgatar = useMutation({ mutationFn: (premioId: string) => apiPortal('/pontos/resgatar', { corpo: { premioId } }), onSuccess: () => qc.invalidateQueries({ queryKey: ['p-pontos'] }) });
+  if (q.isLoading) return <Carregando />;
+  if (q.error) return <Aviso erro={q.error} />;
+  const d = q.data;
+  return (
+    <>
+      <Topo titulo="Meus pontos" sub="Ganhe pontos com acerto em dia, vendas e parcelas pagas no prazo, e troque por prêmios." />
+      <div className="p-cartao p-centro">
+        <div className="p-rotulo">Saldo</div>
+        <div className="p-grande" style={{ fontSize: 36 }}>{d.saldo}</div>
+        <div className="p-suave">pontos</div>
+      </div>
+      <div className="p-cartao">
+        <div className="p-rotulo">Ranking do mês</div>
+        {d.ranking.minhaPosicao ? <div className="p-grande">Você está em {d.ranking.minhaPosicao}º de {d.ranking.participantes}</div> : <div className="p-suave">Faça um acerto este mês para entrar no ranking.</div>}
+        {d.ranking.top.map((x: any) => (
+          <div key={x.posicao} className="p-linha" style={x.eu ? { fontWeight: 700 } : undefined}><span>{x.posicao}º · {x.nome}</span><span className="p-suave">{x.cidade ?? ''}</span></div>
+        ))}
+      </div>
+      {resgatar.isSuccess && <div className="p-aviso ok">Pedido de resgate enviado! A Aritana avisa quando o prêmio estiver pronto.</div>}
+      <Aviso erro={resgatar.error} />
+      {d.premios.length > 0 && <div className="p-rotulo" style={{ marginTop: 8 }}>Prêmios</div>}
+      <div className="p-vitrine">
+        {d.premios.map((p: any) => {
+          const falta = p.pontos - d.saldo;
+          return (
+            <div key={p.id} className="p-cartao p-produto">
+              {p.foto ? <img src={p.foto} alt="" /> : <div className="p-foto" />}
+              <b>{p.nome}</b>
+              {p.descricao && <span className="p-suave">{p.descricao}</span>}
+              <span>{p.pontos} pontos</span>
+              {p.esgotado ? (
+                <span className="p-suave">Esgotado</span>
+              ) : falta > 0 ? (
+                <span className="p-suave">Faltam {falta}</span>
+              ) : (
+                <button className="p-botao" disabled={resgatar.isPending} onClick={() => window.confirm(`Trocar ${p.pontos} pontos por ${p.nome}?`) && resgatar.mutate(p.id)}>Resgatar</button>
+              )}
+            </div>
+          );
+        })}
+      </div>
+      {!!d.resgates.length && (
+        <div className="p-cartao">
+          <div className="p-rotulo">Meus resgates</div>
+          {d.resgates.map((r: any) => (
+            <div key={r.id} className="p-linha"><span>{r.premio}{r.observacao && <><br /><span className="p-suave">{r.observacao}</span></>}</span><span className={`p-selo ${r.status === 'entregue' ? 'atendido' : r.status === 'cancelado' ? 'recusado' : 'novo'}`}>{r.status === 'solicitado' ? 'Aguardando' : r.status === 'entregue' ? 'Entregue' : 'Cancelado'}</span></div>
+          ))}
+        </div>
+      )}
+      {!!d.extrato.length && (
+        <details className="p-cartao">
+          <summary className="p-rotulo">Extrato</summary>
+          {d.extrato.map((e: any) => <div key={e.id} className="p-linha"><span>{e.motivo}<br /><span className="p-suave">{data(e.criadoEm.slice(0, 10))}</span></span><b className={e.pontos < 0 ? 'p-erro' : ''}>{e.pontos > 0 ? '+' : ''}{e.pontos}</b></div>)}
         </details>
       )}
     </>
