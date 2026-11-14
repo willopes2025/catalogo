@@ -705,35 +705,86 @@ export class JueriService {
     const revs = await this.mapa(tx, pessoas, 'rev:');
     const reps = await this.mapa(tx, pessoas, 'rep:');
     const clis = await this.mapa(tx, pessoas, 'cli:');
+    // Para ligar pelo "contato": documento e nome das pessoas vindas do Jueri.
+    const gente = await tx
+      .select({ id: pessoas.id, documento: pessoas.documento, nome: pessoas.nome })
+      .from(pessoas)
+      .where(sql`${pessoas.idJueri} like 'rev:%' or ${pessoas.idJueri} like 'cli:%' or ${pessoas.idJueri} like 'rep:%'`);
+    const porDoc = new Map(gente.filter((g) => g.documento).map((g) => [g.documento!, g.id]));
+    const porNome = new Map<string, string | null>();
+    for (const g of gente) {
+      const k = normNome(g.nome);
+      porNome.set(k, porNome.has(k) ? null : g.id); // nome repetido não serve para ligar
+    }
+    const ligacao = { campo: 0, documento: 0, tipo: 0, nome: 0, nenhuma: 0 };
+    const vistos = new Set<string>();
     let total = 0;
+    let zeradas = 0;
+    let repetidas = 0;
+
+    const acharPessoa = (c: Reg): string | null => {
+      const direto =
+        (c.fk_revendedor_id != null ? revs.get(String(c.fk_revendedor_id)) : undefined) ??
+        (c.fk_representante_id != null ? reps.get(String(c.fk_representante_id)) : undefined) ??
+        (c.fk_cliente_id != null ? clis.get(String(c.fk_cliente_id)) : undefined);
+      if (direto) return (ligacao.campo++, direto);
+      const ct = c.contato && typeof c.contato === 'object' ? (c.contato as Reg) : null;
+      const doc = soDigitos(txt(pegar(ct ?? {}, 'cpf', 'cnpj', 'cpf_cnpj', 'documento', 'fisico.cpf', 'juridico.cnpj')));
+      if (doc && porDoc.has(doc)) return (ligacao.documento++, porDoc.get(doc)!);
+      const tipo = String(pegar(ct ?? {}, 'tipo', 'type', 'tipo_contato', 'origem', 'model') ?? pegar(c, 'contato_tipo', 'tipo_contato') ?? '');
+      const idC = pegar(ct ?? {}, 'id') ?? pegar(c, 'contato_id', 'fk_contato_id');
+      if (idC != null && tipo) {
+        const m = /revend/i.test(tipo) ? revs : /client/i.test(tipo) ? clis : /represent/i.test(tipo) ? reps : null;
+        const achado = m?.get(String(idC));
+        if (achado) return (ligacao.tipo++, achado);
+      }
+      const nome = txt(ct ? pegar(ct, 'nome', 'razao_social', 'nome_fantasia', 'fisico.nome') : c.contato);
+      const porN = nome ? porNome.get(normNome(nome)) : undefined;
+      if (porN) return (ligacao.nome++, porN);
+      ligacao.nenhuma++;
+      return null;
+    };
+
     for (const c of contas) {
       pc.lidos++;
       try {
-        const idj = `cr:${c.id}`;
-        const valor =
-          centavos(pegar(c, 'valor', 'valor_parcela', 'valor_aberto', 'valor_receber', 'valor_a_receber', 'saldo', 'valor_original', 'valor_documento', 'valor_bruto', 'valor_total', 'total')) ??
+        // O Jueri repete o id da conta em cada parcela: a chave leva a parcela junto.
+        const parcelaTxt = txt(pegar(c, 'parcela'));
+        const fracao = parcelaTxt?.match(/(\d+)\s*\/\s*(\d+)/);
+        const idj = `cr:${c.id}:${txt(c.numero_parcela) ?? ''}:${parcelaTxt ?? ''}:${txt(c.ocorrencia) ?? ''}`;
+        if (vistos.has(idj)) {
+          repetidas++;
+          pc.ignorados++;
+          continue;
+        }
+        vistos.add(idj);
+        const cobrado =
+          centavos(pegar(c, 'valor_cobrado', 'valor', 'valor_parcela', 'valor_aberto', 'valor_receber', 'valor_a_receber', 'saldo', 'valor_original', 'valor_documento', 'valor_bruto', 'valor_total', 'total')) ??
           primeiroCampo(c, /^(?!.*(pago|desconto|juros|multa|acrescimo|taxa))(valor|vl_|saldo|total)/i, centavos, (v) => v > 0);
+        const pago = centavos(pegar(c, 'valor_pago')) ?? 0;
+        const valor = cobrado !== null ? cobrado - (pago > 0 && pago < cobrado ? pago : 0) : null;
         const vencimento = dataISO(pegar(c, 'data_vencimento', 'vencimento', 'dt_vencimento')) ?? primeiroCampo(c, /venc/i, dataISO);
-        if (!valor || valor <= 0) throw new Error(`sem valor (campos recebidos: ${Object.keys(c).sort().join(', ')})`);
+        if (valor === null) throw new Error(`sem valor (campos recebidos: ${Object.keys(c).sort().join(', ')})`);
+        if (valor <= 0) {
+          zeradas++;
+          pc.ignorados++;
+          continue;
+        }
         if (!vencimento) throw new Error(`sem data de vencimento (campos recebidos: ${Object.keys(c).sort().join(', ')})`);
-        const pessoaId =
-          (c.fk_revendedor_id != null ? revs.get(String(c.fk_revendedor_id)) : undefined) ??
-          (c.fk_representante_id != null ? reps.get(String(c.fk_representante_id)) : undefined) ??
-          (c.fk_cliente_id != null ? clis.get(String(c.fk_cliente_id)) : undefined) ??
-          null;
-        const contato = txt(pegar(c, 'contato', 'contato.nome', 'nome_contato', 'pessoa.nome'));
+        const pessoaId = acharPessoa(c);
+        const contato = txt(c.contato && typeof c.contato === 'object' ? pegar(c.contato as Reg, 'nome', 'razao_social', 'nome_fantasia', 'fisico.nome') : c.contato);
         const protestado = pegar(c, 'status_protestado', 'protestado') === true || String(pegar(c, 'status_protestado', 'protestado')) === '1';
         const valores = {
           empresaId: matriz.id,
           tipo: 'receber',
           pessoaId,
-          descricao: [txt(c.descricao) ?? `Conta a receber nº ${pegar(c, 'numero_parcela', 'id')} (Jueri)`, !pessoaId && contato ? `· ${contato}` : null].filter(Boolean).join(' '),
-          categoria: txt(pegar(c, 'categoria.nome', 'categoria')) ?? 'Migração Jueri',
+          descricao: [txt(c.descricao) ?? `Conta a receber nº ${pegar(c, 'numero_parcela', 'id')} (Jueri)`, !pessoaId && contato ? `· ${contato}` : null, pago > 0 ? '(saldo após pagamento parcial)' : null].filter(Boolean).join(' '),
+          categoria: txt(pegar(c, 'categoria.nome', 'categoria.descricao', 'categoria')) ?? 'Migração Jueri',
           valor,
           vencimento,
-          parcela: inteiro(pegar(c, 'parcela', 'numero_parcela')) ?? 1,
-          totalParcelas: inteiro(pegar(c, 'total_parcelas', 'quantidade_parcelas')) ?? 1,
-          formaPagamento: txt(pegar(c, 'forma_pagamento.nome', 'forma_pagamento')),
+          parcela: (fracao ? Number(fracao[1]) : inteiro(parcelaTxt)) ?? 1,
+          totalParcelas: (fracao ? Number(fracao[2]) : inteiro(pegar(c, 'total_parcelas', 'quantidade_parcelas'))) ?? 1,
+          formaPagamento: txt(pegar(c, 'forma_pagamento.nome', 'forma_pagamento.descricao', 'forma_pagamento')),
           status: protestado ? ('protestado' as const) : ('aberto' as const),
           origemTipo: 'jueri',
           idJueri: idj,
@@ -748,15 +799,21 @@ export class JueriService {
           await tx.insert(titulos).values(valores);
           pc.criados++;
         }
-        if (!pessoaId && pc.avisos.length < 50) pc.avisos.push(`Conta ${c.id}: sem revendedora/cliente ligada; entrou só com a descrição.`);
         total += valor;
       } catch (e) {
         this.erro(pc, `Conta ${c.id}`, (e as Error).message);
       }
     }
-    pc.avisos.splice(1, 0, `R$ ${(total / 100).toLocaleString('pt-BR', { minimumFractionDigits: 2 })} a receber em aberto trazidos.`);
+    pc.avisos.push(`R$ ${(total / 100).toLocaleString('pt-BR', { minimumFractionDigits: 2 })} a receber em aberto trazidos.`);
+    pc.avisos.push(
+      `Ligação com a pessoa: ${ligacao.campo + ligacao.documento + ligacao.tipo} pelo cadastro do Jueri, ${ligacao.nome} pelo nome, ${ligacao.nenhuma} sem pessoa (entram só com a descrição e o nome do contato).`,
+    );
+    if (zeradas) pc.avisos.push(`${zeradas} conta(s) sem saldo a receber (valor zero ou já paga): não entram.`);
+    if (repetidas) pc.avisos.push(`${repetidas} linha(s) repetidas na resposta do Jueri: entraram uma vez só.`);
   }
 }
+
+const normNome = (n: string) => n.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/\s+/g, ' ').trim();
 
 function jsonOuNada(t: string): unknown {
   try {

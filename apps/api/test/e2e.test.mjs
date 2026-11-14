@@ -881,7 +881,8 @@ test('Jueri pela API: testa a conexão, simula sem gravar, importa tudo e repeti
   assert.equal(ex.partes['Revendedoras'].criados, 2);
   assert.equal(ex.partes['Maletas abertas'].criados, 1);
   assert.match(ex.partes['Maletas abertas'].erros[0], /9999/);
-  assert.equal(ex.partes['Contas a receber'].criados, 2, 'só as contas em aberto, inclusive com nomes de campo fora da documentação');
+  assert.equal(ex.partes['Contas a receber'].criados, 4, 'só as contas em aberto, inclusive com nomes de campo fora da documentação e uma por parcela');
+  assert.equal(ex.partes['Contas a receber'].ignorados, 2, 'linha repetida e conta zerada');
   assert.ok(ex.partes['Maletas abertas'].motivos['produto(s) não encontrados: #'] === 1, 'problemas agrupados por motivo');
   assert.ok(ex.estruturas.pedidoItem.includes('fk_produto_id'));
   assert.equal((await chamar('GET', '/produtos/codigo/7899990090010')).status, 404, 'simulação não grava');
@@ -926,6 +927,8 @@ test('Jueri pela API: testa a conexão, simula sem gravar, importa tudo e repeti
   assert.ok(fin.titulos.some((t) => t.valor === 15000 && t.status === 'aberto'));
   const finLider = await ok('GET', `/pessoas/${lider.id}`);
   assert.ok(finLider.titulos.some((t) => t.valor === 4500 && t.vencimento === '2026-12-20'), 'valor e vencimento achados por nome parecido');
+  assert.ok(finLider.titulos.some((t) => t.valor === 10000 && t.vencimento === '2027-01-05'), 'parcela 2/2 ligada pelo nome do contato');
+  assert.ok(fin.titulos.some((t) => t.valor === 6000), 'parcela 1/2 ligada pelo id e tipo do contato, com o saldo após pagamento parcial');
 
   // Repetir: atualiza, não duplica.
   await ok('POST', '/jueri/importar', { simular: false, etapas: todas, localId: local.id });
