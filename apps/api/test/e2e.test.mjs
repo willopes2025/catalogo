@@ -877,6 +877,8 @@ test('Jueri pela API: testa a conexão, simula sem gravar, importa tudo e repeti
   assert.equal(ex.situacao, 'concluida', ex.erro);
   assert.equal(ex.partes['Produtos'].criados, 2);
   assert.equal(ex.partes['Produtos'].erros.length, 1, 'produto sem preço');
+  assert.equal(ex.partes['Produtos'].motivos['sem preço de varejo'], 1, 'problemas agrupados por motivo');
+  assert.equal(ex.partes['Produtos'].falhas, 1);
   assert.equal(ex.partes['Revendedoras'].criados, 2);
   assert.equal(ex.partes['Maletas abertas'].criados, 1);
   assert.match(ex.partes['Maletas abertas'].erros[0], /9999/);

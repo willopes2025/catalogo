@@ -32,6 +32,10 @@ interface Parte {
   criados: number;
   atualizados: number;
   ignorados: number;
+  /** Total real de registros com problema (a lista de erros é cortada em 300). */
+  falhas: number;
+  /** Quantos problemas de cada tipo, para ver o quadro geral de uma vez. */
+  motivos: Record<string, number>;
   erros: string[];
   avisos: string[];
 }
@@ -172,7 +176,7 @@ export class JueriService {
   }
 
   private parte(ex: Execucao, nome: string): Parte {
-    return (ex.partes[nome] ??= { lidos: 0, criados: 0, atualizados: 0, ignorados: 0, erros: [], avisos: [] });
+    return (ex.partes[nome] ??= { lidos: 0, criados: 0, atualizados: 0, ignorados: 0, falhas: 0, motivos: {}, erros: [], avisos: [] });
   }
 
   private async rodar(ex: Execucao, op: OpcoesJueri, usuarioId: string) {
@@ -238,8 +242,12 @@ export class JueriService {
     }
   }
 
-  private erro(p: Parte, msg: string) {
-    if (p.erros.length < MAX_ERROS) p.erros.push(msg);
+  private erro(p: Parte, rotulo: string, motivo: string) {
+    p.falhas++;
+    // Agrupa pelo motivo sem os números ("código de barras 789… já é de outro" → "código de barras # já é de outro").
+    const tipo = motivo.replace(/\d[\d.,/-]*/g, '#').slice(0, 120);
+    p.motivos[tipo] = (p.motivos[tipo] ?? 0) + 1;
+    if (p.erros.length < MAX_ERROS) p.erros.push(`${rotulo}: ${motivo}`);
     else if (p.erros.length === MAX_ERROS) p.erros.push('… mais erros omitidos.');
   }
 
@@ -274,7 +282,7 @@ export class JueriService {
       pf.lidos++;
       const nome = txt(pegar(f, 'nome_fantasia', 'razao_social', 'nome'));
       if (!nome) {
-        this.erro(pf, `Fornecedor ${f.id}: sem nome.`);
+        this.erro(pf, `Fornecedor ${f.id}`, 'sem nome');
         continue;
       }
       const doc = soDigitos(txt(pegar(f, 'cnpj', 'documento')));
@@ -401,7 +409,7 @@ export class JueriService {
           pecas += alvo;
         }
       } catch (e) {
-        this.erro(p, `Produto ${r.id} (${txt(r.referencia) ?? txt(r.descricao) ?? ''}): ${(e as Error).message}`);
+        this.erro(p, `Produto ${r.id} (${txt(r.referencia) ?? txt(r.descricao) ?? ''})`, (e as Error).message);
       }
     }
     if (op.atualizarEstoque) p.avisos.push(`${pecas} peça(s) no estoque da empresa, conforme o Jueri.`);
@@ -518,7 +526,7 @@ export class JueriService {
           if (!ja) await tx.insert(referencias).values({ pessoaId: id, nome: refNome, telefone: soDigitos(txt(pegar(r, 'referencia_celular', 'referencia_telefone'))) || null, relacao: 'Indicação (Jueri)' });
         }
       } catch (e) {
-        this.erro(pr, `Revendedor ${r.id}: ${(e as Error).message}`);
+        this.erro(pr, `Revendedor ${r.id}`, (e as Error).message);
       }
     }
 
@@ -546,7 +554,7 @@ export class JueriService {
         const gerente = pegar(r, 'fk_representante_gerente_id');
         if (gerente != null && String(gerente) !== String(r.id)) lideres.push([id, `rep:${gerente}`]);
       } catch (e) {
-        this.erro(prep, `Representante ${r.id}: ${(e as Error).message}`);
+        this.erro(prep, `Representante ${r.id}`, (e as Error).message);
       }
     }
 
@@ -578,7 +586,7 @@ export class JueriService {
           idJueri: `cli:${r.id}`,
         });
       } catch (e) {
-        this.erro(pcl, `Cliente ${r.id}: ${(e as Error).message}`);
+        this.erro(pcl, `Cliente ${r.id}`, (e as Error).message);
       }
     }
   }
@@ -605,7 +613,11 @@ export class JueriService {
           continue;
         }
         const repId = (ped.fk_revendedor_id != null ? revs.get(String(ped.fk_revendedor_id)) : undefined) ?? (ped.fk_representante_id != null ? reps.get(String(ped.fk_representante_id)) : undefined);
-        if (!repId) throw new Error('a revendedora deste pedido não foi importada (rode a etapa Pessoas antes)');
+        if (!repId) {
+          if (ped.fk_revendedor_id != null) throw new Error(`revendedor ${ped.fk_revendedor_id} do Jueri não está entre os importados (pode estar excluído lá, ou rode a etapa Pessoas)`);
+          if (ped.fk_representante_id != null) throw new Error(`representante ${ped.fk_representante_id} do Jueri não está entre os importados`);
+          throw new Error(ped.fk_cliente_id != null ? 'pedido feito para um cliente, sem revendedora' : 'pedido sem revendedora');
+        }
 
         // Junta itens do mesmo produto: a maleta tem uma linha por produto.
         const itens = new Map<string, { qtd: number; preco: number | null }>();
@@ -669,7 +681,7 @@ export class JueriService {
         }
         pm.criados++;
       } catch (e) {
-        this.erro(pm, `Pedido ${numero}: ${(e as Error).message}`);
+        this.erro(pm, `Pedido ${numero}`, (e as Error).message);
       }
     }
     pm.avisos.unshift(`${pecas} peça(s) em maletas abertas, R$ ${(valor / 100).toLocaleString('pt-BR', { minimumFractionDigits: 2 })} a preço de etiqueta.`);
@@ -730,7 +742,7 @@ export class JueriService {
         if (!pessoaId && pc.avisos.length < 50) pc.avisos.push(`Conta ${c.id}: sem revendedora/cliente ligada; entrou só com a descrição.`);
         total += valor;
       } catch (e) {
-        this.erro(pc, `Conta ${c.id}: ${(e as Error).message}`);
+        this.erro(pc, `Conta ${c.id}`, (e as Error).message);
       }
     }
     pc.avisos.splice(1, 0, `R$ ${(total / 100).toLocaleString('pt-BR', { minimumFractionDigits: 2 })} a receber em aberto trazidos.`);

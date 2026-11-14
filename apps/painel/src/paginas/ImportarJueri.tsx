@@ -13,7 +13,8 @@ const ETAPAS: [string, string, string][] = [
   ['financeiro', 'Contas a receber em aberto', ''],
 ];
 
-interface Parte { lidos: number; criados: number; atualizados: number; ignorados: number; erros: string[]; avisos: string[] }
+interface Parte { lidos: number; criados: number; atualizados: number; ignorados: number; falhas?: number; motivos?: Record<string, number>; erros: string[]; avisos: string[] }
+const falhas = (p: Parte) => p.falhas ?? p.erros.length;
 interface Execucao { id: string; simular: boolean; etapas: string[]; inicio: string; fim: string | null; situacao: 'rodando' | 'concluida' | 'falhou'; fase: string; erro: string | null; partes: Record<string, Parte>; estruturas: Record<string, string[]> }
 
 /** Migração direto da API do Jueri: simula, confere o relatório e só então grava. */
@@ -72,18 +73,24 @@ export function ImportarJueri() {
       </div>
       {iniciar.error && <div className="l4"><Erro erro={iniciar.error} /></div>}
       {ex && (
-        <div className={`l4 aviso ${ex.situacao === 'falhou' ? 'erro' : ex.situacao === 'rodando' ? '' : Object.values(ex.partes).some((p) => p.erros.length) ? 'alerta' : 'ok'}`}>
+        <div className={`l4 aviso ${ex.situacao === 'falhou' ? 'erro' : ex.situacao === 'rodando' ? '' : Object.values(ex.partes).some((p) => falhas(p) > 0) ? 'alerta' : 'ok'}`}>
           <b>{ex.simular ? 'Simulação' : 'Importação'} de {dataHora(ex.inicio)}:</b> {ex.fase}
           {ex.erro && <div>{ex.erro}</div>}
           {Object.keys(ex.partes).length > 0 && (
             <table className="tabela" style={{ marginTop: 8 }}>
               <thead><tr><th>Parte</th><th className="num">Lidos</th><th className="num">Novos</th><th className="num">Atualizados</th><th className="num">Já existiam</th><th className="num">Problemas</th></tr></thead>
-              <tbody>{Object.entries(ex.partes).map(([n, p]) => <tr key={n}><td>{n}</td><td className="num">{p.lidos}</td><td className="num">{p.criados}</td><td className="num">{p.atualizados}</td><td className="num">{p.ignorados}</td><td className="num">{p.erros.length}</td></tr>)}</tbody>
+              <tbody>{Object.entries(ex.partes).map(([n, p]) => <tr key={n}><td>{n}</td><td className="num">{p.lidos}</td><td className="num">{p.criados}</td><td className="num">{p.atualizados}</td><td className="num">{p.ignorados}</td><td className="num">{falhas(p)}</td></tr>)}</tbody>
             </table>
           )}
           {Object.entries(ex.partes).map(([n, p]) => (p.avisos.length || p.erros.length) ? (
-            <details key={n} style={{ marginTop: 6 }} open={p.erros.length > 0 && p.erros.length < 10}>
-              <summary>{n}: {p.avisos.length} aviso(s), {p.erros.length} problema(s)</summary>
+            <details key={n} style={{ marginTop: 6 }} open={falhas(p) > 0}>
+              <summary>{n}: {p.avisos.length} aviso(s), {falhas(p)} problema(s)</summary>
+              {p.motivos && Object.keys(p.motivos).length > 0 && (
+                <table className="tabela" style={{ margin: '6px 0' }}>
+                  <thead><tr><th>Motivo do problema</th><th className="num">Quantos</th></tr></thead>
+                  <tbody>{Object.entries(p.motivos).sort((a, b) => b[1] - a[1]).map(([m, q]) => <tr key={m}><td>{m}</td><td className="num">{q}</td></tr>)}</tbody>
+                </table>
+              )}
               <ul>{p.avisos.map((a, i) => <li key={`a${i}`}>{a}</li>)}{p.erros.map((e, i) => <li key={`e${i}`} style={{ color: 'var(--perigo, #b42318)' }}>{e}</li>)}</ul>
             </details>
           ) : null)}
