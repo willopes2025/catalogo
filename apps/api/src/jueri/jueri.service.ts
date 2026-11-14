@@ -12,7 +12,7 @@ import { cnpjValido, cpfValido, soDigitos } from '../comum/documentos';
 import { proximoCodigoInterno } from '../comum/codigos';
 import { categorias, empresas, importacoes, locaisEstoque, maletaItens, maletas, niveis, pessoas, produtos, referencias, titulos } from '../db/schema';
 import { hoje } from '../maletas/maletas.service';
-import { ativo, centavos, contaEmAberto, dataISO, estrutura, inteiro, pb, pedidoAberto, pegar, qtdEmAberto, txt, type Reg } from './mapear';
+import { ativo, centavos, extrairLista, umRegistro, contaEmAberto, dataISO, estrutura, inteiro, pb, pedidoAberto, pegar, qtdEmAberto, txt, type Reg } from './mapear';
 
 export const ETAPAS = ['cadastros', 'produtos', 'pessoas', 'maletas', 'financeiro'] as const;
 export type Etapa = (typeof ETAPAS)[number];
@@ -115,12 +115,11 @@ export class JueriService {
   private async todos(caminho: string, params: Record<string, string | number> = {}): Promise<Reg[]> {
     const out: Reg[] = [];
     for (let pagina = 1; pagina < 5000; pagina++) {
-      const j = await this.get<Reg | Reg[]>(caminho, { ...params, page: pagina, per_page: 100 });
-      if (Array.isArray(j)) return j;
-      const dados = (j.data as Reg[] | undefined) ?? [];
-      out.push(...dados);
+      const j = await this.get<unknown>(caminho, { ...params, page: pagina, per_page: 100 });
+      const { itens, proxima } = extrairLista(j);
+      out.push(...itens);
       if (this.atual) this.atual.fase = `Baixando ${caminho} do Jueri… ${out.length}`;
-      if (!j.next_page_url || !dados.length) break;
+      if (!proxima || !itens.length) break;
     }
     return out;
   }
@@ -131,7 +130,7 @@ export class JueriService {
     const out: Reg[] = [];
     for (const [i, r] of regs.entries()) {
       if (this.atual) this.atual.fase = `Baixando detalhes de ${caminho}… ${i + 1}/${regs.length}`;
-      out.push(pegar(r, campoObrigatorio) !== undefined ? r : await this.get<Reg>(`${caminho}/${r.id}`));
+      out.push(pegar(r, campoObrigatorio) !== undefined ? r : umRegistro(await this.get<unknown>(`${caminho}/${r.id}`)));
     }
     return out;
   }
@@ -139,10 +138,10 @@ export class JueriService {
   async testar() {
     if (!this.configurado) throw new BadRequestException('Preencha o ID do cliente e o token do Jueri.');
     try {
-      const cats = await this.get<Reg[]>('produto/categoria');
+      const cats = await this.todos('produto/categoria');
       const revs = await this.get<Reg>('revendedor', { per_page: 1 });
-      const total = (revs.totals as Reg | undefined)?.total ?? '?';
-      return { ok: true, mensagem: `Conectado ao Jueri: ${Array.isArray(cats) ? cats.length : 0} categoria(s) e ${total} revendedor(es).` };
+      const total = (revs?.totals as Reg | undefined)?.total ?? (revs?.total as number | undefined) ?? '?';
+      return { ok: true, mensagem: `Conectado ao Jueri: ${cats.length} categoria(s) e ${total} revendedor(es).` };
     } catch (e) {
       throw new BadRequestException((e as Error).message);
     }
@@ -182,9 +181,9 @@ export class JueriService {
     const dados: Record<string, Reg[]> = {};
     if (quer('cadastros')) {
       ex.fase = 'Baixando categorias, fornecedores e níveis…';
-      dados.categorias = await this.get<Reg[]>('produto/categoria');
+      dados.categorias = await this.todos('produto/categoria');
       dados.fornecedores = await this.detalhar('fornecedor', await this.todos('fornecedor'), 'cnpj');
-      dados.niveis = await this.get<Reg[]>('revendedor/nivel');
+      dados.niveis = await this.todos('revendedor/nivel');
     }
     if (quer('produtos')) {
       dados.produtos = await this.detalhar('produto', await this.todos('produto'), 'descricao');
@@ -202,10 +201,11 @@ export class JueriService {
       dados.pedidos = [];
       for (const [i, p] of lista.entries()) {
         ex.fase = `Baixando maletas abertas… ${i + 1}/${lista.length}`;
-        dados.pedidos.push(Array.isArray(p.itens) && (p.itens as Reg[]).every((it) => Object.keys(it).length > 2) ? p : await this.get<Reg>(`pedido/${p.id}`));
+        const itensLista = extrairLista(p.itens).itens;
+        dados.pedidos.push(itensLista.length && itensLista.every((it) => Object.keys(it).length > 2) ? p : umRegistro(await this.get<unknown>(`pedido/${p.id}`)));
       }
       ex.estruturas.pedido = estrutura(dados.pedidos);
-      ex.estruturas.pedidoItem = estrutura(dados.pedidos.flatMap((p) => (p.itens as Reg[]) ?? []), 10);
+      ex.estruturas.pedidoItem = estrutura(dados.pedidos.flatMap((p) => extrairLista(p.itens).itens), 10);
     }
     if (quer('financeiro')) {
       const todas = await this.todos('financeiro/contas_receber');
@@ -220,11 +220,11 @@ export class JueriService {
       await this.db.transaction(async (tx) => {
         const [local] = await tx.select().from(locaisEstoque).where(eq(locaisEstoque.id, op.localId));
         if (!local || local.tipo === 'maleta') throw new Error('Escolha um local de estoque válido (loja ou estoque central).');
-        if (quer('cadastros')) await this.gravarCadastros(tx, ex, dados);
-        if (quer('produtos')) await this.gravarProdutos(tx, ex, dados.produtos, op, usuarioId);
-        if (quer('pessoas')) await this.gravarPessoas(tx, ex, dados, op);
-        if (quer('maletas')) await this.gravarMaletas(tx, ex, dados.pedidos, local, usuarioId);
-        if (quer('financeiro')) await this.gravarContas(tx, ex, dados.contas, Number(dados.contasTotal?.[0]?.n ?? 0));
+        if (quer('cadastros')) await rotular('Cadastros', () => this.gravarCadastros(tx, ex, dados));
+        if (quer('produtos')) await rotular('Produtos', () => this.gravarProdutos(tx, ex, dados.produtos, op, usuarioId));
+        if (quer('pessoas')) await rotular('Pessoas', () => this.gravarPessoas(tx, ex, dados, op));
+        if (quer('maletas')) await rotular('Maletas', () => this.gravarMaletas(tx, ex, dados.pedidos, local, usuarioId));
+        if (quer('financeiro')) await rotular('Contas a receber', () => this.gravarContas(tx, ex, dados.contas, Number(dados.contasTotal?.[0]?.n ?? 0)));
         if (op.simular) throw new Simulacao();
       });
     } catch (e) {
@@ -299,7 +299,7 @@ export class JueriService {
       pn.lidos++;
       const nome = txt(n.nome);
       if (!nome) continue;
-      const faixas = Array.isArray(n.comissao_personalizada) ? (n.comissao_personalizada as Reg[]) : [];
+      const faixas = extrairLista(typeof n.comissao_personalizada === 'string' ? jsonOuNada(n.comissao_personalizada) : n.comissao_personalizada).itens;
       const unica = faixas.length === 1 ? pb(faixas[0].comissao_porcentagem) : null;
       if (faixas.length > 1) pn.avisos.push(`Nível ${nome}: comissão por faixas de venda no Jueri; aqui ficou a comissão padrão. Ajuste em Rede › Níveis e metas.`);
       if (Number(n.multiplicar_pontos ?? 1) > 1) pn.avisos.push(`Nível ${nome}: multiplica pontos por ${n.multiplicar_pontos} no Jueri (aqui os pontos seguem as regras de Pontos e prêmios).`);
@@ -329,7 +329,7 @@ export class JueriService {
       try {
         const descricao = txt(r.descricao);
         if (!descricao) throw new Error('sem descrição');
-        const tabela = Array.isArray(r.tipo_preco) ? (r.tipo_preco as Reg[]) : [];
+        const tabela = extrairLista(r.tipo_preco).itens;
         const precoDe = (re: RegExp) => centavos(pegar(tabela.find((t) => re.test(String(t.nome ?? ''))) ?? {}, 'pivot.preco', 'preco'));
         const preco = precoDe(/varejo/i) ?? centavos(pegar(tabela[0] ?? {}, 'pivot.preco', 'preco')) ?? centavos(pegar(r, 'preco', 'preco_varejo'));
         if (!preco || preco <= 0) throw new Error('sem preço de varejo');
@@ -610,7 +610,7 @@ export class JueriService {
         // Junta itens do mesmo produto: a maleta tem uma linha por produto.
         const itens = new Map<string, { qtd: number; preco: number | null }>();
         const faltam: string[] = [];
-        for (const it of (ped.itens as Reg[] | undefined) ?? []) {
+        for (const it of extrairLista(ped.itens).itens) {
           const qtd = qtdEmAberto(it);
           if (qtd <= 0) continue;
           const idProdJ = pegar(it, 'fk_produto_id', 'produto_id', 'produto.id');
@@ -734,6 +734,22 @@ export class JueriService {
       }
     }
     pc.avisos.splice(1, 0, `R$ ${(total / 100).toLocaleString('pt-BR', { minimumFractionDigits: 2 })} a receber em aberto trazidos.`);
+  }
+}
+
+function jsonOuNada(t: string): unknown {
+  try {
+    return JSON.parse(t);
+  } catch {
+    return [];
+  }
+}
+
+async function rotular<T>(etapa: string, fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn();
+  } catch (e) {
+    throw new Error(`${etapa}: ${(e as Error).message}`);
   }
 }
 

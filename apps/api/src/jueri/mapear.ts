@@ -94,3 +94,25 @@ export function qtdEmAberto(it: Reg): number {
   const saiu = (inteiro(pegar(it, 'quantidade_vendida')) ?? 0) + (inteiro(pegar(it, 'quantidade_devolvida')) ?? 0) + (inteiro(pegar(it, 'quantidade_perdida')) ?? 0);
   return Math.max(0, total - saiu);
 }
+
+/** Acha a lista dentro da resposta, venha ela solta, em data, em data.data ou noutra chave. */
+export function extrairLista(j: unknown): { itens: Reg[]; proxima: boolean } {
+  if (Array.isArray(j)) return { itens: j as Reg[], proxima: false };
+  if (!j || typeof j !== 'object') return { itens: [], proxima: false };
+  const o = j as Reg;
+  if (Array.isArray(o.data)) return { itens: o.data as Reg[], proxima: !!(o.next_page_url ?? (o.links as Reg | undefined)?.next) };
+  if (o.data && typeof o.data === 'object') return extrairLista(o.data);
+  const arr = Object.values(o).find((v) => Array.isArray(v) && v.every((x) => x && typeof x === 'object'));
+  if (arr) return { itens: arr as Reg[], proxima: false };
+  // Objeto indexado por id ({ "1": {...}, "2": {...} }).
+  const vals = Object.values(o);
+  if (vals.length && vals.every((v) => v && typeof v === 'object' && 'id' in (v as Reg))) return { itens: vals as Reg[], proxima: false };
+  return { itens: [], proxima: false };
+}
+
+/** Resposta de um registro só, solta ou dentro de data. */
+export function umRegistro(j: unknown): Reg {
+  const o = (j ?? {}) as Reg;
+  return o.data && typeof o.data === 'object' && !Array.isArray(o.data) && !('id' in o) ? (o.data as Reg) : o;
+}
+

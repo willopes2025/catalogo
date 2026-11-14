@@ -58,8 +58,8 @@ http
       const pagina = Number(url.searchParams.get('page') ?? 1);
       const lista = (dados, ultima = true) => ({ current_page: pagina, data: dados, next_page_url: ultima ? null : `http://localhost:3199${url.pathname}?page=${pagina + 1}`, per_page: 100 });
       const J = jueri;
-      if (rota === 'produto/categoria') return responder(res, 200, J.categorias);
-      if (rota === 'revendedor/nivel') return responder(res, 200, J.niveis);
+      if (rota === 'produto/categoria') return responder(res, 200, lista(J.categorias)); // na prática vem paginada, não lista simples
+      if (rota === 'revendedor/nivel') return responder(res, 200, { data: J.niveis });
       if (rota === 'fornecedor') return responder(res, 200, lista(J.fornecedores));
       if (rota === 'produto') return responder(res, 200, pagina === 1 ? lista([J.produtos[0]], false) : lista([{ id: 9002, fk_fornecedor_id: null }, J.produtos[2]]));
       const prod = rota.match(/^produto\/(\d+)$/);
@@ -69,7 +69,7 @@ http
       if (rota === 'cliente') return responder(res, 200, lista(J.clientes));
       if (rota === 'pedido') return responder(res, 200, lista(J.pedidos.map((p) => ({ id: p.id, codigo_pedido: p.codigo_pedido, status: 'Aberto', itens: [{ id: 1, '...': '...' }] }))));
       const ped = rota.match(/^pedido\/(\d+)$/);
-      if (ped) return responder(res, 200, J.pedidos.find((p) => String(p.id) === ped[1]));
+      if (ped) return responder(res, 200, { data: J.pedidos.find((p) => String(p.id) === ped[1]) });
       if (rota === 'financeiro/contas_receber') {
         // A primeira chamada recebe "muitas requisições": o importador deve esperar e tentar de novo.
         if (!J.limitou) {

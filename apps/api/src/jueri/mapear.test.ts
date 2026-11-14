@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { centavos, contaEmAberto, dataISO, estrutura, pedidoAberto, pegar, qtdEmAberto } from './mapear';
+import { extrairLista, umRegistro, centavos, contaEmAberto, dataISO, estrutura, pedidoAberto, pegar, qtdEmAberto } from './mapear';
 
 describe('leitura dos dados do Jueri', () => {
   it('dinheiro em número, texto com ponto ou com vírgula', () => {
@@ -36,5 +36,16 @@ describe('leitura dos dados do Jueri', () => {
     const e = estrutura([{ nome: 'Fulana', fisico: { cpf: '123' } }]);
     expect(e).toEqual(['fisico.cpf', 'nome']);
     expect(JSON.stringify(e)).not.toContain('Fulana');
+  });
+
+  it('acha a lista em qualquer formato de resposta', () => {
+    expect(extrairLista([{ id: 1 }]).itens).toHaveLength(1);
+    expect(extrairLista({ data: [{ id: 1 }], next_page_url: 'x' })).toEqual({ itens: [{ id: 1 }], proxima: true });
+    expect(extrairLista({ data: { data: [{ id: 2 }] } }).itens[0].id).toBe(2);
+    expect(extrairLista({ categorias: [{ id: 3 }] }).itens[0].id).toBe(3);
+    expect(extrairLista({ '1': { id: 1 }, '2': { id: 2 } }).itens).toHaveLength(2);
+    expect(extrairLista(null).itens).toEqual([]);
+    expect(umRegistro({ data: { id: 5 } }).id).toBe(5);
+    expect(umRegistro({ id: 6, data: 'x' }).id).toBe(6);
   });
 });
