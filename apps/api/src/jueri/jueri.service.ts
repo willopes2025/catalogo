@@ -268,8 +268,14 @@ export class JueriService {
     const comFoto = lista.map((r) => ({ r, urls: urlsDeFoto(r) })).filter((x) => x.urls.length);
     const total = comFoto.reduce((a, x) => a + x.urls.length, 0);
     const exemplo = comFoto[0]?.urls[0];
+    const soPadrao = lista.length - comFoto.length;
+    if (soPadrao) pf.avisos.push(`${soPadrao} produto(s) sem foto no Jueri (ou só com a imagem padrão "sem foto", que não é baixada).`);
     pf.avisos.push(`${comFoto.length} produto(s) com foto no Jueri, ${total} foto(s) ao todo.${exemplo ? ` Endereço de exemplo: ${exemplo}` : ''}`);
-    const naoEntendidas = lista.filter((r) => !urlsDeFoto(r).length && (txt(typeof r.imagem === 'string' ? r.imagem : null) || (Array.isArray(r.fotos_adicionais) && r.fotos_adicionais.length)));
+    const naoEntendidas = lista.filter((r) => {
+      if (urlsDeFoto(r).length) return false;
+      const img = typeof r.imagem === 'string' ? r.imagem.trim() : '';
+      return (img && !IMAGEM_PADRAO.test(img)) || (Array.isArray(r.fotos_adicionais) && r.fotos_adicionais.some((f) => typeof f !== 'string' || !IMAGEM_PADRAO.test(f)));
+    });
     if (naoEntendidas.length) pf.avisos.push(`${naoEntendidas.length} produto(s) com foto num formato não reconhecido. Exemplo: ${JSON.stringify(naoEntendidas[0].imagem ?? naoEntendidas[0].fotos_adicionais).slice(0, 150)}`);
     if (simular) {
       pf.lidos = comFoto.length;
@@ -913,6 +919,9 @@ export class JueriService {
   }
 }
 
+/** Imagem genérica que o Jueri mostra quando o produto não tem foto ("foto-padrao.jpg"): não é foto da peça. */
+const IMAGEM_PADRAO = /foto[-_]?padr[aã]o|sem[-_]?(foto|imagem)|no[-_]?(image|photo)|placeholder|default[-_.]/i;
+
 /** Endereços das fotos de um produto do Jueri: principal primeiro, depois as adicionais, sem repetir. */
 export function urlsDeFoto(r: Reg): string[] {
   const out: string[] = [];
@@ -922,7 +931,7 @@ export function urlsDeFoto(r: Reg): string[] {
       if (!t) return;
       if (t.startsWith('[') || t.startsWith('{')) return add(jsonOuNada(t));
       const url = /^https?:\/\//i.test(t) ? t : t.startsWith('//') ? `https:${t}` : t.startsWith('/') ? `https://jueri.com.br${t}` : null;
-      if (url && !out.includes(url)) out.push(url);
+      if (url && !IMAGEM_PADRAO.test(url) && !out.includes(url)) out.push(url);
     } else if (Array.isArray(v)) v.forEach(add);
     else if (v && typeof v === 'object') add(pegar(v as Reg, 'url', 'link', 'imagem', 'caminho', 'src', 'arquivo'));
   };

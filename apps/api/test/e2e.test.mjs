@@ -907,6 +907,7 @@ test('Jueri pela API: testa a conexão, simula sem gravar, importa tudo e repeti
   assert.equal(img.headers.get('content-type'), 'image/webp');
   assert.equal((await fetch(API + '/fotos/..%2F..%2Fetc%2Fpasswd')).status, 404, 'só nomes de foto válidos');
   assert.equal(ex.partes['Fotos'].criados, 2);
+  assert.equal((await ok('GET', '/produtos/codigo/7899990090027')).fotos.length, 0, 'imagem padrão "sem foto" do Jueri não vira foto');
   assert.equal(ex.partes['Fotos'].falhas, 1);
   assert.equal(p.camposExtras['Número da peça'], 'P-77');
   const cat = (await ok('GET', '/produtos/categorias')).find((c) => c.id === p.categoriaId);
