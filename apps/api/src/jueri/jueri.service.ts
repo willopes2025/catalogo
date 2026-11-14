@@ -11,7 +11,7 @@ import { SegredosService } from '../segredos/segredos.service';
 import { ConfiguracoesService } from '../configuracoes/configuracoes.service';
 import { cnpjValido, cpfValido, soDigitos } from '../comum/documentos';
 import { proximoCodigoInterno } from '../comum/codigos';
-import { categorias, empresas, importacoes, locaisEstoque, maletaItens, maletas, niveis, pessoas, produtos, referencias, titulos } from '../db/schema';
+import { acertos, categorias, empresas, importacoes, locaisEstoque, maletaItens, maletas, movimentos, niveis, pessoas, produtos, referencias, titulos } from '../db/schema';
 import { hoje } from '../maletas/maletas.service';
 import { ArquivosService } from '../arquivos/arquivos.service';
 import { ativo, centavos, primeiroCampo, extrairLista, umRegistro, contaEmAberto, dataISO, estrutura, inteiro, pb, pedidoAberto, pegar, qtdEmAberto, txt, type Reg } from './mapear';
@@ -246,6 +246,42 @@ export class JueriService {
     }
   }
 
+  /** Maleta trazida do Jueri que ninguém usou aqui: sem acerto, sem pré-baixa e sem movimento além da migração. */
+  private async intocada(tx: Tx, maletaId: string) {
+    const [m] = await tx.select({ prebaixa: maletas.prebaixaEm }).from(maletas).where(eq(maletas.id, maletaId));
+    if (m?.prebaixa) return false;
+    const [a] = await tx.select({ n: sql<number>`count(*)::int` }).from(acertos).where(eq(acertos.maletaId, maletaId));
+    if (a.n > 0) return false;
+    const [mv] = await tx
+      .select({ n: sql<number>`count(*)::int` })
+      .from(movimentos)
+      .where(and(eq(movimentos.referenciaId, maletaId), sql`coalesce(${movimentos.motivo}, '') not in ('Migração do Jueri', 'Atualização pelo Jueri')`));
+    return mv.n === 0;
+  }
+
+  /** Deixa as peças da maleta iguais às do pedido no Jueri. Devolve se algo mudou. */
+  private async sincronizarItens(tx: Tx, maletaId: string, localId: string, desejado: Map<string, { qtd: number; preco: number | null; custo: number | null }>, usuarioId: string) {
+    const atuais = await tx.select().from(maletaItens).where(eq(maletaItens.maletaId, maletaId));
+    const porProduto = new Map(atuais.map((i) => [i.produtoId, i]));
+    let mudou = false;
+    for (const id of new Set([...porProduto.keys(), ...desejado.keys()])) {
+      const atual = porProduto.get(id);
+      const quer = desejado.get(id);
+      const dif = (quer?.qtd ?? 0) - (atual?.enviada ?? 0);
+      if (dif === 0) continue;
+      mudou = true;
+      const mov = { produtoId: id, quantidade: Math.abs(dif), motivo: 'Atualização pelo Jueri', referenciaTipo: 'maleta', referenciaId: maletaId, usuarioId };
+      if (dif > 0) await this.estoque.mover(tx, { ...mov, origemId: null, destinoId: localId, tipo: 'maleta_envio' });
+      else await this.estoque.mover(tx, { ...mov, origemId: localId, destinoId: null, tipo: 'ajuste' });
+      if (!atual) {
+        const [prod] = await tx.select({ preco: produtos.preco, custo: produtos.custo }).from(produtos).where(eq(produtos.id, id));
+        await tx.insert(maletaItens).values({ maletaId, produtoId: id, preco: quer!.preco && quer!.preco > 0 ? quer!.preco : prod.preco, custo: quer!.custo && quer!.custo > 0 ? quer!.custo : prod.custo, enviada: quer!.qtd });
+      } else if (!quer) await tx.delete(maletaItens).where(eq(maletaItens.id, atual.id));
+      else await tx.update(maletaItens).set({ enviada: quer.qtd }).where(eq(maletaItens.id, atual.id));
+    }
+    return mudou;
+  }
+
   private niveisCache: Map<string, string> | null = null;
   /** Nível pelo nome (o Jueri manda o nível da revendedora por nome); cria se não existir. */
   private async nivelPorNome(tx: Tx, nome: string | null): Promise<string | null> {
@@ -285,6 +321,8 @@ export class JueriService {
     const prods = await this.mapa(this.db as unknown as Tx, produtos, 'prod:');
     let feitos = 0;
     const fila = [...comFoto];
+    // A mesma foto pode servir a vários produtos: baixa uma vez só, mesmo com downloads em paralelo.
+    const baixando = new Map<string, Promise<string>>();
     const trabalhar = async () => {
       for (let x = fila.shift(); x; x = fila.shift()) {
         pf.lidos++;
@@ -303,8 +341,11 @@ export class JueriService {
             continue;
           }
           try {
-            locais.push(await this.baixarFoto(url));
-            pf.criados++;
+            const repetida = baixando.has(url);
+            if (!repetida) baixando.set(url, this.baixarFoto(url));
+            locais.push(await baixando.get(url)!);
+            if (repetida) pf.ignorados++;
+            else pf.criados++;
           } catch (e) {
             this.erro(pf, `Produto ${x.r.id}`, `foto não baixada: ${(e as Error).message}`);
           }
@@ -715,16 +756,15 @@ export class JueriService {
     let pecas = 0;
     let valor = 0;
     let comissaoDiferente = 0;
+    const abertosJ = new Set<string>();
+    const mexidas: number[] = [];
     for (const ped of pedidos) {
       pm.lidos++;
       const numero = pegar(ped, 'codigo_pedido', 'id');
       try {
         const idj = `ped:${ped.id}`;
-        const [ja] = await tx.select({ id: maletas.id }).from(maletas).where(eq(maletas.idJueri, idj));
-        if (ja) {
-          pm.ignorados++;
-          continue;
-        }
+        abertosJ.add(idj); // continua aberto no Jueri (mesmo que dê problema abaixo, não é encerrado aqui)
+        const [ja] = await tx.select({ id: maletas.id, numero: maletas.numero, localId: maletas.localId, status: maletas.status }).from(maletas).where(eq(maletas.idJueri, idj));
         const repId = (ped.fk_revendedor_id != null ? revs.get(String(ped.fk_revendedor_id)) : undefined) ?? (ped.fk_representante_id != null ? reps.get(String(ped.fk_representante_id)) : undefined);
         if (!repId) {
           if (ped.fk_revendedor_id != null) throw new Error(`revendedor ${ped.fk_revendedor_id} do Jueri não está entre os importados (pode estar excluído lá, ou rode a etapa Pessoas)`);
@@ -757,7 +797,25 @@ export class JueriService {
         if (faltam.length) throw new Error(`produto(s) não encontrados: ${faltam.slice(0, 10).join(', ')}`);
         if (!itens.size) {
           pm.ignorados++;
-          pm.avisos.push(`Pedido ${numero}: sem peças em aberto; não virou maleta.`);
+          if (!ja) pm.avisos.push(`Pedido ${numero}: sem peças em aberto; não virou maleta.`);
+          continue;
+        }
+        // Já trazida antes: se ninguém mexeu nela aqui, acompanha o Jueri (trocas, peças incluídas ou retiradas).
+        if (ja) {
+          if (ja.status !== 'aberta') {
+            pm.ignorados++;
+            continue;
+          }
+          if (!(await this.intocada(tx, ja.id))) {
+            pm.ignorados++;
+            mexidas.push(ja.numero);
+            continue;
+          }
+          const mudou = await this.sincronizarItens(tx, ja.id, ja.localId, itens, usuarioId);
+          await tx.update(maletas).set({ dataLimite: dataISO(ped.data_acerto) ?? undefined }).where(eq(maletas.id, ja.id));
+          if (mudou) pm.atualizados++;
+          else pm.ignorados++;
+          for (const it of itens.values()) pecas += it.qtd;
           continue;
         }
 
@@ -797,6 +855,28 @@ export class JueriService {
         this.erro(pm, `Pedido ${numero}`, (e as Error).message);
       }
     }
+    // Maletas trazidas antes que não estão mais abertas no Jueri (acertadas ou canceladas lá).
+    const antigas = await tx.select({ id: maletas.id, numero: maletas.numero, localId: maletas.localId, obs: maletas.observacaoInterna, j: maletas.idJueri }).from(maletas).where(and(like(maletas.idJueri, 'ped:%'), eq(maletas.status, 'aberta')));
+    let encerradas = 0;
+    if (!pedidos.length && antigas.length) {
+      pm.avisos.push('O Jueri não devolveu nenhuma maleta aberta: por segurança, nenhuma maleta trazida antes foi encerrada.');
+    } else {
+      for (const m of antigas) {
+        if (m.j && abertosJ.has(m.j)) continue;
+        if (!(await this.intocada(tx, m.id))) {
+          pm.avisos.push(`Maleta nº ${m.numero}: não está mais aberta no Jueri, mas foi usada aqui. Confira e acerte à mão.`);
+          continue;
+        }
+        const its = await tx.select().from(maletaItens).where(eq(maletaItens.maletaId, m.id));
+        for (const it of its) {
+          if (it.enviada > 0) await this.estoque.mover(tx, { produtoId: it.produtoId, origemId: m.localId, destinoId: null, quantidade: it.enviada, tipo: 'ajuste', motivo: 'Acertada no Jueri antes da virada', referenciaTipo: 'maleta', referenciaId: m.id, usuarioId });
+        }
+        await tx.update(maletas).set({ status: 'cancelada', observacaoInterna: [m.obs, 'Encerrada: foi acertada ou cancelada no Jueri antes da virada.'].filter(Boolean).join('\n') }).where(eq(maletas.id, m.id));
+        encerradas++;
+      }
+    }
+    if (encerradas) pm.avisos.push(`${encerradas} maleta(s) trazidas antes foram acertadas no Jueri desde então: encerradas aqui.`);
+    if (mexidas.length) pm.avisos.push(`${mexidas.length} maleta(s) já usadas aqui não foram alteradas pelo Jueri (nº ${mexidas.slice(0, 20).join(', ')}).`);
     pm.avisos.unshift(`${pecas} peça(s) em maletas abertas, R$ ${(valor / 100).toLocaleString('pt-BR', { minimumFractionDigits: 2 })} a preço de etiqueta.`);
     if (comissaoDiferente) pm.avisos.push(`${comissaoDiferente} pedido(s) com comissão no Jueri diferente da regra daqui; no acerto vale a regra daqui (cadastro, nível ou padrão).`);
   }
@@ -824,6 +904,7 @@ export class JueriService {
     }
     const ligacao = { campo: 0, documento: 0, tipo: 0, nome: 0, nenhuma: 0 };
     const vistos = new Set<string>();
+    const vigentes = new Set<string>();
     let total = 0;
     let zeradas = 0;
     let repetidas = 0;
@@ -895,6 +976,7 @@ export class JueriService {
           origemTipo: 'jueri',
           idJueri: idj,
         };
+        vigentes.add(idj);
         const [ja] = await tx.select({ id: titulos.id, status: titulos.status }).from(titulos).where(eq(titulos.idJueri, idj));
         if (ja) {
           if (ja.status === 'aberto' || ja.status === 'protestado') {
@@ -914,6 +996,26 @@ export class JueriService {
     pc.avisos.push(
       `Ligação com a pessoa: ${ligacao.campo + ligacao.documento + ligacao.tipo} pelo cadastro do Jueri, ${ligacao.nome} pelo nome, ${ligacao.nenhuma} sem pessoa (entram só com a descrição e o nome do contato).`,
     );
+    // Contas trazidas antes que não estão mais em aberto no Jueri (pagas ou canceladas lá).
+    if (contas.length) {
+      const antigas = await tx
+        .select({ id: titulos.id, j: titulos.idJueri, desc: titulos.descricao, pago: titulos.valorPago, cobranca: titulos.cobrancaExternaId })
+        .from(titulos)
+        .where(and(like(titulos.idJueri, 'cr:%'), eq(titulos.status, 'aberto')));
+      let baixadas = 0;
+      let conferir = 0;
+      for (const t of antigas) {
+        if (vigentes.has(t.j!)) continue;
+        if (t.pago || t.cobranca) {
+          conferir++;
+          continue;
+        }
+        await tx.update(titulos).set({ status: 'cancelado', descricao: `${t.desc} (baixada no Jueri antes da virada)` }).where(eq(titulos.id, t.id));
+        baixadas++;
+      }
+      if (baixadas) pc.avisos.push(`${baixadas} conta(s) trazidas antes foram pagas ou canceladas no Jueri desde então: encerradas aqui.`);
+      if (conferir) pc.avisos.push(`${conferir} conta(s) não estão mais em aberto no Jueri, mas já têm pagamento ou cobrança aqui: confira no Financeiro.`);
+    }
     if (zeradas) pc.avisos.push(`${zeradas} conta(s) sem saldo a receber (valor zero ou já paga): não entram.`);
     if (repetidas) pc.avisos.push(`${repetidas} linha(s) repetidas na resposta do Jueri: entraram uma vez só.`);
   }

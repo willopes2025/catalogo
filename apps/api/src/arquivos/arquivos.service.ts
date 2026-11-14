@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { mkdir, rename, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
@@ -36,7 +36,8 @@ export class ArquivosService {
     if (!ext) throw new Error(`formato ${tipo || 'desconhecido'} não é imagem aceita`);
     await mkdir(this.dirFotos, { recursive: true });
     const nome = this.nomeDe(origem, ext);
-    const tmp = join(this.dirFotos, `.${nome}.tmp`);
+    // Nome temporário único: dois produtos com a mesma foto podem baixá-la ao mesmo tempo.
+    const tmp = join(this.dirFotos, `.${nome}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`);
     await writeFile(tmp, conteudo);
     await rename(tmp, join(this.dirFotos, nome));
     return `/api/fotos/${nome}`;

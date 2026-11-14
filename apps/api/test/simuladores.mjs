@@ -56,6 +56,17 @@ http
     recebidos.push({ metodo: req.method, caminho: url.pathname + url.search, headers: req.headers, corpo });
 
     if (url.pathname === '/__recebidos') return responder(res, 200, recebidos);
+    // Simula o Jueri sendo usado até a virada.
+    if (url.pathname === '/__jueri/virada') {
+      const passo = url.searchParams.get('passo');
+      if (passo === '1') {
+        jueri.pedidos[0].itens.push({ id: 9, fk_produto_id: 9002, quantidade: 1 }); // troca: mais uma peça na maleta 45
+        jueri.pedidos.push({ id: 3004, codigo_pedido: 47, status: 'Aberto', fk_revendedor_id: 501, data_criacao: '2026-11-20 10:00', itens: [{ id: 10, fk_produto_id: 9001, quantidade: 1 }] });
+        jueri.contas = jueri.contas.filter((c) => c.id !== 1); // parcela paga no Jueri
+      }
+      if (passo === '2') jueri.pedidos = jueri.pedidos.filter((p) => p.id !== 3001); // maleta 45 acertada no Jueri
+      return responder(res, 200, { ok: true });
+    }
     // Fotos do Jueri: PNG e JPEG mínimos de verdade; "quebrada" responde 404.
     if (url.pathname === '/jueri-img/a.png') { res.writeHead(200, { 'content-type': 'application/octet-stream' }); return res.end(Buffer.from('89504e470d0a1a0a0000000d49484452000000030000000308060000005628b5bf0000000970485973000003e8000003e801b57b526b0000000e49444154789c63f88f0418707200bb8723dd93f9e43c0000000049454e44ae426082', 'hex')); }
     if (url.pathname === '/jueri-img/b.jpg') { res.writeHead(200, { 'content-type': 'image/jpeg' }); return res.end(Buffer.from('ffd8ffdb00430006040506050406060506070706080a100a0a09090a140e0f0c1017141818171416161a1d251f1a1b231c1616202c20232627292a29191f2d302d283025282928ffdb0043010707070a080a130a0a13281a161a2828282828282828282828282828282828282828282828282828282828282828282828282828282828282828282828282828ffc00011080004000403012200021101031101ffc4001500010100000000000000000000000000000006ffc40014100100000000000000000000000000000000ffc4001501010100000000000000000000000000000005ffc40014110100000000000000000000000000000000ffda000c03010002110311003f00b8005b7fffd9', 'hex')); }

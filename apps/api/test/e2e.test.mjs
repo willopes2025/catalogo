@@ -959,6 +959,41 @@ test('Jueri pela API: testa a conexão, simula sem gravar, importa tudo e repeti
   assert.ok(hist.some((h) => h.tipo === 'jueri:api'));
 });
 
+test('Jueri na virada: maletas e contas trazidas antes acompanham o que mudou no Jueri', async () => {
+  const local = (await ok('GET', '/estoque/locais')).find((l) => l.tipo === 'deposito');
+  const todas = ['cadastros', 'produtos', 'pessoas', 'maletas', 'financeiro'];
+  const esperar = async () => {
+    for (let i = 0; i < 100; i++) {
+      const s = (await ok('GET', '/jueri')).execucao;
+      if (s.situacao !== 'rodando') return s;
+      await new Promise((r) => setTimeout(r, 200));
+    }
+    throw new Error('importação não terminou');
+  };
+  const rev = (await ok('GET', '/pessoas?tipo=representante&busca=Revendedora API Jueri')).itens[0];
+  const maletaId = (await ok('GET', `/pessoas/${rev.id}`)).maletas[0].id;
+
+  await fetch('http://localhost:3199/__jueri/virada?passo=1', { method: 'POST' });
+  await ok('POST', '/jueri/importar', { simular: false, etapas: todas, localId: local.id });
+  let ex = await esperar();
+  assert.equal(ex.situacao, 'concluida', ex.erro);
+  assert.equal(ex.partes['Maletas abertas'].atualizados, 1, 'troca feita no Jueri chega na maleta');
+  assert.equal(ex.partes['Maletas abertas'].criados, 1, 'maleta nova do Jueri');
+  let m = await ok('GET', `/maletas/${maletaId}`);
+  assert.equal(m.itens.reduce((a, i) => a + i.enviada, 0), 4);
+  const fin = await ok('GET', `/pessoas/${rev.id}`);
+  assert.ok(fin.titulos.some((t) => t.valor === 15000 && t.status === 'cancelado'), 'parcela paga no Jueri encerrada aqui');
+  assert.ok(ex.partes['Contas a receber'].avisos.some((a) => a.startsWith('1 conta(s) trazidas antes foram pagas')));
+
+  await fetch('http://localhost:3199/__jueri/virada?passo=2', { method: 'POST' });
+  await ok('POST', '/jueri/importar', { simular: false, etapas: ['maletas'], localId: local.id });
+  ex = await esperar();
+  m = await ok('GET', `/maletas/${maletaId}`);
+  assert.equal(m.status, 'cancelada', 'maleta acertada no Jueri é encerrada aqui');
+  const rast = await ok('GET', '/estoque/rastreio/7899990090027');
+  assert.ok(!rast.porLocal.some((l) => l.tipo === 'maleta' && l.quantidade > 0 && l.nome.includes(`nº ${m.numero} `)), 'peças saem do local da maleta');
+});
+
 // Este fica por último: apaga os dados de teste.
 test('implantação: apagar dados de teste exige APAGAR e mantém o que é configuração', async () => {
   assert.equal((await chamar('POST', '/implantacao/apagar-dados-de-teste', { confirmacao: 'apagar' })).status, 400);
