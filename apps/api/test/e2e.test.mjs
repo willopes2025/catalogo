@@ -900,11 +900,11 @@ test('Jueri pela API: testa a conexão, simula sem gravar, importa tudo e repeti
   assert.equal(p.custos.insumos, 150);
   // Fotos: as duas imagens de verdade foram baixadas e guardadas; a "foto" que é HTML foi recusada.
   assert.equal(p.fotos.length, 2);
-  assert.ok(p.fotos.every((f) => /^\/api\/fotos\/[a-f0-9]{40}\.(png|jpg)$/.test(f)));
-  assert.ok(p.fotos[0].endsWith('.png'), 'principal primeiro, tipo pelo conteúdo');
+  assert.ok(p.fotos.every((f) => /^\/api\/fotos\/[a-f0-9]{40}\.webp$/.test(f)), 'convertidas para WebP leve');
   const img = await fetch(API.replace(/\/api$/, '') + p.fotos[0]);
   assert.equal(img.status, 200);
   assert.match(img.headers.get('cache-control'), /immutable/);
+  assert.equal(img.headers.get('content-type'), 'image/webp');
   assert.equal((await fetch(API + '/fotos/..%2F..%2Fetc%2Fpasswd')).status, 404, 'só nomes de foto válidos');
   assert.equal(ex.partes['Fotos'].criados, 2);
   assert.equal(ex.partes['Fotos'].falhas, 1);

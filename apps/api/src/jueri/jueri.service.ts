@@ -1,4 +1,5 @@
 import { randomBytes } from 'node:crypto';
+import sharp from 'sharp';
 import { BadRequestException, Inject, Injectable, Logger } from '@nestjs/common';
 import { and, eq, isNull, like, sql } from 'drizzle-orm';
 import { gerarSlug, somarDias } from '@aritana/regras';
@@ -323,9 +324,17 @@ export class JueriService {
       const buf = Buffer.from(await res.arrayBuffer());
       if (buf.length > 15_000_000) throw new Error('arquivo grande demais');
       // O tipo vem do conteúdo do arquivo (cabeçalho do servidor e extensão podem mentir).
-      const tipo = tipoPeloConteudo(buf);
-      if (!tipo) throw new Error('o arquivo não é uma imagem (JPG, PNG, WebP ou GIF)');
-      return this.arquivos.salvarFoto(url, buf, tipo);
+      if (!tipoPeloConteudo(buf)) throw new Error('o arquivo não é uma imagem (JPG, PNG, WebP ou GIF)');
+      // Reduz para no máximo 1200 px em WebP: ~100 KB por foto, sem perda visível no catálogo.
+      const leve = await sharp(buf, { failOn: 'error' })
+        .rotate()
+        .resize({ width: 1200, height: 1200, fit: 'inside', withoutEnlargement: true })
+        .webp({ quality: 80 })
+        .toBuffer()
+        .catch(() => {
+          throw new Error('a imagem está corrompida');
+        });
+      return this.arquivos.salvarFoto(url, leve, 'image/webp');
     }
   }
 
