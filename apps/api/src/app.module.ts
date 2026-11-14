@@ -47,6 +47,8 @@ import { ImplantacaoController } from './implantacao/implantacao.controller';
 import { PortalController } from './portal/portal.controller';
 import { CrmController } from './crm/crm.controller';
 import { PontosController } from './pontos/pontos.controller';
+import { FormulariosController } from './formularios/formularios.controller';
+import { MarketingController } from './marketing/marketing.controller';
 import { PontosService } from './pontos/pontos.service';
 
 const segredo = process.env.JWT_SECRET;
@@ -90,6 +92,8 @@ if (!segredo || (process.env.NODE_ENV === 'production' && segredo.length < 32)) 
     PortalController,
     CrmController,
     PontosController,
+    FormulariosController,
+    MarketingController,
   ],
   providers: [
     SegredosService,

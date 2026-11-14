@@ -4,7 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import { api, atualizarUsuario, lerSessao, pode, salvarSessao } from '../api';
 
 /** Rotas já construídas nesta etapa; as demais abrem a página "em construção". */
-const ROTAS: Record<string, string> = { inicio: '/', rede: '/rede', cadastros: '/cadastros', produtos: '/produtos', estoque: '/estoque', maletas: '/maletas', vendas: '/vendas', lojas: '/lojas', financeiro: '/financeiro', fiscal: '/fiscal', relatorios: '/relatorios', configuracoes: '/configuracoes', suporte: '/suporte', garantia: '/garantia', comissoes: '/comissoes', crm: '/crm', pontos: '/pontos' };
+const ROTAS: Record<string, string> = { inicio: '/', rede: '/rede', cadastros: '/cadastros', produtos: '/produtos', estoque: '/estoque', maletas: '/maletas', vendas: '/vendas', lojas: '/lojas', financeiro: '/financeiro', fiscal: '/fiscal', relatorios: '/relatorios', configuracoes: '/configuracoes', suporte: '/suporte', garantia: '/garantia', comissoes: '/comissoes', crm: '/crm', pontos: '/pontos', formularios: '/formularios', marketing: '/marketing' };
 
 export function Layout() {
   const navegar = useNavigate();
@@ -19,7 +19,7 @@ export function Layout() {
         </div>
         <nav aria-label="Módulos">
           {MODULOS.filter((m) => m.chave === 'suporte' || pode(m.chave, 'ver')).map((m) =>
-            m.versao === 2 ? (
+            (m.versao as number) === 2 ? (
               <span key={m.chave} className="item" title="Entra na Versão 2">
                 {m.nome} <span className="v2">V2</span>
               </span>

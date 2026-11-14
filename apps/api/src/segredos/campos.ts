@@ -57,6 +57,16 @@ export const INTEGRACOES: Integracao[] = [
     ],
   },
   {
+    chave: 'meta_ads',
+    nome: 'Meta Ads (Facebook e Instagram)',
+    descricao: 'Traz o valor gasto em cada campanha para calcular o custo por candidata em Marketing.',
+    ondeConseguir: 'No Gerenciador de Negócios da Aritana: crie um usuário do sistema com permissão de leitura de anúncios (ads_read), gere o token e copie o número da conta de anúncios (act_...).',
+    campos: [
+      { nome: 'META_ADS_CONTA', rotulo: 'Conta de anúncios', ajuda: 'Ex.: act_1234567890' },
+      { nome: 'META_ADS_TOKEN', rotulo: 'Token de acesso', secreto: true },
+    ],
+  },
+  {
     chave: 'assertiva',
     nome: 'Assertiva (consulta de CPF)',
     descricao: 'Preenche o cadastro da representante pelo CPF.',

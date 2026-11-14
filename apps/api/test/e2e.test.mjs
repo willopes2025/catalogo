@@ -599,6 +599,13 @@ test('revisão: ninguém se dá mais acesso do que tem', async () => {
   token = salvo;
 });
 
+test('revisão: valor repetido onde o banco não aceita vira 409 com mensagem, não erro inesperado', async () => {
+  const p = (await ok('GET', '/produtos')).itens[0];
+  const r = await chamar('POST', '/produtos', { referencia: 'DUP-1', descricao: 'Duplicado', codigoBarras: p.codigoBarras, preco: 1000, custo: 500 });
+  assert.equal(r.status, 409);
+  assert.match(r.dados.mensagem, /Já existe/);
+});
+
 test('revisão: data impossível e local de maleta são recusados', async () => {
   const r = await chamar('POST', '/financeiro/titulos', { empresaId: (await ok('GET', '/empresas'))[0].id, tipo: 'pagar', descricao: 'Teste', valor: 1000, vencimento: '2026-02-31' });
   assert.equal(r.status, 400);
@@ -763,6 +770,79 @@ test('gamificação: score, pontos automáticos sem duplicar, prêmio, resgate e
   assert.ok(Array.isArray(rk));
   assert.ok(Array.isArray(await ok('GET', '/pontos/niveis/sugestoes')));
   assert.equal((await chamar('GET', '/pontos/ranking?mes=2026-13')).status, 400);
+});
+
+test('formulários: monta, publica, valida, resume o NPS e cadastra cliente sem duplicar', async () => {
+  const modelos = await ok('GET', '/formularios/modelos');
+  const nps = modelos.find((m) => m.chave === 'nps');
+  const semNome = await chamar('POST', '/formularios', { ...modelos.find((m) => m.chave === 'cliente'), campos: [{ id: 'a', tipo: 'texto', rotulo: 'A', obrigatorio: true }] });
+  assert.equal(semNome.status, 400, 'cadastrar cliente exige pergunta de nome e de telefone');
+  assert.equal((await chamar('POST', '/formularios', { titulo: 'Ruim', campos: [{ id: 'x', tipo: 'escolha', rotulo: 'X', opcoes: ['só uma'] }] })).status, 400);
+  const f = await ok('POST', '/formularios', { ...nps, slug: 'pesquisa-loja' });
+  assert.equal(f.slug, 'pesquisa-loja');
+  const f2 = await ok('POST', '/formularios', { ...nps, slug: 'pesquisa-loja' });
+  assert.equal(f2.slug, 'pesquisa-loja-2', 'endereço repetido ganha sufixo');
+  const cad = await ok('POST', '/formularios', modelos.find((m) => m.chave === 'cliente'));
+
+  const salvo = token;
+  token = '';
+  const pub = await ok('GET', '/publico/formularios/pesquisa-loja');
+  assert.equal(pub.acao, undefined, 'a página pública não mostra o que acontece por trás');
+  const erro = await chamar('POST', '/publico/formularios/pesquisa-loja', { respostas: { nota: 11 } });
+  assert.equal(erro.status, 400);
+  assert.ok(erro.dados.campos.nota);
+  for (const n of [10, 9, 8, 3]) await ok('POST', '/publico/formularios/pesquisa-loja', { respostas: { nota: n, onde: 'Na loja' }, origem: { utm_campaign: 'novembro', hack: 'x' } });
+  assert.equal((await chamar('POST', `/publico/formularios/${cad.slug}`, { respostas: { nome: 'Cliente Form', telefone: '27988887777' } })).status, 400, 'sem a autorização LGPD');
+  await ok('POST', `/publico/formularios/${cad.slug}`, { respostas: { nome: 'Cliente Formulário', telefone: '(27) 98888-7777', gosta: ['Anéis'] }, consentimento: true });
+  await ok('POST', `/publico/formularios/${cad.slug}`, { respostas: { nome: 'Cliente Formulário', telefone: '27988887777', email: 'cli@exemplo.com' }, consentimento: true });
+  token = salvo;
+
+  const r = await ok('GET', `/formularios/${f.id}/respostas`);
+  assert.equal(r.total, 4);
+  const notas = r.resumo.find((x) => x.campo === 'nota');
+  assert.equal(notas.nps, 25, '2 promotores, 1 neutro, 1 detrator');
+  assert.equal(r.resumo.find((x) => x.campo === 'onde').contagem['Na loja'], 4);
+  assert.deepEqual(Object.keys(r.linhas[0].origem), ['utm_campaign'], 'só guarda utm conhecidos');
+  const clientes = (await ok('GET', '/pessoas?tipo=cliente&busca=Cliente Formulário')).itens;
+  assert.equal(clientes.length, 1, 'mesmo telefone não duplica o cliente');
+  assert.equal((await ok('GET', `/pessoas/${clientes[0].id}`)).email, 'cli@exemplo.com', 'segunda resposta completa o cadastro');
+
+  await ok('PATCH', `/formularios/${f.id}`, { ativo: false });
+  token = '';
+  assert.equal((await chamar('GET', '/publico/formularios/pesquisa-loja')).status, 404, 'encerrado sai do ar');
+  token = salvo;
+});
+
+test('marketing: custo por candidata e por aprovada, retorno e investimento vindo do Meta', async () => {
+  const c = await ok('POST', '/marketing/campanhas', { nome: 'Revendedoras novembro', canal: 'meta', utmCampaign: 'Novembro', investimento: 50000, metaCampanhaId: '120000001' });
+  assert.equal(c.utmCampaign, 'novembro');
+  assert.equal((await chamar('POST', '/marketing/campanhas', { nome: 'Outra', canal: 'meta', utmCampaign: 'novembro' })).status, 409, 'código repetido');
+  let res = await ok('GET', '/marketing/resultados');
+  let l = res.linhas.find((x) => x.utm === 'novembro');
+  assert.equal(l.candidatas, 1);
+  assert.equal(l.aprovadas, 1);
+  assert.equal(l.respostas, 4);
+  assert.equal(l.custoPorCandidata, 50000);
+  assert.equal(l.custoPorAprovada, 50000);
+  await ok('POST', '/publico/candidaturas', { nome: 'Candidata Sem Campanha', telefone: '27911223344', cidade: 'Serra', uf: 'ES', consentimentoLgpd: true, origem: { utm_campaign: 'codigo-solto' } });
+  const r2 = await ok('GET', '/marketing/resultados');
+  const solto = r2.linhas.find((x) => x.utm === 'codigo-solto');
+  assert.equal(solto.campanha, null);
+  assert.equal(solto.custoPorCandidata, null, 'sem campanha não tem custo');
+  assert.equal(r2.totais.candidatas, 1, 'totais contam só campanhas cadastradas');
+  assert.equal(r2.totais.candidatasComCodigoSemCampanha, 1);
+
+  assert.equal((await chamar('POST', '/marketing/sincronizar-meta')).status, 503, 'sem a integração ligada');
+  await ok('PUT', '/integracoes/meta_ads', { valores: { META_ADS_CONTA: 'act_999', META_ADS_TOKEN: 'token-meta-teste' } });
+  assert.ok((await ok('POST', '/integracoes/meta_ads/testar')).mensagem.includes('Aritana Semijoias'));
+  const s = await ok('POST', '/marketing/sincronizar-meta');
+  assert.equal(s.atualizadas, 1);
+  res = await ok('GET', '/marketing/resultados');
+  l = res.linhas.find((x) => x.utm === 'novembro');
+  assert.equal(l.investimento, 12345, 'soma das duas páginas do Meta');
+  assert.equal(l.campanha.sincronizado, true);
+  await ok('PUT', '/integracoes/meta_ads', { valores: { META_ADS_TOKEN: 'token-errado-123456' } });
+  assert.equal((await chamar('POST', '/marketing/sincronizar-meta')).status, 503);
 });
 
 // Este fica por último: apaga os dados de teste.

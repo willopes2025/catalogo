@@ -116,7 +116,7 @@ export function Grupos() {
             <tbody>
               {MODULOS.map((m) => (
                 <tr key={m.chave}>
-                  <td>{m.nome}{m.versao === 2 && <span className="muted"> · V2</span>}</td>
+                  <td>{m.nome}{(m.versao as number) === 2 && <span className="muted"> · V2</span>}</td>
                   {ACOES.map((a) => <td key={a} style={{ textAlign: 'center' }}><input type="checkbox" style={{ width: 'auto' }} disabled={!editavel} checked={(perm[m.chave] ?? []).includes(a)} onChange={() => alternar(m.chave, a)} /></td>)}
                 </tr>
               ))}

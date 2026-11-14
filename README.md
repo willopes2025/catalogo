@@ -85,6 +85,13 @@ Desenvolvido pela Wide Inteligência Comercial. **O código pertence à Aritana.
 | **Ranking do mês** | Pelo vendido nos acertos; no app, a própria posição e as outras só pelo primeiro nome. |
 | **Revisão de níveis** | Sugestão pela média dos 3 últimos meses completos contra a meta de cada nível; aplicada uma a uma. |
 
+**Formulários e Marketing**
+
+| Parte | O que faz |
+|---|---|
+| **Formulários** | Montador com 10 tipos de pergunta, modelos prontos (NPS, cadastro de cliente, inscrição em evento), link público `/f/<endereço>`, LGPD e anti-robô, resumo com NPS, planilha CSV. Pode cadastrar/atualizar cliente ou abrir candidatura, sem duplicar pelo telefone. |
+| **Marketing** | Campanhas com investimento e código `utm_campaign`; resultados por campanha (candidatas, aprovadas, custo por candidata e por aprovada, vendido pelas aprovadas e retorno); gerador de links rastreáveis; gasto trazido do Meta Ads quando a integração estiver ligada. |
+
 As naturezas de operação e os CFOPs que vêm instalados são um **ponto de partida** para empresa do Simples Nacional e **precisam ser conferidos pelo contador** antes de emitir em produção.
 
 Os modelos de contrato e promissória que vêm instalados são **provisórios** e devem ser trocados pelos textos revisados pelo jurídico da Aritana, em Configurações › Modelos de documento.

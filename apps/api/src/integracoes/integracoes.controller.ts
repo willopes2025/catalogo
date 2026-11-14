@@ -24,6 +24,7 @@ export class IntegracoesController {
   ) {}
 
   private ligada(chave: string) {
+    if (chave === 'meta_ads') return !!(this.segredos.v('META_ADS_TOKEN') && this.segredos.v('META_ADS_CONTA'));
     return chave === 'email' ? this.email.configurado : chave === 'asaas' ? this.asaas.configurado : chave === 'fiscal' ? this.fiscal.configurado : chave === 'assertiva' ? this.assertiva.configurada : false;
   }
 
@@ -94,6 +95,14 @@ export class IntegracoesController {
     if (chave === 'asaas') return this.asaas.testar();
     if (chave === 'fiscal') return this.fiscal.testar();
     if (chave === 'assertiva') return this.assertiva.testar();
+    if (chave === 'meta_ads') {
+      const conta = (this.segredos.v('META_ADS_CONTA') ?? '').replace(/^act_/, '');
+      const base = (process.env.META_ADS_URL ?? 'https://graph.facebook.com/v21.0').replace(/\/$/, '');
+      const res = await fetch(`${base}/act_${conta}?fields=name,currency`, { headers: { authorization: `Bearer ${this.segredos.v('META_ADS_TOKEN')}` } });
+      const j = (await res.json().catch(() => ({}))) as { name?: string; currency?: string; error?: { message?: string } };
+      if (!res.ok) throw new BadRequestException(`O Meta recusou: ${j.error?.message ?? res.status}`);
+      return { ok: true, mensagem: `Conectado à conta de anúncios "${j.name}" (${j.currency}).` };
+    }
     throw new NotFoundException('Integração desconhecida.');
   }
 

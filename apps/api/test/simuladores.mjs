@@ -25,6 +25,15 @@ http
     if (url.pathname === '/__recebidos') return responder(res, 200, recebidos);
 
     // ── Asaas ──
+    // Meta Ads (Graph API): conta e gasto por campanha, em duas páginas
+    if (req.method === 'GET' && url.pathname.startsWith('/meta/')) {
+      if (req.headers.authorization !== 'Bearer token-meta-teste') return responder(res, 401, { error: { message: 'Invalid OAuth access token' } });
+      if (url.pathname === '/meta/act_999') return responder(res, 200, { name: 'Aritana Semijoias', currency: 'BRL' });
+      if (url.pathname === '/meta/act_999/insights' && !url.searchParams.get('after'))
+        return responder(res, 200, { data: [{ campaign_id: '120000001', campaign_name: 'Revendedoras novembro', spend: '100.00' }], paging: { next: 'http://localhost:3199/meta/act_999/insights?after=2' } });
+      if (url.pathname === '/meta/act_999/insights') return responder(res, 200, { data: [{ campaign_id: '120000001', campaign_name: 'Revendedoras novembro', spend: '23.45' }, { campaign_id: '777', spend: '9.99' }] });
+      return responder(res, 404, { error: { message: 'not found' } });
+    }
     if (url.pathname.startsWith('/asaas/')) {
       if (req.headers.access_token !== 'chave-teste') return responder(res, 401, { errors: [{ description: 'Chave inválida' }] });
       if (req.method === 'POST' && url.pathname === '/asaas/customers') {

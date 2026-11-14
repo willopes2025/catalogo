@@ -149,7 +149,7 @@ export class ImplantacaoController {
     const antes = await contar();
     await this.db.transaction(async (tx) => {
       // Movimento: sempre apagado (e a numeração de maletas, vendas e ordens volta para 1).
-      const movimento = ['comissoes', 'fechamentos_comissao', 'notas_fiscais', 'documentos', 'acertos', 'maleta_itens', 'maletas', 'caixa_movimentos', 'venda_pagamentos', 'venda_itens', 'vendas', 'caixas', 'titulos', 'creditos', 'ordens_servico', 'movimentos', 'saldos', 'eventos_integracao', 'avisos_enviados', 'importacoes', 'candidatura_notas', 'candidaturas', 'pedidos_pecas', 'portal_acessos', 'pontos', 'resgates'];
+      const movimento = ['comissoes', 'fechamentos_comissao', 'notas_fiscais', 'documentos', 'acertos', 'maleta_itens', 'maletas', 'caixa_movimentos', 'venda_pagamentos', 'venda_itens', 'vendas', 'caixas', 'titulos', 'creditos', 'ordens_servico', 'movimentos', 'saldos', 'eventos_integracao', 'avisos_enviados', 'importacoes', 'candidatura_notas', 'candidaturas', 'pedidos_pecas', 'portal_acessos', 'pontos', 'resgates', 'formulario_respostas'];
       await tx.execute(sql.raw(`truncate table ${movimento.join(', ')} restart identity`));
       await tx.execute(sql`delete from locais_estoque where tipo = 'maleta'`);
       if (!d.manterProdutos) await tx.execute(sql`delete from produtos`).then(() => tx.execute(sql`delete from lotes_banho`));

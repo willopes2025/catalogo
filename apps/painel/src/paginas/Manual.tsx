@@ -138,6 +138,27 @@ const SECOES: Secao[] = [
     ],
   },
   {
+    id: 'formularios',
+    titulo: 'Formulários: pesquisas, cadastros e inscrições',
+    passos: [
+      { t: 'Comece por um modelo', d: 'Formulários › escolha "Pesquisa de satisfação", "Cadastro de cliente" ou "Inscrição no evento", ou comece em branco. Ajuste as perguntas e salve.' },
+      { t: 'Cadastro automático', d: 'Em "Ao receber uma resposta", escolha cadastrar cliente ou abrir candidatura. Marque a pergunta do nome e a do telefone com o papel certo; o mesmo telefone não duplica o cadastro.' },
+      { t: 'Divulgue o link', d: '"Copiar link" e mande pelo WhatsApp, Instagram ou QR code no balcão. Para saber de onde veio cada resposta, gere o link em Marketing › Gerar link rastreável.' },
+      { t: 'Veja as respostas', d: 'O resumo mostra as escolhas mais marcadas e o NPS (promotores menos detratores). Dá para baixar tudo em planilha.' },
+      { t: 'Encerrar', d: 'Em Editar, mude a situação para "Encerrado": o link sai do ar e as respostas ficam guardadas.' },
+    ],
+  },
+  {
+    id: 'marketing',
+    titulo: 'Marketing: custo e retorno das campanhas',
+    passos: [
+      { t: 'Cadastre a campanha', d: 'Marketing › Campanhas: nome, canal, código (utm_campaign) e quanto foi investido.' },
+      { t: 'Use o link rastreável', d: 'Em "Gerar link rastreável", escolha a campanha e o destino (formulário de revendedoras ou outro). Use esse link no anúncio.' },
+      { t: 'Acompanhe', d: 'Resultados mostra, por campanha, as candidatas, as aprovadas, o custo de cada uma e quanto as aprovadas já venderam nos acertos.' },
+      { t: 'Meta Ads', d: 'Com a integração ligada (Configurações › Integrações) e o id da campanha do Meta preenchido, "Atualizar gasto do Meta Ads" traz o valor investido sozinho.' },
+    ],
+  },
+  {
     id: 'implantacao',
     titulo: 'Implantação: o que falta para começar',
     passos: [

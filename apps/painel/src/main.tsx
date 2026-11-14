@@ -40,6 +40,9 @@ import { ImprimirEtiquetas } from './paginas/ImprimirEtiquetas';
 import { Portal } from './portal/Portal';
 import { Crm } from './paginas/Crm';
 import { Pontos } from './paginas/Pontos';
+import { Formularios } from './paginas/Formularios';
+import { FormularioPublico } from './paginas/FormularioPublico';
+import { Marketing } from './paginas/Marketing';
 import { Cadastro } from './paginas/Cadastro';
 
 const cliente = new QueryClient({ defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: false, staleTime: 15_000 } } });
@@ -59,6 +62,7 @@ ReactDOM.createRoot(document.getElementById('raiz')!).render(
           <Route path="/catalogo/:slug" element={<Catalogo />} />
           <Route path="/portal/*" element={<Portal />} />
           <Route path="/cadastro" element={<Cadastro />} />
+          <Route path="/f/:slug" element={<FormularioPublico />} />
           <Route path="/imprimir/maleta/:id" element={<Protegido><ImprimirMaleta /></Protegido>} />
           <Route path="/imprimir/documento/:id" element={<Protegido><ImprimirDocumento /></Protegido>} />
           <Route path="/imprimir/venda/:id" element={<Protegido><ImprimirVenda /></Protegido>} />
@@ -98,6 +102,8 @@ ReactDOM.createRoot(document.getElementById('raiz')!).render(
             <Route path="garantia" element={<Garantia />} />
             <Route path="crm" element={<Crm />} />
             <Route path="pontos" element={<Pontos />} />
+            <Route path="formularios" element={<Formularios />} />
+            <Route path="marketing" element={<Marketing />} />
             <Route path="comissoes" element={<Comissoes />} />
             <Route path="auditoria" element={<Auditoria />} />
             <Route path="manual" element={<Manual />} />

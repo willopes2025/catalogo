@@ -4,6 +4,7 @@
  * Estoque como livro-caixa: cada entrada e saída é uma linha em `movimentos`;
  * `saldos` é o resumo, atualizado na mesma transação.
  */
+import type { CampoFormulario } from '@aritana/regras';
 import { sql } from 'drizzle-orm';
 import {
   boolean,
@@ -724,6 +725,68 @@ export const configuracoes = pgTable('configuracoes', {
   valor: jsonb('valor').notNull(),
   atualizadoEm: atualizadoEm(),
 });
+
+// ───────────────────────── Formulários e marketing ─────────────────────────
+
+/** Formulário montado pela equipe, com link público /f/<slug>. */
+export const formularios = pgTable(
+  'formularios',
+  {
+    id: id(),
+    slug: text('slug').notNull(),
+    titulo: text('titulo').notNull(),
+    descricao: text('descricao'),
+    campos: jsonb('campos').$type<CampoFormulario[]>().notNull(),
+    /** O que fazer com cada resposta: nada, cadastrar/atualizar cliente ou abrir candidatura. */
+    acao: text('acao').notNull().default('nenhuma'), // nenhuma | cliente | candidata
+    mensagemFinal: text('mensagem_final'),
+    /** Texto de autorização (LGPD) que a pessoa precisa marcar; vazio = não pede. */
+    consentimento: text('consentimento'),
+    ativo: boolean('ativo').notNull().default(true),
+    criadoEm: criadoEm(),
+    atualizadoEm: atualizadoEm(),
+  },
+  (t) => ({ slug: uniqueIndex('formularios_slug_uq').on(t.slug) }),
+);
+
+export const formularioRespostas = pgTable(
+  'formulario_respostas',
+  {
+    id: id(),
+    formularioId: uuid('formulario_id').notNull().references(() => formularios.id, { onDelete: 'cascade' }),
+    respostas: jsonb('respostas').$type<Record<string, unknown>>().notNull(),
+    origem: jsonb('origem').$type<Record<string, string>>().notNull().default({}),
+    pessoaId: uuid('pessoa_id').references(() => pessoas.id, { onDelete: 'set null' }),
+    candidaturaId: uuid('candidatura_id').references(() => candidaturas.id, { onDelete: 'set null' }),
+    criadoEm: criadoEm(),
+  },
+  (t) => ({ porFormulario: index('formulario_respostas_form_idx').on(t.formularioId, t.criadoEm) }),
+);
+
+/** Campanha de anúncio ou ação de divulgação: o investimento e o código usado nos links (utm_campaign). */
+export const campanhas = pgTable(
+  'campanhas',
+  {
+    id: id(),
+    nome: text('nome').notNull(),
+    canal: text('canal').notNull(), // meta | google | instagram | whatsapp | evento | outro
+    utmCampaign: text('utm_campaign').notNull(),
+    objetivo: text('objetivo').notNull().default('candidatas'), // candidatas | clientes
+    inicio: date('inicio'),
+    fim: date('fim'),
+    /** Investimento lançado à mão (centavos). */
+    investimento: integer('investimento').notNull().default(0),
+    /** Investimento trazido do Meta Ads (centavos), quando ligado. */
+    investimentoSincronizado: integer('investimento_sincronizado'),
+    sincronizadoEm: timestamp('sincronizado_em', { withTimezone: true }),
+    /** Id da campanha no Meta Ads, para buscar o gasto automaticamente. */
+    metaCampanhaId: text('meta_campanha_id'),
+    observacao: text('observacao'),
+    ativa: boolean('ativa').notNull().default(true),
+    criadoEm: criadoEm(),
+  },
+  (t) => ({ utm: uniqueIndex('campanhas_utm_uq').on(t.utmCampaign) }),
+);
 
 // ───────────────────────── Pontos e prêmios ─────────────────────────
 

@@ -5,7 +5,7 @@
 export const MODULOS = [
   { chave: 'inicio', nome: 'Início', versao: 1 },
   { chave: 'crm', nome: 'Candidatas', versao: 1 },
-  { chave: 'marketing', nome: 'Marketing', versao: 2 },
+  { chave: 'marketing', nome: 'Marketing', versao: 1 },
   { chave: 'rede', nome: 'Rede', versao: 1 },
   { chave: 'cadastros', nome: 'Cadastros', versao: 1 },
   { chave: 'produtos', nome: 'Produtos', versao: 1 },
@@ -19,7 +19,7 @@ export const MODULOS = [
   { chave: 'comissoes', nome: 'Comissões', versao: 1 },
   { chave: 'fiscal', nome: 'Fiscal', versao: 1 },
   { chave: 'relatorios', nome: 'Relatórios', versao: 1 },
-  { chave: 'formularios', nome: 'Formulários', versao: 2 },
+  { chave: 'formularios', nome: 'Formulários', versao: 1 },
   { chave: 'configuracoes', nome: 'Configurações', versao: 1 },
   { chave: 'suporte', nome: 'Suporte', versao: 1 },
 ] as const;
