@@ -12,9 +12,10 @@ import { cnpjValido, cpfValido, soDigitos } from '../comum/documentos';
 import { proximoCodigoInterno } from '../comum/codigos';
 import { categorias, empresas, importacoes, locaisEstoque, maletaItens, maletas, niveis, pessoas, produtos, referencias, titulos } from '../db/schema';
 import { hoje } from '../maletas/maletas.service';
+import { ArquivosService } from '../arquivos/arquivos.service';
 import { ativo, centavos, primeiroCampo, extrairLista, umRegistro, contaEmAberto, dataISO, estrutura, inteiro, pb, pedidoAberto, pegar, qtdEmAberto, txt, type Reg } from './mapear';
 
-export const ETAPAS = ['cadastros', 'produtos', 'pessoas', 'maletas', 'financeiro'] as const;
+export const ETAPAS = ['cadastros', 'produtos', 'pessoas', 'maletas', 'financeiro', 'fotos'] as const;
 export type Etapa = (typeof ETAPAS)[number];
 
 export interface OpcoesJueri {
@@ -76,6 +77,7 @@ export class JueriService {
     private readonly estoque: EstoqueService,
     private readonly config: ConfiguracoesService,
     private readonly auditoria: AuditoriaService,
+    private readonly arquivos: ArquivosService,
   ) {}
 
   get configurado() {
@@ -189,7 +191,7 @@ export class JueriService {
       dados.fornecedores = await this.detalhar('fornecedor', await this.todos('fornecedor'), 'cnpj');
       dados.niveis = await this.todos('revendedor/nivel');
     }
-    if (quer('produtos')) {
+    if (quer('produtos') || quer('fotos')) {
       dados.produtos = await this.detalhar('produto', await this.todos('produto'), 'descricao');
       ex.estruturas.produto = estrutura(dados.produtos);
     }
@@ -234,11 +236,96 @@ export class JueriService {
     } catch (e) {
       if (!(e instanceof Simulacao)) throw e;
     }
+    if (quer('fotos')) await rotular('Fotos', () => this.fotos(ex, dados.produtos ?? [], op.simular));
     if (!op.simular) {
       const soma = Object.values(ex.partes).reduce((a, p) => ({ l: a.l + p.lidos, c: a.c + p.criados, u: a.u + p.atualizados }), { l: 0, c: 0, u: 0 });
       const erros = Object.entries(ex.partes).flatMap(([n, p]) => p.erros.map((m) => ({ linha: 0, mensagem: `${n}: ${m}` })));
       const [imp] = await this.db.insert(importacoes).values({ tipo: 'jueri:api', arquivo: op.etapas.join(', '), linhas: soma.l, criados: soma.c, atualizados: soma.u, erros: erros.slice(0, 500), usuarioId }).returning();
       await this.auditoria.registrar({ usuarioId, acao: 'importar', entidade: 'importacao', entidadeId: imp.id, dados: { origem: 'jueri', etapas: op.etapas, criados: soma.c, atualizados: soma.u, erros: erros.length } });
+    }
+  }
+
+  private niveisCache: Map<string, string> | null = null;
+  /** Nível pelo nome (o Jueri manda o nível da revendedora por nome); cria se não existir. */
+  private async nivelPorNome(tx: Tx, nome: string | null): Promise<string | null> {
+    if (!nome) return null;
+    this.niveisCache ??= new Map((await tx.select().from(niveis)).map((n) => [n.nome.toLowerCase(), n.id]));
+    const ja = this.niveisCache.get(nome.toLowerCase());
+    if (ja) return ja;
+    const [{ ordem }] = await tx.select({ ordem: sql<number>`coalesce(max(${niveis.ordem}), 0) + 1` }).from(niveis);
+    const [n] = await tx.insert(niveis).values({ nome, ordem }).returning();
+    this.niveisCache.set(nome.toLowerCase(), n.id);
+    return n.id;
+  }
+
+  /**
+   * Fotos dos produtos: baixa cada imagem do Jueri e guarda no servidor (os links do Jueri
+   * deixam de funcionar quando a conta for encerrada). Roda depois da gravação, fora da transação.
+   */
+  private async fotos(ex: Execucao, lista: Reg[], simular: boolean) {
+    const pf = this.parte(ex, 'Fotos');
+    const comFoto = lista.map((r) => ({ r, urls: urlsDeFoto(r) })).filter((x) => x.urls.length);
+    const total = comFoto.reduce((a, x) => a + x.urls.length, 0);
+    const exemplo = comFoto[0]?.urls[0];
+    pf.avisos.push(`${comFoto.length} produto(s) com foto no Jueri, ${total} foto(s) ao todo.${exemplo ? ` Endereço de exemplo: ${exemplo}` : ''}`);
+    const naoEntendidas = lista.filter((r) => !urlsDeFoto(r).length && (txt(typeof r.imagem === 'string' ? r.imagem : null) || (Array.isArray(r.fotos_adicionais) && r.fotos_adicionais.length)));
+    if (naoEntendidas.length) pf.avisos.push(`${naoEntendidas.length} produto(s) com foto num formato não reconhecido. Exemplo: ${JSON.stringify(naoEntendidas[0].imagem ?? naoEntendidas[0].fotos_adicionais).slice(0, 150)}`);
+    if (simular) {
+      pf.lidos = comFoto.length;
+      pf.avisos.push('Na simulação as fotos não são baixadas; na importação de verdade elas ficam guardadas no servidor.');
+      return;
+    }
+    const prods = await this.mapa(this.db as unknown as Tx, produtos, 'prod:');
+    let feitos = 0;
+    const fila = [...comFoto];
+    const trabalhar = async () => {
+      for (let x = fila.shift(); x; x = fila.shift()) {
+        pf.lidos++;
+        ex.fase = `Baixando fotos… ${++feitos}/${comFoto.length} produto(s)`;
+        const produtoId = prods.get(String(x.r.id));
+        if (!produtoId) {
+          this.erro(pf, `Produto ${x.r.id}`, 'produto ainda não importado (marque também Produtos)');
+          continue;
+        }
+        const locais: string[] = [];
+        for (const url of x.urls) {
+          const ja = this.arquivos.existente(url);
+          if (ja) {
+            locais.push(ja);
+            pf.ignorados++;
+            continue;
+          }
+          try {
+            locais.push(await this.baixarFoto(url));
+            pf.criados++;
+          } catch (e) {
+            this.erro(pf, `Produto ${x.r.id}`, `foto não baixada: ${(e as Error).message}`);
+          }
+        }
+        if (locais.length) await this.db.update(produtos).set({ fotos: locais }).where(eq(produtos.id, produtoId));
+      }
+    };
+    await Promise.all(Array.from({ length: 6 }, trabalhar));
+  }
+
+  private async baixarFoto(url: string) {
+    for (let tentativa = 0; ; tentativa++) {
+      const res = await fetch(url, { signal: AbortSignal.timeout(30_000) }).catch((e: Error) => {
+        throw new Error(e.message);
+      });
+      if ((res.status === 429 || res.status >= 500) && tentativa < 4) {
+        await espera(1500 * 2 ** tentativa);
+        continue;
+      }
+      if (!res.ok) throw new Error(`o Jueri respondeu ${res.status}`);
+      const tamanho = Number(res.headers.get('content-length') ?? 0);
+      if (tamanho > 15_000_000) throw new Error('arquivo grande demais');
+      const buf = Buffer.from(await res.arrayBuffer());
+      if (buf.length > 15_000_000) throw new Error('arquivo grande demais');
+      // O tipo vem do conteúdo do arquivo (cabeçalho do servidor e extensão podem mentir).
+      const tipo = tipoPeloConteudo(buf);
+      if (!tipo) throw new Error('o arquivo não é uma imagem (JPG, PNG, WebP ou GIF)');
+      return this.arquivos.salvarFoto(url, buf, tipo);
     }
   }
 
@@ -348,7 +435,7 @@ export class JueriService {
         if (semPreco) semPrecoN++;
         const custos = limpaNum({
           bruto: centavos(r.custo_compra_bruto),
-          insumos: centavos(pegar(r, 'custo_insumos', 'custo_insumo')),
+          insumos: centavos(pegar(r, 'custo_total_insumos', 'custo_insumos', 'custo_insumo')),
           banhoOuro: centavos(r.custo_banho_ouro),
           banhoPrata: centavos(r.custo_banho_prata),
           banhoRodio: centavos(r.custo_banho_rodio),
@@ -370,7 +457,7 @@ export class JueriService {
           tipoBanho: txt(pegar(r, 'tipo_banho', 'banho')),
           fornecedorId: r.fk_fornecedor_id != null ? (forns.get(String(r.fk_fornecedor_id)) ?? null) : null,
           codigoFornecedor: codForn,
-          ean: codForn && /^\d{8}$|^\d{12,14}$/.test(codForn) ? codForn : null,
+          ean: soDigitos(txt(r.numero_ean)) || (codForn && /^\d{8}$|^\d{12,14}$/.test(codForn) ? codForn : null),
           custo,
           custos,
           preco,
@@ -386,9 +473,9 @@ export class JueriService {
           lucroAtacadoPb: pb(pegar(r, 'lucro_atacado', 'lucro_atacado_porcentagem')),
           medidas: limpaNum({ largura: num(r.largura), altura: num(r.altura), profundidade: num(r.profundidade), peso: num(r.peso) }),
           observacao: txt(r.observacao),
-          camposExtras: limpa({ 'Número da peça': txt(r.numero_peca), 'Peso loja': txt(r.peso_loja) }),
+          camposExtras: limpa({ 'Número da peça': txt(r.numero_peca), 'Peso loja': txt(r.peso_loja), 'Cor (código)': txt(r.cor_hexadecimal) }),
           ativo: semPreco ? false : ativo(r),
-          ...(semPreco ? { exibeCatalogo: false } : {}),
+          ...(semPreco ? { exibeCatalogo: false } : simNao(r.status_catalogo) !== null ? { exibeCatalogo: simNao(r.status_catalogo)! } : {}),
           idJueri: `prod:${r.id}`,
         };
         const [porId] = await tx.select({ id: produtos.id }).from(produtos).where(eq(produtos.idJueri, valores.idJueri));
@@ -498,6 +585,7 @@ export class JueriService {
 
   private async gravarPessoas(tx: Tx, ex: Execucao, d: Record<string, Reg[]>, op: OpcoesJueri) {
     this.slugs = null;
+    this.niveisCache = null;
     const regras = await this.config.regras(tx);
 
     const pr = this.parte(ex, 'Revendedoras');
@@ -517,11 +605,14 @@ export class JueriService {
           profissao: txt(r.profissao),
           localTrabalho: txt(r.local),
           tipoRevendedor: lider ? 'Revendedora líder' : 'Revendedora',
+          redesSociais: txt(typeof r.redes_sociais === 'object' && r.redes_sociais ? Object.values(r.redes_sociais as Reg).filter(Boolean).join(' · ') : r.redes_sociais),
+          metaMensal: centavos(r.meta_mensal) ?? 0,
+          nivelId: await this.nivelPorNome(tx, txt(pegar(r, 'level_revendedor.nome', 'level_revendedor.descricao', 'level_revendedor'))),
           modeloTrabalho: 'consignado' as const,
           status: ativo(r) ? ('ativo' as const) : ('inativo' as const),
           observacao: txt(r.observacao),
           observacaoInterna: txt(r.observacao_interna),
-          camposExtras: limpa({ 'Supervisor no Jueri': txt(r.supervisor_nome), 'Comissão de líder no Jueri': faixasLider && faixasLider !== '[]' ? faixasLider : null }),
+          camposExtras: limpa({ 'Supervisor no Jueri': txt(r.supervisor_nome), 'Comissão de líder no Jueri': faixasLider && faixasLider !== '[]' ? faixasLider : null, 'Site': txt(r.website), 'Segmento (código no Jueri)': txt(r.fk_segmento_revendedor_id) }),
           idJueri: `rev:${r.id}`,
         };
         const id = await this.upsertPessoa(tx, pr, valores, { limiteCredito: regras.limiteInicial });
@@ -627,7 +718,7 @@ export class JueriService {
         }
 
         // Junta itens do mesmo produto: a maleta tem uma linha por produto.
-        const itens = new Map<string, { qtd: number; preco: number | null }>();
+        const itens = new Map<string, { qtd: number; preco: number | null; custo: number | null }>();
         const faltam: string[] = [];
         for (const it of extrairLista(ped.itens).itens) {
           const qtd = qtdEmAberto(it);
@@ -646,7 +737,7 @@ export class JueriService {
             continue;
           }
           const atual = itens.get(prodId);
-          itens.set(prodId, { qtd: (atual?.qtd ?? 0) + qtd, preco: atual?.preco ?? centavos(pegar(it, 'valor_unitario', 'preco', 'valor', 'preco_unitario')) });
+          itens.set(prodId, { qtd: (atual?.qtd ?? 0) + qtd, preco: atual?.preco ?? centavos(pegar(it, 'valor_unitario', 'preco', 'valor', 'preco_unitario')), custo: atual?.custo ?? centavos(pegar(it, 'custo_compra')) });
         }
         if (faltam.length) throw new Error(`produto(s) não encontrados: ${faltam.slice(0, 10).join(', ')}`);
         if (!itens.size) {
@@ -680,7 +771,7 @@ export class JueriService {
         for (const [produtoId, it] of itens) {
           const [prod] = await tx.select({ preco: produtos.preco, custo: produtos.custo }).from(produtos).where(eq(produtos.id, produtoId));
           const preco = it.preco && it.preco > 0 ? it.preco : prod.preco;
-          await tx.insert(maletaItens).values({ maletaId: m.id, produtoId, preco, custo: prod.custo, enviada: it.qtd });
+          await tx.insert(maletaItens).values({ maletaId: m.id, produtoId, preco, custo: it.custo && it.custo > 0 ? it.custo : prod.custo, enviada: it.qtd });
           // As peças já estão com a revendedora: entram direto no local da maleta, sem tirar do estoque da empresa.
           await this.estoque.mover(tx, { produtoId, origemId: null, destinoId: local.id, quantidade: it.qtd, tipo: 'maleta_envio', motivo: 'Migração do Jueri', referenciaTipo: 'maleta', referenciaId: m.id, usuarioId });
           pecas += it.qtd;
@@ -811,6 +902,40 @@ export class JueriService {
     if (zeradas) pc.avisos.push(`${zeradas} conta(s) sem saldo a receber (valor zero ou já paga): não entram.`);
     if (repetidas) pc.avisos.push(`${repetidas} linha(s) repetidas na resposta do Jueri: entraram uma vez só.`);
   }
+}
+
+/** Endereços das fotos de um produto do Jueri: principal primeiro, depois as adicionais, sem repetir. */
+export function urlsDeFoto(r: Reg): string[] {
+  const out: string[] = [];
+  const add = (v: unknown) => {
+    if (typeof v === 'string') {
+      const t = v.trim();
+      if (!t) return;
+      if (t.startsWith('[') || t.startsWith('{')) return add(jsonOuNada(t));
+      const url = /^https?:\/\//i.test(t) ? t : t.startsWith('//') ? `https:${t}` : t.startsWith('/') ? `https://jueri.com.br${t}` : null;
+      if (url && !out.includes(url)) out.push(url);
+    } else if (Array.isArray(v)) v.forEach(add);
+    else if (v && typeof v === 'object') add(pegar(v as Reg, 'url', 'link', 'imagem', 'caminho', 'src', 'arquivo'));
+  };
+  add(r.imagem);
+  add(r.fotos_adicionais);
+  add(r.fotos_adicionais_detalhes);
+  return out.slice(0, 10);
+}
+
+/** 1/true/"sim"/"ativo" → true; 0/2/false/"não"/"inativo" → false; outro → null. */
+function simNao(v: unknown): boolean | null {
+  if (v === true || v === 1 || /^(1|s|sim|true|ativo|visivel|visível)$/i.test(String(v ?? ''))) return true;
+  if (v === false || v === 0 || v === 2 || /^(0|2|n|nao|não|false|inativo|oculto)$/i.test(String(v ?? ''))) return false;
+  return null;
+}
+
+function tipoPeloConteudo(b: Buffer): string | null {
+  if (b.length > 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return 'image/jpeg';
+  if (b.length > 8 && b.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return 'image/png';
+  if (b.length > 12 && b.toString('ascii', 0, 4) === 'RIFF' && b.toString('ascii', 8, 12) === 'WEBP') return 'image/webp';
+  if (b.length > 6 && b.toString('ascii', 0, 4) === 'GIF8') return 'image/gif';
+  return null;
 }
 
 const normNome = (n: string) => n.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/\s+/g, ' ').trim();

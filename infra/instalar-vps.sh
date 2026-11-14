@@ -162,11 +162,14 @@ fi
 
 passo "Cópia de segurança diária do banco"
 mkdir -p /opt/aritana-backups && chmod 700 /opt/aritana-backups
+mkdir -p /opt/aritana-arquivos /opt/aritana-backups/arquivos
 cat > /etc/cron.d/aritana-backup <<EOF
 # Todo dia às 03:17: cópia do banco da Aritana, guardando 30 dias
 17 3 * * * root docker exec aritana-db pg_dump -U aritana aritana | gzip > /opt/aritana-backups/aritana-\$(date +\%F).sql.gz && find /opt/aritana-backups -name '*.sql.gz' -mtime +30 -delete
 # Cópia do .env (tem a chave que abre as credenciais salvas no banco)
 20 3 * * * root install -m 600 /opt/aritana/.env /opt/aritana-backups/env-copia
+# Cópia das fotos dos produtos (só acrescenta e atualiza; não apaga nada da cópia)
+25 3 * * * root cp -au /opt/aritana-arquivos/. /opt/aritana-backups/arquivos/
 EOF
 
 passo "Pronto"

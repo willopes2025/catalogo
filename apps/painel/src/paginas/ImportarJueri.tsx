@@ -11,6 +11,7 @@ const ETAPAS: [string, string, string][] = [
   ['pessoas', 'Revendedoras, representantes e clientes', 'Com líderes, referências e telefones'],
   ['maletas', 'Maletas abertas', 'Pedidos "Aberto" do Jueri, com as peças que estão com cada uma'],
   ['financeiro', 'Contas a receber em aberto', ''],
+  ['fotos', 'Fotos dos produtos', 'Baixadas do Jueri e guardadas no servidor; na simulação só são contadas'],
 ];
 
 interface Parte { lidos: number; criados: number; atualizados: number; ignorados: number; falhas?: number; motivos?: Record<string, number>; erros: string[]; avisos: string[] }

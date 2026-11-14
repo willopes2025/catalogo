@@ -870,7 +870,7 @@ test('Jueri pela API: testa a conexão, simula sem gravar, importa tudo e repeti
     }
     throw new Error('importação não terminou');
   };
-  const todas = ['cadastros', 'produtos', 'pessoas', 'maletas', 'financeiro'];
+  const todas = ['cadastros', 'produtos', 'pessoas', 'maletas', 'financeiro', 'fotos'];
   await ok('POST', '/jueri/importar', { simular: true, etapas: todas, localId: local.id });
   assert.equal((await chamar('POST', '/jueri/importar', { simular: true, etapas: todas, localId: local.id })).status, 400, 'uma de cada vez');
   let ex = await esperar();
@@ -893,10 +893,21 @@ test('Jueri pela API: testa a conexão, simula sem gravar, importa tudo e repeti
   const p = await ok('GET', '/produtos/codigo/7899990090010');
   assert.equal(p.preco, 5990);
   assert.equal(p.precoAtacado, 3990);
-  assert.equal(p.custo, 1500, 'bruto + banho');
-  assert.deepEqual(p.custos, { bruto: 1000, banhoOuro: 500 });
+  assert.equal(p.custo, 1650, 'sem custo_total: soma bruto + banho + insumos');
+  assert.deepEqual(p.custos, { bruto: 1000, insumos: 150, banhoOuro: 500 });
   assert.equal(p.fcpPb, 200);
-  assert.equal(p.ean, '7890000000017');
+  assert.equal(p.ean, '7891112223334', 'numero_ean do Jueri');
+  assert.equal(p.custos.insumos, 150);
+  // Fotos: as duas imagens de verdade foram baixadas e guardadas; a "foto" que é HTML foi recusada.
+  assert.equal(p.fotos.length, 2);
+  assert.ok(p.fotos.every((f) => /^\/api\/fotos\/[a-f0-9]{40}\.(png|jpg)$/.test(f)));
+  assert.ok(p.fotos[0].endsWith('.png'), 'principal primeiro, tipo pelo conteúdo');
+  const img = await fetch(API.replace(/\/api$/, '') + p.fotos[0]);
+  assert.equal(img.status, 200);
+  assert.match(img.headers.get('cache-control'), /immutable/);
+  assert.equal((await fetch(API + '/fotos/..%2F..%2Fetc%2Fpasswd')).status, 404, 'só nomes de foto válidos');
+  assert.equal(ex.partes['Fotos'].criados, 2);
+  assert.equal(ex.partes['Fotos'].falhas, 1);
   assert.equal(p.camposExtras['Número da peça'], 'P-77');
   const cat = (await ok('GET', '/produtos/categorias')).find((c) => c.id === p.categoriaId);
   assert.equal(cat.caminho, 'Anel API › Solitário API');
@@ -935,6 +946,7 @@ test('Jueri pela API: testa a conexão, simula sem gravar, importa tudo e repeti
   ex = await esperar();
   assert.equal(ex.partes['Produtos'].criados, 0);
   assert.equal(ex.partes['Produtos'].atualizados, 3);
+  assert.equal(ex.partes['Fotos'].ignorados, 2, 'fotos já baixadas não baixam de novo');
   const semPreco = await ok('GET', '/produtos/codigo/7899990090034');
   assert.equal(semPreco.ativo, false);
   assert.equal(semPreco.exibeCatalogo, false);

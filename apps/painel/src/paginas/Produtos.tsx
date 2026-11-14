@@ -148,6 +148,11 @@ export function FichaProduto() {
           <div className="campo l2"><label>&nbsp;</label><div className="flex"><label className="check"><input type="checkbox" checked={!!f.exibeCatalogo} onChange={(e) => setF({ ...f, exibeCatalogo: e.target.checked })} disabled={!editavel} /> Aparece no catálogo</label><label className="check"><input type="checkbox" checked={!!f.ativo} onChange={(e) => setF({ ...f, ativo: e.target.checked })} disabled={!editavel} /> Ativo</label></div></div>
         </div>
         <div className="cartao">
+          {f.fotos?.length > 0 && (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 6, marginBottom: 14 }}>
+              {f.fotos.map((u: string) => <a key={u} href={u} target="_blank" rel="noreferrer"><img src={u} alt="" style={{ width: '100%', aspectRatio: '1', objectFit: 'cover', borderRadius: 8 }} /></a>)}
+            </div>
+          )}
           <h3 style={{ marginBottom: 10 }}>Estoque por local</h3>
           {f.estoque?.length ? f.estoque.map((e: any, i: number) => <div key={i} className="resumo-linha"><span>{e.local}</span><b>{e.quantidade}</b></div>) : <p className="muted">Sem estoque.</p>}
           {!novo && <p style={{ marginTop: 12 }}><Link to={`/estoque?rastreio=${f.codigoBarras}`}>Ver o caminho desta peça</Link></p>}

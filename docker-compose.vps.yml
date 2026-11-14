@@ -29,6 +29,10 @@ services:
       NODE_ENV: production
       PORT: "3000"
       DATABASE_URL: postgres://aritana:${DB_PASSWORD}@db:5432/aritana
+      ARQUIVOS_DIR: /dados
+    volumes:
+      # Fotos dos produtos (copiadas todo dia para /opt/aritana-backups/arquivos)
+      - /opt/aritana-arquivos:/dados
     depends_on:
       db: { condition: service_healthy }
     ports:

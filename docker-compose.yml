@@ -30,6 +30,9 @@ services:
     environment:
       DATABASE_URL: postgres://aritana:${DB_PASSWORD:-aritana}@db:5432/aritana
       REDIS_URL: redis://redis:6379
+      ARQUIVOS_DIR: /dados
+    volumes:
+      - arquivos:/dados
     depends_on:
       db: { condition: service_healthy }
     profiles: ["prod"]
@@ -52,3 +55,4 @@ services:
 volumes:
   dbdata:
   caddydata:
+  arquivos:

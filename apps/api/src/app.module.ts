@@ -51,6 +51,8 @@ import { FormulariosController } from './formularios/formularios.controller';
 import { MarketingController } from './marketing/marketing.controller';
 import { PontosService } from './pontos/pontos.service';
 import { JueriController } from './jueri/jueri.controller';
+import { ArquivosController } from './arquivos/arquivos.controller';
+import { ArquivosService } from './arquivos/arquivos.service';
 import { JueriService } from './jueri/jueri.service';
 
 const segredo = process.env.JWT_SECRET;
@@ -63,6 +65,7 @@ if (!segredo || (process.env.NODE_ENV === 'production' && segredo.length < 32)) 
   controllers: [
     SaudeController,
     JueriController,
+    ArquivosController,
     AuthController,
     PessoasController,
     NiveisController,
@@ -101,6 +104,7 @@ if (!segredo || (process.env.NODE_ENV === 'production' && segredo.length < 32)) 
   providers: [
     SegredosService,
     JueriService,
+    ArquivosService,
     PontosService,
     AuditoriaService,
     EstoqueService,
