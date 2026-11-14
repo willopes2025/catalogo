@@ -20,11 +20,11 @@ CONSIGNATÁRIA (REPRESENTANTE): {{nome}}, CPF {{cpf}}, RG {{rg}}, residente em {
 
 3. ACERTO. A cada {{prazo_acerto}} dias contados da retirada, a Representante fará o acerto: devolverá as peças não vendidas e pagará o valor das vendidas, descontada a sua comissão.
 
-4. COMISSÃO. A comissão da Representante é de {{comissao_avista}} sobre o valor vendido quando o acerto for pago à vista, e de {{comissao_prazo}} quando for pago a prazo.
+4. COMISSÃO. A comissão da Representante é de {{comissao}}.
 
 5. PEÇAS PERDIDAS OU DANIFICADAS. Peças não devolvidas nem vendidas, ou devolvidas danificadas por mau uso, serão cobradas {{perdida}}.
 
-6. ATRASO. O acerto feito depois do prazo, passada a tolerância de {{carencia}} dia(s), terá multa de {{multa}} e juros de {{juros}} ao mês, proporcionais aos dias de atraso, sobre o valor devido. Com {{dias_bloqueio}} dias de atraso, a Representante não poderá retirar nova maleta até regularizar.
+6. ATRASO. {{regra_atraso}} Bloqueio de nova maleta por atraso: {{dias_bloqueio}}.
 
 7. GARANTIA. Reclamações de clientes sobre defeito serão atendidas conforme o Código de Defesa do Consumidor. A Representante recebe a peça da cliente e a encaminha à Consignante para análise.
 

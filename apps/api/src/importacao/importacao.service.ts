@@ -7,7 +7,7 @@ import type { Tx } from '../db/client';
 import { AuditoriaService } from '../comum/auditoria.service';
 import { EstoqueService } from '../estoque/estoque.service';
 import { cnpjValido, cpfValido, soDigitos } from '../comum/documentos';
-import { categorias, importacoes, locaisEstoque, niveis, pessoas, produtos } from '../db/schema';
+import { categorias, importacoes, locaisEstoque, niveis, pessoas, pontos, produtos } from '../db/schema';
 
 /**
  * Importação por planilha (migração do Jueri e cargas futuras).
@@ -21,6 +21,12 @@ const ALIASES_PRODUTO: Record<string, string[]> = {
   referencia: ['referencia', 'ref', 'codigo', 'cod', 'sku'],
   descricao: ['descricao', 'produto', 'nome', 'nomedoproduto'],
   categoria: ['categoria'],
+  subcategoria: ['subcategoria'],
+  ean: ['ean', 'gtin', 'eangtin'],
+  tipoBanho: ['tipodebanho', 'tipobanho'],
+  estoqueMaximo: ['estoquemaximo', 'maximo'],
+  observacao: ['observacao', 'obs'],
+  descricaoCompleta: ['descricaocompleta'],
   tamanho: ['tamanho', 'n', 'no', 'numero', 'aro'],
   cor: ['cor'],
   preco: ['preco', 'precovarejo', 'valorvarejo', 'varejo', 'valor', 'precovenda', 'precodevenda', 'valordevenda'],
@@ -62,7 +68,12 @@ const ALIASES_PESSOA: Record<string, string[]> = {
   uf: ['uf', 'estado'],
   nivel: ['nivel'],
   lider: ['revendedorlider', 'lider', 'representantelider'],
-  praca: ['praca', 'local'],
+  praca: ['praca', 'regiao'],
+  localTrabalho: ['local', 'localtrabalho', 'ondetrabalha'],
+  segmento: ['segmento'],
+  tipoRevendedor: ['tiporevendedor', 'tipoderevendedor'],
+  metaMensal: ['metamensal', 'meta'],
+  pontos: ['pontosacumulados', 'pontos', 'saldodepontos'],
   status: ['status', 'situacao'],
   limiteCredito: ['limite', 'limitecredito', 'limitedecredito', 'credito'],
   observacao: ['observacao', 'obs'],
@@ -135,7 +146,9 @@ export class ImportacaoService {
         const [l] = await tx.select().from(locaisEstoque).where(eq(locaisEstoque.id, opcoes.localId));
         if (!l || l.tipo === 'maleta') throw new BadRequestException('Local de estoque inválido.');
       } else if (r.colunasReconhecidas.includes('quantidade')) r.avisos.push('A planilha tem estoque, mas nenhum local foi escolhido: as quantidades foram ignoradas.');
-      const cats = new Map((await tx.select().from(categorias)).map((c) => [norm(c.nome), c.id]));
+      const todasCats = await tx.select().from(categorias);
+      const nomeCat = new Map(todasCats.map((c) => [c.id, c.nome]));
+      const cats = new Map(todasCats.map((c) => [c.paiId ? `${norm(nomeCat.get(c.paiId) ?? '')}>${norm(c.nome)}` : norm(c.nome), c.id]));
       const forns = new Map((await tx.select().from(pessoas).where(eq(pessoas.tipo, 'fornecedor'))).map((f) => [norm(f.nome), f.id]));
       const codigosVistos = new Set<string>();
 
@@ -160,6 +173,17 @@ export class ImportacaoService {
               const [c] = await tx.insert(categorias).values({ nome: d.categoria }).returning();
               cats.set(norm(d.categoria), c.id);
               categoriaId = c.id;
+            }
+            // Subcategoria fica "dentro" da categoria; o produto aponta para a mais específica.
+            if (d.subcategoria) {
+              const chaveSub = `${norm(d.categoria)}>${norm(d.subcategoria)}`;
+              let sub = cats.get(chaveSub) ?? null;
+              if (!sub) {
+                const [c] = await tx.insert(categorias).values({ nome: d.subcategoria, paiId: categoriaId }).returning();
+                cats.set(chaveSub, c.id);
+                sub = c.id;
+              }
+              categoriaId = sub;
             }
           }
           let fornecedorId: string | null = null;
@@ -188,6 +212,11 @@ export class ImportacaoService {
             pesoBanho: d.pesoBanho ?? null,
             milesimos: d.milesimos ?? null,
             localizacao: d.localizacao ?? null,
+            ...(d.ean ? { ean: soDigitos(d.ean) || null } : {}),
+            ...(d.tipoBanho ? { tipoBanho: d.tipoBanho } : {}),
+            ...(d.estoqueMaximo ? { estoqueMaximo: Math.max(0, Math.floor(Number(d.estoqueMaximo)) || 0) } : {}),
+            ...(d.observacao ? { observacao: d.observacao } : {}),
+            ...(d.descricaoCompleta ? { descricaoCompleta: d.descricaoCompleta } : {}),
           };
           const [existente] = codigo
             ? await tx.select().from(produtos).where(eq(produtos.codigoBarras, codigo))
@@ -270,6 +299,10 @@ export class ImportacaoService {
             cidade: d.cidade ?? null,
             uf: d.uf ? d.uf.slice(0, 2).toUpperCase() : null,
             praca: d.praca ?? null,
+            ...(d.localTrabalho ? { localTrabalho: d.localTrabalho } : {}),
+            ...(d.segmento ? { segmento: d.segmento } : {}),
+            ...(d.tipoRevendedor ? { tipoRevendedor: d.tipoRevendedor } : {}),
+            ...(d.metaMensal ? { metaMensal: dinheiro(d.metaMensal) ?? 0 } : {}),
             status: status as 'ativo',
             observacao: d.observacao ?? null,
             observacaoInterna: d.observacaoInterna ?? null,
@@ -299,6 +332,15 @@ export class ImportacaoService {
             r.criados++;
           }
           if (tipo === 'representante' && d.lider) lideresPendentes.push({ id, lider: d.lider, linha: n });
+          if (tipo === 'representante' && d.pontos) {
+            // Saldo de pontos do Jueri: um lançamento só por pessoa; reimportar atualiza o valor.
+            const qtd = Math.floor(Number(String(d.pontos).replace(/\./g, '').replace(',', '.')));
+            if (!Number.isFinite(qtd)) throw new Error(`pontos inválidos (${d.pontos})`);
+            await tx
+              .insert(pontos)
+              .values({ pessoaId: id, pontos: qtd, motivo: 'Saldo de pontos trazido do Jueri', origemTipo: 'jueri', origemId: id, regra: 'saldo_inicial', usuarioId })
+              .onConflictDoUpdate({ target: [pontos.origemTipo, pontos.origemId, pontos.regra], set: { pontos: qtd } });
+          }
         } catch (e) {
           r.erros.push({ linha: n, mensagem: (e as Error).message });
         }

@@ -22,7 +22,7 @@ export function podeRetirarMaleta(s: SituacaoRepresentante, valorMaleta: Centavo
   const creditoLivre = Math.max(0, s.limite - s.emMaletas);
   const motivos: string[] = [];
   if (s.bloqueadaManualmente) motivos.push('Representante bloqueada pela matriz.');
-  if (s.maiorAtrasoDias >= regras.diasParaBloquear) motivos.push(`Pendência com ${s.maiorAtrasoDias} dias de atraso.`);
+  if (regras.diasParaBloquear > 0 && s.maiorAtrasoDias >= regras.diasParaBloquear) motivos.push(`Pendência com ${s.maiorAtrasoDias} dias de atraso.`);
   if (s.maletasAbertas >= regras.maletasSimultaneas) motivos.push(`Já tem ${s.maletasAbertas} maleta(s) aberta(s); o máximo é ${regras.maletasSimultaneas}.`);
   if (valorMaleta > creditoLivre) motivos.push('Valor da maleta passa do crédito livre.');
   return { pode: motivos.length === 0, creditoLivre, motivos };
@@ -30,7 +30,7 @@ export function podeRetirarMaleta(s: SituacaoRepresentante, valorMaleta: Centavo
 
 /**
  * Novo limite depois de um acerto.
- * Em dia e com a meta batida: aumenta. Com atraso acima do prazo de bloqueio: volta ao limite inicial.
+ * Em dia e com a meta batida: aumenta. Com atraso acima do prazo de bloqueio (se houver): volta ao limite inicial.
  * Caso contrário: mantém.
  */
 export function novoLimite(
@@ -38,7 +38,7 @@ export function novoLimite(
   acerto: { diasAtraso: number; percentualVendidoPb: number; houvePerda: boolean },
   regras: RegrasConsignado,
 ): { limite: Centavos; motivo: string } {
-  if (acerto.diasAtraso >= regras.diasParaBloquear) {
+  if (regras.diasParaBloquear > 0 && acerto.diasAtraso >= regras.diasParaBloquear) {
     return { limite: Math.min(limiteAtual, regras.limiteInicial), motivo: 'Acerto com atraso: limite reduzido ao inicial.' };
   }
   if (acerto.diasAtraso === 0 && acerto.percentualVendidoPb >= regras.metaMinimaVendidaPb && !acerto.houvePerda) {

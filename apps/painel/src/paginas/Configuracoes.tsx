@@ -18,12 +18,12 @@ const DIN = ['limiteInicial', 'limiteMaximo'];
 const CAMPOS: [string, string, string][] = [
   ['prazoAcertoDias', 'Prazo do acerto (dias)', 'Contado a partir da retirada'],
   ['comissaoAvistaPb', 'Comissão à vista (%)', 'Quando o acerto é pago à vista'],
-  ['comissaoPrazoPb', 'Comissão a prazo (%)', 'Boleto ou cartão parcelado'],
+  ['comissaoPrazoPb', 'Comissão a prazo (%)', 'Boleto ou cartão. Igual à vista = comissão fixa'],
   ['parcelasMaximas', 'Parcelas máximas', 'No acerto a prazo'],
-  ['multaAtrasoPb', 'Multa por atraso (%)', 'Cobrada uma vez'],
-  ['jurosMesPb', 'Juros por mês (%)', 'Proporcional aos dias'],
+  ['multaAtrasoPb', 'Multa por atraso (%)', 'Cobrada uma vez. 0 = sem multa'],
+  ['jurosMesPb', 'Juros por mês (%)', 'Proporcional aos dias. 0 = sem juros'],
   ['carenciaDias', 'Carência (dias)', 'Tolerância antes da multa'],
-  ['diasParaBloquear', 'Dias de atraso para bloquear', 'Impede nova maleta'],
+  ['diasParaBloquear', 'Dias de atraso para bloquear', 'Impede nova maleta. 0 = nunca bloqueia, só avisa'],
   ['limiteInicial', 'Limite da 1ª maleta (R$)', ''],
   ['limiteMaximo', 'Limite máximo (R$)', ''],
   ['aumentoLimitePb', 'Aumento após acerto bom (%)', 'Em dia e com a meta batida'],
@@ -75,8 +75,13 @@ function Regras() {
   return (
     <>
       <div className="flex entre" style={{ marginBottom: 12 }}>
-        <p className="muted">Valores provisórios até a Aritana confirmar os percentuais. Mudanças valem para os próximos acertos e entram nos novos contratos.</p>
-        {editavel && <button className="botao" onClick={() => salvar.mutate()} disabled={salvar.isPending}>Salvar regras</button>}
+        <p className="muted">Mudanças valem para os próximos acertos e entram nos novos contratos.</p>
+        {editavel && (
+          <div className="flex">
+            <button className="botao claro" title="Preenche a tela com as regras que a Aritana usa hoje no Jueri; confira e clique em Salvar" onClick={() => setT({ ...t, prazoAcertoDias: '30', comissaoAvistaPb: '30', comissaoPrazoPb: '30', multaAtrasoPb: '0', jurosMesPb: '0', carenciaDias: '0', diasParaBloquear: '0', metaMinimaVendidaPb: '30' })}>Usar regras do Jueri</button>
+            <button className="botao" onClick={() => salvar.mutate()} disabled={salvar.isPending}>Salvar regras</button>
+          </div>
+        )}
       </div>
       {salvar.isSuccess && <div className="aviso ok" style={{ marginBottom: 12 }}>Regras salvas.</div>}
       {salvar.error && <div style={{ marginBottom: 12 }}><Erro erro={salvar.error} /></div>}
@@ -85,7 +90,7 @@ function Regras() {
           <Campo key={k} rotulo={r} ajuda={a}><input value={t[k] ?? ''} onChange={(e) => setT({ ...t, [k]: e.target.value })} inputMode="decimal" disabled={!editavel} /></Campo>
         ))}
         <div className="campo"><label>Peça perdida ou quebrada</label><select value={perdida ? 'custo' : 'preco'} onChange={(e) => setPerdida(e.target.value === 'custo')} disabled={!editavel}><option value="custo">Cobrada pelo custo</option><option value="preco">Cobrada pelo preço de venda</option></select></div>
-        <p className="muted l4">A comissão de cada nível (Bronze, Prata, Ouro, Líder) pode substituir a comissão padrão, em Rede › Níveis e metas.</p>
+        <p className="muted l4">A comissão pode ser trocada por nível (Rede › Níveis e metas) ou por pessoa, no cadastro dela (ex.: representantes do Jueri com 10%). A do cadastro vale primeiro, depois a do nível, depois esta.</p>
       </div>
       <RegrasVenda />
     </>

@@ -71,6 +71,13 @@
       "when": 1794652630087,
       "tag": "0009_formularios_marketing",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1794677448331,
+      "tag": "0010_jueri_campos",
+      "breakpoints": true
     }
   ]
 }

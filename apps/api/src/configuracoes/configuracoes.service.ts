@@ -15,14 +15,18 @@ export class ConfiguracoesService {
     return { ...REGRAS_PADRAO, ...((c?.valor as Partial<RegrasConsignado>) ?? {}) };
   }
 
-  /** Regras com a comissão do nível da representante, se o nível tiver comissão própria. */
+  /**
+   * Regras com a comissão que vale para esta representante:
+   * a comissão própria dela (cadastro) > a do nível > a padrão.
+   */
   async regrasDaRepresentante(representanteId: string, tx?: Tx): Promise<RegrasConsignado> {
     const base = await this.regras(tx);
     const [n] = await (tx ?? this.db)
-      .select({ a: niveis.comissaoAvistaPb, p: niveis.comissaoPrazoPb })
+      .select({ propria: pessoas.comissaoPb, a: niveis.comissaoAvistaPb, p: niveis.comissaoPrazoPb })
       .from(pessoas)
       .leftJoin(niveis, eq(niveis.id, pessoas.nivelId))
       .where(eq(pessoas.id, representanteId));
+    if (n?.propria != null) return { ...base, comissaoAvistaPb: n.propria, comissaoPrazoPb: n.propria };
     return { ...base, comissaoAvistaPb: n?.a ?? base.comissaoAvistaPb, comissaoPrazoPb: n?.p ?? base.comissaoPrazoPb };
   }
 

@@ -100,6 +100,8 @@ export function FichaRepresentante() {
   const [aba, setAba] = useState<AbaFicha>(['rede', 'credito', 'maletas', 'financeiro', 'documentos'].includes(busca.get('aba') ?? '') ? (busca.get('aba') as AbaFicha) : 'dados');
   const [f, setF] = useState<Pessoa>(VAZIA);
   const [limiteTexto, setLimiteTexto] = useState(centavosParaTexto(VAZIA.limiteCredito));
+  const [metaTexto, setMetaTexto] = useState('');
+  const [comissaoTexto, setComissaoTexto] = useState('');
 
   const q = useQuery({ queryKey: ['pessoa', id], queryFn: () => api<Pessoa>(`/pessoas/${id}`), enabled: !nova });
   const niveis = useQuery({ queryKey: ['niveis'], queryFn: () => api<{ id: string; nome: string }[]>('/niveis') });
@@ -108,6 +110,8 @@ export function FichaRepresentante() {
     if (q.data) {
       setF(q.data);
       setLimiteTexto(centavosParaTexto(q.data.limiteCredito));
+      setMetaTexto(q.data.metaMensal ? centavosParaTexto(q.data.metaMensal) : '');
+      setComissaoTexto(q.data.comissaoPb != null ? String(q.data.comissaoPb / 100).replace('.', ',') : '');
     }
   }, [q.data]);
 
@@ -115,6 +119,8 @@ export function FichaRepresentante() {
     mutationFn: () => {
       const { maletas, titulos, rede, nivel, lider, saldoCredito, documentos, slug, criadoEm, atualizadoEm, id: _id, ...corpo } = f;
       corpo.limiteCredito = paraCentavos(limiteTexto);
+      corpo.metaMensal = metaTexto.trim() ? paraCentavos(metaTexto) : 0;
+      corpo.comissaoPb = comissaoTexto.trim() ? Math.round(Number(comissaoTexto.replace(',', '.')) * 100) : null;
       corpo.referencias = (f.referencias ?? []).filter((r: any) => r.nome?.trim()).map(({ nome, telefone, relacao }: any) => ({ nome, telefone, relacao }));
       return nova ? api<Pessoa>('/pessoas', { corpo }) : api<Pessoa>(`/pessoas/${id}`, { metodo: 'PATCH', corpo });
     },
@@ -174,8 +180,11 @@ export function FichaRepresentante() {
             <div className="secao">Contato</div>
             {inp('telefone1', 'Telefone / WhatsApp', { inputMode: 'tel' })}
             {inp('telefone2', 'Telefone 2', { inputMode: 'tel' })}
+            {inp('telefone3', 'Telefone 3', { inputMode: 'tel' })}
             {inp('email', 'E-mail', { type: 'email' })}
             {inp('instagram', 'Instagram')}
+            {inp('redesSociais', 'Outras redes sociais', { placeholder: 'Facebook, TikTok…' })}
+            {inp('localTrabalho', 'Onde trabalha')}
             <div className="secao">Endereço</div>
             {inp('cep', 'CEP', { inputMode: 'numeric' })}
             {inp('logradouro', 'Logradouro', {}, 'l2')}
@@ -197,6 +206,12 @@ export function FichaRepresentante() {
             <div className="secao">Observações</div>
             <Campo rotulo="Observação" className="l2"><textarea rows={3} value={f.observacao ?? ''} onChange={set('observacao')} disabled={!editavel} /></Campo>
             <Campo rotulo="Observação interna (só a equipe vê)" className="l2"><textarea rows={3} value={f.observacaoInterna ?? ''} onChange={set('observacaoInterna')} disabled={!editavel} /></Campo>
+            {f.camposExtras && Object.keys(f.camposExtras).length > 0 && (
+              <div className="l4">
+                <div className="secao" style={{ marginBottom: 8 }}>Outros dados (vindos do Jueri)</div>
+                <table className="tabela"><tbody>{Object.entries(f.camposExtras as Record<string, string>).map(([k, v]) => <tr key={k}><td className="muted">{k}</td><td>{v}</td></tr>)}</tbody></table>
+              </div>
+            )}
           </div>
         )}
         {aba === 'rede' && (
@@ -207,6 +222,10 @@ export function FichaRepresentante() {
             <Campo rotulo="Revendedora líder"><select value={f.liderId ?? ''} onChange={(e) => setF({ ...f, liderId: e.target.value || null })} disabled={!editavel}><option value="">Nenhuma</option>{lideres.data?.itens.filter((l) => l.id !== id).map((l) => <option key={l.id} value={l.id}>{l.nome}</option>)}</select></Campo>
             <Campo rotulo="Indicada por"><select value={f.indicadoPorId ?? ''} onChange={(e) => setF({ ...f, indicadoPorId: e.target.value || null })} disabled={!editavel}><option value="">—</option>{lideres.data?.itens.filter((l) => l.id !== id).map((l) => <option key={l.id} value={l.id}>{l.nome}</option>)}</select></Campo>
             {inp('praca', 'Praça / região')}
+            {inp('tipoRevendedor', 'Tipo', { placeholder: 'Revendedora, líder, representante…' })}
+            {inp('segmento', 'Segmento')}
+            <Campo rotulo="Meta mensal própria (R$)" ajuda="Vazio = usa a meta do nível"><input value={metaTexto} onChange={(e) => setMetaTexto(e.target.value)} inputMode="decimal" disabled={!editavel} /></Campo>
+            <Campo rotulo="Comissão própria (%)" ajuda="Vazio = usa a do nível ou a padrão" erro={campos.comissaoPb}><input value={comissaoTexto} onChange={(e) => setComissaoTexto(e.target.value)} inputMode="decimal" disabled={!editavel} /></Campo>
             <Campo rotulo="Limite de crédito (R$)" ajuda="Valor máximo em peças na maleta" erro={campos.limiteCredito}><input value={limiteTexto} onChange={(e) => setLimiteTexto(e.target.value)} inputMode="decimal" disabled={!editavel} /></Campo>
             <div className="campo"><label>&nbsp;</label><label className="check"><input type="checkbox" checked={!!f.bloqueado} onChange={(e) => setF({ ...f, bloqueado: e.target.checked })} disabled={!editavel} /> Bloquear novas maletas</label></div>
             {f.bloqueado && inp('motivoBloqueio', 'Motivo do bloqueio', {}, 'l4')}

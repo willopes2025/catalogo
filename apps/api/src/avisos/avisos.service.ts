@@ -68,6 +68,11 @@ export class AvisosService implements OnModuleInit, OnModuleDestroy {
       select m.id, m.numero, m.data_limite::text, p.nome, p.email
       from maletas m join pessoas p on p.id = m.representante_id
       where m.status = 'aberta' and m.data_limite <= ${vencendo}::date`);
+    const regras = await this.config.regras();
+    const encargos = regras.multaAtrasoPb > 0 || regras.jurosMesPb > 0;
+    const consequencia = encargos && regras.diasParaBloquear > 0
+      ? 'O atraso gera multa e juros e pode bloquear a próxima maleta. '
+      : encargos ? 'O atraso gera multa e juros. ' : regras.diasParaBloquear > 0 ? 'O atraso pode bloquear a próxima maleta. ' : '';
     for (const m of maletas.rows) {
       if (!m.email) continue;
       const primeiro = m.nome.split(' ')[0];
@@ -83,7 +88,7 @@ export class AvisosService implements OnModuleInit, OnModuleDestroy {
           chave: `maleta-atrasada:${m.id}:${m.data_limite}`,
           para: m.email,
           assunto: `Acerto da maleta nº ${m.numero} em atraso`,
-          texto: `Olá, ${primeiro}.\n\nO acerto da maleta nº ${m.numero} venceu em ${br(m.data_limite)} e ainda não foi feito.\nO atraso gera multa e juros e pode bloquear a próxima maleta. Fale com a Aritana para acertar o quanto antes.\n\nAritana Semijoias`,
+          texto: `Olá, ${primeiro}.\n\nO acerto da maleta nº ${m.numero} venceu em ${br(m.data_limite)} e ainda não foi feito.\n${consequencia}Fale com a Aritana para acertar o quanto antes.\n\nAritana Semijoias`,
         });
       }
     }

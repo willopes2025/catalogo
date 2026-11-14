@@ -11,7 +11,7 @@ export function Produtos() {
   const [params, setParams] = useSearchParams();
   const [busca, setBusca] = useState(params.get('busca') ?? '');
   const navegar = useNavigate();
-  const cats = useQuery({ queryKey: ['categorias'], queryFn: () => api<{ id: string; nome: string }[]>('/produtos/categorias') });
+  const cats = useQuery({ queryKey: ['categorias'], queryFn: () => api<{ id: string; nome: string; caminho: string }[]>('/produtos/categorias') });
   const q = useQuery({ queryKey: ['produtos', params.toString()], queryFn: () => api<{ itens: Linha[]; total: number }>(`/produtos?${params.toString()}`) });
   return (
     <>
@@ -20,7 +20,7 @@ export function Produtos() {
         <input placeholder="Descrição, referência ou código de barras" value={busca} onChange={(e) => setBusca(e.target.value)} autoFocus />
         <select value={params.get('categoriaId') ?? ''} onChange={(e) => { const p = new URLSearchParams(params); e.target.value ? p.set('categoriaId', e.target.value) : p.delete('categoriaId'); setParams(p); }}>
           <option value="">Todas as categorias</option>
-          {cats.data?.map((c) => <option key={c.id} value={c.id}>{c.nome}</option>)}
+          {cats.data?.map((c) => <option key={c.id} value={c.id}>{c.caminho}</option>)}
         </select>
         <button className="botao claro">Buscar</button>
       </form>
@@ -50,6 +50,12 @@ export function Produtos() {
 }
 
 const DINHEIRO = ['custo', 'preco', 'precoAtacado'] as const;
+/** Composição do custo (opcional; vem do Jueri). */
+const CUSTOS: [string, string][] = [['bruto', 'Custo bruto'], ['insumos', 'Insumos'], ['banhoOuro', 'Banho ouro'], ['banhoPrata', 'Banho prata'], ['banhoRodio', 'Banho ródio'], ['verniz', 'Verniz']];
+const PCTS: [string, string][] = [['lucroVarejoPb', 'Lucro varejo (%)'], ['lucroAtacadoPb', 'Lucro atacado (%)'], ['fcpPb', 'FCP (%)'], ['impostoPb', 'Imposto (%)']];
+const MEDIDAS: [string, string][] = [['largura', 'Largura (mm)'], ['altura', 'Altura (mm)'], ['profundidade', 'Profundidade (mm)'], ['peso', 'Peso (g)']];
+const pbTexto = (v: number | null | undefined) => (v == null ? '' : String(v / 100).replace('.', ','));
+const textoPb = (t: string) => (t.trim() ? Math.round(Number(t.replace(',', '.')) * 100) : null);
 
 export function FichaProduto() {
   const { id } = useParams();
@@ -58,13 +64,21 @@ export function FichaProduto() {
   const qc = useQueryClient();
   const [f, setF] = useState<Record<string, any>>({ exibeCatalogo: true, ativo: true, estoqueMinimo: 0 });
   const [din, setDin] = useState<Record<string, string>>({ custo: '', preco: '', precoAtacado: '' });
+  const [extra, setExtra] = useState<Record<string, string>>({});
   const q = useQuery({ queryKey: ['produto', id], queryFn: () => api<Record<string, any>>(`/produtos/${id}`), enabled: !novo });
-  const cats = useQuery({ queryKey: ['categorias'], queryFn: () => api<{ id: string; nome: string }[]>('/produtos/categorias') });
+  const cats = useQuery({ queryKey: ['categorias'], queryFn: () => api<{ id: string; nome: string; caminho: string }[]>('/produtos/categorias') });
   const lotes = useQuery({ queryKey: ['lotes'], queryFn: () => api<{ id: string; codigo: string }[]>('/lotes') });
   useEffect(() => {
     if (q.data) {
       setF(q.data);
       setDin(Object.fromEntries(DINHEIRO.map((k) => [k, centavosParaTexto(q.data![k])])));
+      const d = q.data;
+      setExtra({
+        ...Object.fromEntries(CUSTOS.map(([k]) => [`c_${k}`, d.custos?.[k] != null ? centavosParaTexto(d.custos[k]) : ''])),
+        ...Object.fromEntries(PCTS.map(([k]) => [k, pbTexto(d[k])])),
+        ...Object.fromEntries(MEDIDAS.map(([k]) => [`m_${k}`, d.medidas?.[k] != null ? String(d.medidas[k]).replace('.', ',') : ''])),
+        marketplaces: (d.marketplaces ?? []).join(', '),
+      });
     }
   }, [q.data]);
   const salvar = useMutation({
@@ -73,6 +87,11 @@ export function FichaProduto() {
       c.loteBanhoId = c.loteBanhoId || null;
       for (const k of DINHEIRO) c[k] = din[k] ? paraCentavos(din[k]) : k === 'precoAtacado' ? null : 0;
       c.estoqueMinimo = Number(c.estoqueMinimo) || 0;
+      c.estoqueMaximo = c.estoqueMaximo === '' || c.estoqueMaximo == null ? null : Number(c.estoqueMaximo) || 0;
+      c.custos = Object.fromEntries(CUSTOS.filter(([k]) => extra[`c_${k}`]?.trim()).map(([k]) => [k, paraCentavos(extra[`c_${k}`])]));
+      for (const [k] of PCTS) c[k] = textoPb(extra[k] ?? '');
+      c.medidas = Object.fromEntries(MEDIDAS.filter(([k]) => extra[`m_${k}`]?.trim()).map(([k]) => [k, Number(extra[`m_${k}`].replace(',', '.')) || 0]));
+      c.marketplaces = (extra.marketplaces ?? '').split(',').map((x) => x.trim()).filter(Boolean);
       return novo ? api<any>('/produtos', { corpo: c }) : api<any>(`/produtos/${id}`, { metodo: 'PATCH', corpo: c });
     },
     onSuccess: (p) => { qc.invalidateQueries({ queryKey: ['produtos'] }); if (novo) navegar(`/produtos/${p.id}`, { replace: true }); },
@@ -95,23 +114,37 @@ export function FichaProduto() {
           {inp('descricao', 'Descrição', 'l2')}
           {inp('referencia', 'Referência')}
           {inp('codigoBarras', 'Código de barras', '', { placeholder: novo ? 'Gerado se ficar vazio' : '' })}
-          <Campo rotulo="Categoria"><select value={f.categoriaId ?? ''} onChange={(e) => setF({ ...f, categoriaId: e.target.value || null })} disabled={!editavel}><option value="">—</option>{cats.data?.map((c) => <option key={c.id} value={c.id}>{c.nome}</option>)}</select></Campo>
+          {inp('ean', 'EAN de fábrica', '', { placeholder: 'Se diferente do código de barras' })}
+          <Campo rotulo="Categoria"><select value={f.categoriaId ?? ''} onChange={(e) => setF({ ...f, categoriaId: e.target.value || null })} disabled={!editavel}><option value="">—</option>{cats.data?.map((c) => <option key={c.id} value={c.id}>{c.caminho}</option>)}</select></Campo>
           {inp('tamanho', 'Tamanho')}
           {inp('cor', 'Cor')}
+          {inp('tipoBanho', 'Tipo de banho', '', { placeholder: 'Ouro, prata, ródio…' })}
           {inp('pesoBanho', 'Banho')}
           {inp('milesimos', 'Milésimos')}
           {inp('codigoFornecedor', 'Código do fornecedor')}
           <Campo rotulo="Lote do banho"><select value={f.loteBanhoId ?? ''} onChange={set('loteBanhoId')} disabled={!editavel}><option value="">—</option>{lotes.data?.map((l) => <option key={l.id} value={l.id}>{l.codigo}</option>)}</select></Campo>
           {inp('localizacao', 'Localização na prateleira')}
           {inp('estoqueMinimo', 'Estoque mínimo', '', { type: 'number', min: 0 })}
+          {inp('estoqueMaximo', 'Estoque máximo', '', { type: 'number', min: 0 })}
+          <Campo rotulo="Descrição completa (catálogo)" className="l4"><textarea rows={2} value={f.descricaoCompleta ?? ''} onChange={set('descricaoCompleta')} disabled={!editavel} /></Campo>
           <div className="secao">Valores</div>
           <Campo rotulo="Custo (R$)" erro={campos.custo}><input value={din.custo} onChange={(e) => setDin({ ...din, custo: e.target.value })} inputMode="decimal" disabled={!editavel} /></Campo>
           <Campo rotulo="Preço de varejo (R$)" erro={campos.preco}><input value={din.preco} onChange={(e) => setDin({ ...din, preco: e.target.value })} inputMode="decimal" disabled={!editavel} /></Campo>
           <Campo rotulo="Preço de atacado (R$)"><input value={din.precoAtacado} onChange={(e) => setDin({ ...din, precoAtacado: e.target.value })} inputMode="decimal" disabled={!editavel} /></Campo>
           <Campo rotulo="Margem"><input value={preco ? pct(Math.round(((preco - custo) * 10000) / preco)) : '—'} disabled /></Campo>
+          {PCTS.slice(0, 2).map(([k, r]) => <Campo key={k} rotulo={r}><input value={extra[k] ?? ''} onChange={(e) => setExtra({ ...extra, [k]: e.target.value })} inputMode="decimal" disabled={!editavel} /></Campo>)}
+          <details className="l4"><summary className="muted">Composição do custo</summary><div className="form" style={{ marginTop: 8 }}>
+            {CUSTOS.map(([k, r]) => <Campo key={k} rotulo={`${r} (R$)`}><input value={extra[`c_${k}`] ?? ''} onChange={(e) => setExtra({ ...extra, [`c_${k}`]: e.target.value })} inputMode="decimal" disabled={!editavel} /></Campo>)}
+          </div></details>
           <div className="secao">Fiscal</div>
           {inp('ncm', 'NCM')}
           {inp('cfop', 'CFOP')}
+          {PCTS.slice(2).map(([k, r]) => <Campo key={k} rotulo={r}><input value={extra[k] ?? ''} onChange={(e) => setExtra({ ...extra, [k]: e.target.value })} inputMode="decimal" disabled={!editavel} /></Campo>)}
+          <div className="secao">Medidas e vendas online</div>
+          {MEDIDAS.map(([k, r]) => <Campo key={k} rotulo={r}><input value={extra[`m_${k}`] ?? ''} onChange={(e) => setExtra({ ...extra, [`m_${k}`]: e.target.value })} inputMode="decimal" disabled={!editavel} /></Campo>)}
+          <Campo rotulo="Marketplaces" className="l2" ajuda="Separados por vírgula"><input value={extra.marketplaces ?? ''} onChange={(e) => setExtra({ ...extra, marketplaces: e.target.value })} disabled={!editavel} /></Campo>
+          <Campo rotulo="Observação" className="l2"><textarea rows={2} value={f.observacao ?? ''} onChange={set('observacao')} disabled={!editavel} /></Campo>
+          {f.camposExtras && Object.keys(f.camposExtras).length > 0 && <div className="l4 muted">Outros dados do Jueri: {Object.entries(f.camposExtras as Record<string, string>).map(([k, v]) => `${k}: ${v}`).join(' · ')}</div>}
           <div className="campo l2"><label>&nbsp;</label><div className="flex"><label className="check"><input type="checkbox" checked={!!f.exibeCatalogo} onChange={(e) => setF({ ...f, exibeCatalogo: e.target.checked })} disabled={!editavel} /> Aparece no catálogo</label><label className="check"><input type="checkbox" checked={!!f.ativo} onChange={(e) => setF({ ...f, ativo: e.target.checked })} disabled={!editavel} /> Ativo</label></div></div>
         </div>
         <div className="cartao">

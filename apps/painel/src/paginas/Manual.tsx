@@ -166,6 +166,8 @@ const SECOES: Secao[] = [
       { t: 'Integrações', d: 'Quando a Aritana tiver os acessos (e-mail, Asaas, Focus NFe, Assertiva), preencha em Configurações › Integrações e use "Testar conexão".' },
       { t: 'Confirmações', d: 'Itens que só a Aritana pode garantir (certificado A1, CFOPs do contador, jurídico, regras) são marcados como "Feito" por quem confirmou.' },
       { t: 'Apagar os dados de teste', d: 'No dia da virada, a Diretoria apaga os dados de teste (digitando APAGAR) e importa os dados reais.' },
+      { t: 'Importar do Jueri', d: 'Em Configurações › Integrações › Jueri, salve o ID do cliente (11566) e o token gerado no Jueri (Configurações › API). Depois, em Configurações › Importar planilhas, escolha as partes e o local do estoque e clique em Simular: nada é gravado e aparece o relatório. Conferido, clique em Importar de verdade. Pode repetir: o que já veio é atualizado, nunca duplicado; maletas já trazidas não se repetem.' },
+      { t: 'Regras do Jueri', d: 'Em Configurações › Regras do consignado, o botão "Usar regras do Jueri" preenche comissão fixa de 30%, acerto em 30 dias, meta de 30%, sem multa, sem juros e sem bloqueio (0 = nunca bloqueia, só avisa). Quem tem comissão diferente (ex.: representantes com 10%) recebe a comissão própria no cadastro, em Rede › Modelo e rede.' },
     ],
   },
   {

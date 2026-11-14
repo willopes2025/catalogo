@@ -38,6 +38,16 @@ test('login', async () => {
   assert.equal(d.usuario.grupo, 'Diretoria');
 });
 
+test('regras padrão são as do Jueri; os testes seguintes ligam multa, juros e bloqueio para exercitar os cálculos', async () => {
+  const r = await ok('GET', '/configuracoes/regras-consignado');
+  assert.equal(r.comissaoAvistaPb, 3000);
+  assert.equal(r.comissaoPrazoPb, 3000, 'comissão fixa');
+  assert.equal(r.multaAtrasoPb, 0);
+  assert.equal(r.jurosMesPb, 0);
+  assert.equal(r.diasParaBloquear, 0, 'não bloqueia');
+  await ok('PUT', '/configuracoes/regras-consignado', { ...r, comissaoPrazoPb: 2500, multaAtrasoPb: 200, jurosMesPb: 100, diasParaBloquear: 5 });
+});
+
 test('cadastro de representante valida CPF e cria', async () => {
   const ruim = await chamar('POST', '/pessoas', { tipo: 'representante', nome: 'Teste CPF', documento: '111.111.111-11' });
   assert.equal(ruim.status, 400);
@@ -843,6 +853,87 @@ test('marketing: custo por candidata e por aprovada, retorno e investimento vind
   assert.equal(l.campanha.sincronizado, true);
   await ok('PUT', '/integracoes/meta_ads', { valores: { META_ADS_TOKEN: 'token-errado-123456' } });
   assert.equal((await chamar('POST', '/marketing/sincronizar-meta')).status, 503);
+});
+
+test('Jueri pela API: testa a conexão, simula sem gravar, importa tudo e repetir não duplica', async () => {
+  assert.equal((await ok('GET', '/jueri')).configurado, false);
+  const local = (await ok('GET', '/estoque/locais')).find((l) => l.tipo === 'deposito');
+  assert.equal((await chamar('POST', '/jueri/importar', { simular: true, etapas: ['produtos'], localId: local.id })).status, 400, 'sem token');
+  await ok('PUT', '/integracoes/jueri', { valores: { JUERI_CLIENTE_ID: '11566', JUERI_TOKEN: 'token-jueri-teste' } });
+  assert.match((await ok('POST', '/integracoes/jueri/testar')).mensagem, /2 categoria/);
+
+  const esperar = async () => {
+    for (let i = 0; i < 100; i++) {
+      const s = (await ok('GET', '/jueri')).execucao;
+      if (s.situacao !== 'rodando') return s;
+      await new Promise((r) => setTimeout(r, 200));
+    }
+    throw new Error('importação não terminou');
+  };
+  const todas = ['cadastros', 'produtos', 'pessoas', 'maletas', 'financeiro'];
+  await ok('POST', '/jueri/importar', { simular: true, etapas: todas, localId: local.id });
+  assert.equal((await chamar('POST', '/jueri/importar', { simular: true, etapas: todas, localId: local.id })).status, 400, 'uma de cada vez');
+  let ex = await esperar();
+  assert.equal(ex.situacao, 'concluida', ex.erro);
+  assert.equal(ex.partes['Produtos'].criados, 2);
+  assert.equal(ex.partes['Produtos'].erros.length, 1, 'produto sem preço');
+  assert.equal(ex.partes['Revendedoras'].criados, 2);
+  assert.equal(ex.partes['Maletas abertas'].criados, 1);
+  assert.match(ex.partes['Maletas abertas'].erros[0], /9999/);
+  assert.equal(ex.partes['Contas a receber'].criados, 1, 'só a conta em aberto');
+  assert.ok(ex.estruturas.pedidoItem.includes('fk_produto_id'));
+  assert.equal((await chamar('GET', '/produtos/codigo/7899990090010')).status, 404, 'simulação não grava');
+
+  await ok('POST', '/jueri/importar', { simular: false, etapas: todas, localId: local.id, comissaoRepresentantePb: 1000 });
+  ex = await esperar();
+  assert.equal(ex.situacao, 'concluida', ex.erro);
+  const p = await ok('GET', '/produtos/codigo/7899990090010');
+  assert.equal(p.preco, 5990);
+  assert.equal(p.precoAtacado, 3990);
+  assert.equal(p.custo, 1500, 'bruto + banho');
+  assert.deepEqual(p.custos, { bruto: 1000, banhoOuro: 500 });
+  assert.equal(p.fcpPb, 200);
+  assert.equal(p.ean, '7890000000017');
+  assert.equal(p.camposExtras['Número da peça'], 'P-77');
+  const cat = (await ok('GET', '/produtos/categorias')).find((c) => c.id === p.categoriaId);
+  assert.equal(cat.caminho, 'Anel API › Solitário API');
+  assert.equal((await ok('GET', '/estoque/rastreio/7899990090010')).porLocal.find((l) => l.tipo === 'deposito').quantidade, 7);
+
+  const reps = (await ok('GET', '/pessoas?tipo=representante&busca=API Jueri')).itens;
+  const rev = reps.find((x) => x.nome === 'Revendedora API Jueri');
+  assert.equal(rev.lider, 'Líder API Jueri');
+  const ficha = await ok('GET', `/pessoas/${rev.id}`);
+  assert.equal(ficha.telefone3, '2733334444');
+  assert.equal(ficha.genero, 'Feminino');
+  assert.equal(ficha.maletas.length, 1);
+  const lider = await ok('GET', `/pessoas/${reps.find((x) => x.nome === 'Líder API Jueri').id}`);
+  assert.equal(lider.tipoRevendedor, 'Revendedora líder');
+  assert.equal(lider.localTrabalho, 'Escola Estadual');
+  assert.equal(lider.referencias[0].nome, 'Maria Referência');
+  const repJ = await ok('GET', `/pessoas/${reps.find((x) => x.nome === 'Representante API Jueri').id}`);
+  assert.equal(repJ.comissaoPb, 1000);
+  assert.equal(repJ.metaMensal, 250000);
+
+  const m = await ok('GET', `/maletas/${ficha.maletas[0].id}`);
+  assert.equal(m.dataLimite, '2026-12-01');
+  const pecas = m.itens.reduce((a, i) => a + i.enviada, 0);
+  assert.equal(pecas, 3, 'só o que ainda está com ela; a peça vendida no Jueri não entra');
+  assert.equal((await ok('GET', '/estoque/rastreio/7899990090010')).porLocal.find((l) => l.tipo === 'deposito').quantidade, 7, 'maleta não tira do estoque da empresa');
+
+  const fin = await ok('GET', `/pessoas/${rev.id}`);
+  assert.ok(fin.titulos.some((t) => t.valor === 15000 && t.status === 'aberto'));
+
+  // Repetir: atualiza, não duplica.
+  await ok('POST', '/jueri/importar', { simular: false, etapas: todas, localId: local.id });
+  ex = await esperar();
+  assert.equal(ex.partes['Produtos'].criados, 0);
+  assert.equal(ex.partes['Produtos'].atualizados, 2);
+  assert.equal(ex.partes['Revendedoras'].criados, 0);
+  assert.equal(ex.partes['Maletas abertas'].ignorados, 1);
+  assert.equal(ex.partes['Contas a receber'].criados, 0);
+  assert.equal((await ok('GET', `/pessoas/${rev.id}`)).maletas.length, 1);
+  const hist = await ok('GET', '/importacao/historico');
+  assert.ok(hist.some((h) => h.tipo === 'jueri:api'));
 });
 
 // Este fica por último: apaga os dados de teste.

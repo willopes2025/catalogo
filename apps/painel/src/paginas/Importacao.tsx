@@ -5,6 +5,7 @@ import { readSheet } from 'read-excel-file/browser';
 import { api } from '../api';
 import { dataHora } from '../formato';
 import { Campo, Erro } from '../componentes/ui';
+import { ImportarJueri } from './ImportarJueri';
 
 type Tipo = 'produtos' | 'representante' | 'cliente' | 'fornecedor';
 const NOMES: Record<Tipo, string> = { produtos: 'Produtos (com estoque)', representante: 'Representantes', cliente: 'Clientes', fornecedor: 'Fornecedores' };
@@ -64,8 +65,9 @@ export function Importacao() {
   const colunas = linhas[0] ? Object.keys(linhas[0]) : [];
   return (
     <div className="coluna">
+      <ImportarJueri />
       <div className="cartao form">
-        <div className="secao">1. O que importar</div>
+        <div className="secao">Ou por planilha · 1. O que importar</div>
         <Campo rotulo="Tipo"><select value={tipo} onChange={(e) => { setTipo(e.target.value as Tipo); setSimulacao(null); }}>{Object.entries(NOMES).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select></Campo>
         {tipo === 'produtos' && <Campo rotulo="Estoque da planilha vai para" ajuda="Vazio: só atualiza o cadastro"><select value={localId} onChange={(e) => { setLocalId(e.target.value); setSimulacao(null); }}><option value="">Não mexer no estoque</option>{locais.data?.map((l) => <option key={l.id} value={l.id}>{l.nome}</option>)}</select></Campo>}
         <Campo rotulo="Planilha (.xlsx ou .csv)" className="l2" ajuda="Exporte do Jueri pelo botão Excel de cada lista"><input type="file" accept=".xlsx,.csv,text/csv" onChange={(e) => escolher(e.target.files?.[0] ?? null)} /></Campo>

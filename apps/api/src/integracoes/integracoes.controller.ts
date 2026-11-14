@@ -11,6 +11,7 @@ import { cpfValido, soDigitos } from '../comum/documentos';
 import { AuditoriaService } from '../comum/auditoria.service';
 import { AssertivaService } from './assertiva.service';
 import { EmailService } from './email.service';
+import { JueriService } from '../jueri/jueri.service';
 
 @Controller('integracoes')
 export class IntegracoesController {
@@ -21,10 +22,12 @@ export class IntegracoesController {
     private readonly segredos: SegredosService,
     private readonly asaas: AsaasService,
     private readonly fiscal: FiscalService,
+    private readonly jueri: JueriService,
   ) {}
 
   private ligada(chave: string) {
     if (chave === 'meta_ads') return !!(this.segredos.v('META_ADS_TOKEN') && this.segredos.v('META_ADS_CONTA'));
+    if (chave === 'jueri') return this.jueri.configurado;
     return chave === 'email' ? this.email.configurado : chave === 'asaas' ? this.asaas.configurado : chave === 'fiscal' ? this.fiscal.configurado : chave === 'assertiva' ? this.assertiva.configurada : false;
   }
 
@@ -95,6 +98,7 @@ export class IntegracoesController {
     if (chave === 'asaas') return this.asaas.testar();
     if (chave === 'fiscal') return this.fiscal.testar();
     if (chave === 'assertiva') return this.assertiva.testar();
+    if (chave === 'jueri') return this.jueri.testar();
     if (chave === 'meta_ads') {
       const conta = (this.segredos.v('META_ADS_CONTA') ?? '').replace(/^act_/, '');
       const base = (process.env.META_ADS_URL ?? 'https://graph.facebook.com/v21.0').replace(/\/$/, '');

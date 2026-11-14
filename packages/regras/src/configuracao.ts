@@ -2,8 +2,9 @@ import type { Centavos, PontosBase } from './dinheiro';
 
 /**
  * Regras do consignado. Ficam numa tela de Configurações e podem ser mudadas
- * pela Aritana sem programador. Os valores padrão abaixo são PROVISÓRIOS:
- * os percentuais reais ainda serão informados pela Aritana.
+ * pela Aritana sem programador. Os valores padrão abaixo são os que a Aritana
+ * usa hoje no Jueri: comissão fixa de 30%, acerto em 30 dias, meta de 30%,
+ * sem multa, sem juros e sem bloqueio automático por atraso.
  */
 export interface RegrasConsignado {
   /** Dias entre a retirada e o acerto. */
@@ -18,7 +19,7 @@ export interface RegrasConsignado {
   jurosMesPb: PontosBase;
   /** Dias de tolerância antes de começar a cobrar multa e juros. */
   carenciaDias: number;
-  /** Dias de atraso a partir dos quais não pode retirar nova maleta. */
+  /** Dias de atraso a partir dos quais não pode retirar nova maleta. 0 = nunca bloqueia (só avisa). */
   diasParaBloquear: number;
   /** Peça perdida ou quebrada é cobrada pelo custo (true) ou pelo preço de venda (false). */
   perdidaPeloCusto: boolean;
@@ -39,11 +40,11 @@ export interface RegrasConsignado {
 export const REGRAS_PADRAO: RegrasConsignado = {
   prazoAcertoDias: 30,
   comissaoAvistaPb: 3000,
-  comissaoPrazoPb: 2500,
-  multaAtrasoPb: 200,
-  jurosMesPb: 100,
+  comissaoPrazoPb: 3000,
+  multaAtrasoPb: 0,
+  jurosMesPb: 0,
   carenciaDias: 0,
-  diasParaBloquear: 5,
+  diasParaBloquear: 0,
   perdidaPeloCusto: true,
   limiteInicial: 150_000,
   limiteMaximo: 1_500_000,

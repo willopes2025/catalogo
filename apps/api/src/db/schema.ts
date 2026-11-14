@@ -133,6 +133,18 @@ export const pessoas = pgTable(
     supervisorId: uuid('supervisor_id').references(() => usuarios.id),
     indicadoPorId: uuid('indicado_por_id').references((): AnyPgColumn => pessoas.id),
     praca: text('praca'),
+    /** Onde trabalha (ajuda a entender o público dela). */
+    localTrabalho: text('local_trabalho'),
+    segmento: text('segmento'),
+    /** Revendedora, líder, representante… (texto livre, vindo do Jueri ou da Aritana). */
+    tipoRevendedor: text('tipo_revendedor'),
+    /** Meta de vendas do mês, em centavos (0 = usa a do nível). */
+    metaMensal: integer('meta_mensal').notNull().default(0),
+    /** Comissão própria desta pessoa; vazio = usa a do nível ou a padrão. */
+    comissaoPb: integer('comissao_pb'),
+    redesSociais: text('redes_sociais'),
+    /** Campos personalizados que não têm coluna própria (ex.: os do Jueri). */
+    camposExtras: jsonb('campos_extras').$type<Record<string, string>>().notNull().default({}),
     limiteCredito: integer('limite_credito').notNull().default(0),
     bloqueado: boolean('bloqueado').notNull().default(false),
     motivoBloqueio: text('motivo_bloqueio'),
@@ -173,6 +185,7 @@ export const categorias = pgTable('categorias', {
   id: id(),
   nome: text('nome').notNull(),
   paiId: uuid('pai_id').references((): AnyPgColumn => categorias.id),
+  idJueri: text('id_jueri'),
 });
 
 export const lotesBanho = pgTable('lotes_banho', {
@@ -211,6 +224,23 @@ export const produtos = pgTable(
     fotos: jsonb('fotos').$type<string[]>().notNull().default([]),
     exibeCatalogo: boolean('exibe_catalogo').notNull().default(true),
     ativo: boolean('ativo').notNull().default(true),
+    /** EAN/GTIN de fábrica, quando diferente do código de barras usado na etiqueta. */
+    ean: text('ean'),
+    descricaoCompleta: text('descricao_completa'),
+    tipoBanho: text('tipo_banho'),
+    estoqueMaximo: integer('estoque_maximo'),
+    observacao: text('observacao'),
+    /** Composição do custo, em centavos: bruto, insumos, banhoOuro, banhoPrata, banhoRodio, verniz. */
+    custos: jsonb('custos').$type<Record<string, number>>().notNull().default({}),
+    lucroVarejoPb: integer('lucro_varejo_pb'),
+    lucroAtacadoPb: integer('lucro_atacado_pb'),
+    fcpPb: integer('fcp_pb'),
+    impostoPb: integer('imposto_pb'),
+    /** largura, altura, profundidade (mm), peso (g)… */
+    medidas: jsonb('medidas').$type<Record<string, number>>().notNull().default({}),
+    /** Marketplaces em que o produto é anunciado. */
+    marketplaces: jsonb('marketplaces').$type<string[]>().notNull().default([]),
+    camposExtras: jsonb('campos_extras').$type<Record<string, string>>().notNull().default({}),
     idJueri: text('id_jueri'),
     criadoEm: criadoEm(),
     atualizadoEm: atualizadoEm(),
@@ -293,6 +323,8 @@ export const maletas = pgTable(
     observacao: text('observacao'),
     observacaoInterna: text('observacao_interna'),
     usuarioId: uuid('usuario_id').references(() => usuarios.id),
+    /** Pedido de origem no Jueri (maletas migradas). */
+    idJueri: text('id_jueri'),
     criadoEm: criadoEm(),
     acertadaEm: timestamp('acertada_em', { withTimezone: true }),
   },
@@ -378,6 +410,7 @@ export const titulos = pgTable(
     cobrancaTipo: text('cobranca_tipo'),
     cobrancaUrl: text('cobranca_url'),
     pixCopiaCola: text('pix_copia_cola'),
+    idJueri: text('id_jueri'),
     criadoEm: criadoEm(),
   },
   (t) => ({

@@ -7,7 +7,7 @@ psql -h "$PGHOST_ADMIN" -U postgres -qc "drop database if exists aritana_teste" 
 export DATABASE_URL=postgres://aritana:aritana@localhost:5432/aritana_teste ADMIN_EMAIL=teste@aritana.local ADMIN_SENHA=SenhaTeste123 SEED_EXEMPLOS=1
 # Integrações apontando para os simuladores locais
 export ASAAS_API_KEY=chave-teste ASAAS_URL=http://localhost:3199/asaas ASAAS_WEBHOOK_TOKEN=token-webhook-teste
-export FOCUS_NFE_TOKEN=token-teste FOCUS_NFE_URL=http://localhost:3199/focus META_ADS_URL=http://localhost:3199/meta
+export FOCUS_NFE_TOKEN=token-teste FOCUS_NFE_URL=http://localhost:3199/focus META_ADS_URL=http://localhost:3199/meta JUERI_URL=http://localhost:3199/jueri
 pnpm -s build
 pnpm -s db:migrate >/dev/null
 pnpm -s db:seed >/dev/null

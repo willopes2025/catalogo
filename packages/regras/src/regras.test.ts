@@ -11,6 +11,9 @@ import {
   type ItemAcerto,
 } from './index';
 
+/** Regras com encargos e bloqueio ligados, para testar os cálculos. */
+const R = { ...REGRAS_PADRAO, comissaoPrazoPb: 2500, multaAtrasoPb: 200, jurosMesPb: 100, diasParaBloquear: 5 };
+
 const itens = (): ItemAcerto[] => [
   // Brinco: R$ 100, custo R$ 30. Levou 3, vendeu 2, devolveu 1.
   { produtoId: 'A', preco: 10000, custo: 3000, emMaleta: 3, vendida: 2, devolvida: 1, perdida: 0 },
@@ -18,7 +21,7 @@ const itens = (): ItemAcerto[] => [
   { produtoId: 'B', preco: 5000, custo: 1500, emMaleta: 2, vendida: 0, devolvida: 1, perdida: 1 },
 ];
 
-const base = { dataLimite: '2026-12-10', dataAcerto: '2026-12-10', creditoDisponivel: 0, parcial: false, regras: REGRAS_PADRAO };
+const base = { dataLimite: '2026-12-10', dataAcerto: '2026-12-10', creditoDisponivel: 0, parcial: false, regras: R };
 
 describe('acerto', () => {
   it('à vista, em dia: vendido − 30% + peça perdida pelo custo', () => {
@@ -49,7 +52,7 @@ describe('acerto', () => {
   });
 
   it('respeita a carência antes de cobrar encargos', () => {
-    const regras = { ...REGRAS_PADRAO, carenciaDias: 3 };
+    const regras = { ...R, carenciaDias: 3 };
     const r = calcularAcerto({ ...base, regras, dataAcerto: '2026-12-12', itens: itens(), forma: 'avista' });
     expect(r.diasAtraso).toBe(0);
     expect(r.multa).toBe(0);
@@ -62,7 +65,7 @@ describe('acerto', () => {
   });
 
   it('peça perdida pelo preço de venda, se configurado', () => {
-    const regras = { ...REGRAS_PADRAO, perdidaPeloCusto: false };
+    const regras = { ...R, perdidaPeloCusto: false };
     const r = calcularAcerto({ ...base, regras, itens: itens(), forma: 'avista' });
     expect(r.perdidas).toBe(5000);
   });
@@ -102,24 +105,24 @@ describe('parcelas', () => {
 describe('crédito', () => {
   const s = { limite: 150000, emMaletas: 0, maletasAbertas: 0, maiorAtrasoDias: 0, bloqueadaManualmente: false };
   it('libera maleta dentro do limite', () => {
-    expect(podeRetirarMaleta(s, 120000, REGRAS_PADRAO).pode).toBe(true);
+    expect(podeRetirarMaleta(s, 120000, R).pode).toBe(true);
   });
   it('bloqueia acima do crédito livre, com maleta aberta e com atraso', () => {
-    const r = podeRetirarMaleta({ ...s, maletasAbertas: 1, maiorAtrasoDias: 7 }, 200000, REGRAS_PADRAO);
+    const r = podeRetirarMaleta({ ...s, maletasAbertas: 1, maiorAtrasoDias: 7 }, 200000, R);
     expect(r.pode).toBe(false);
     expect(r.motivos).toHaveLength(3);
   });
   it('aumenta 20% após acerto em dia com meta batida', () => {
-    expect(novoLimite(150000, { diasAtraso: 0, percentualVendidoPb: 5000, houvePerda: false }, REGRAS_PADRAO).limite).toBe(180000);
+    expect(novoLimite(150000, { diasAtraso: 0, percentualVendidoPb: 5000, houvePerda: false }, R).limite).toBe(180000);
   });
   it('não passa do limite máximo', () => {
-    expect(novoLimite(1400000, { diasAtraso: 0, percentualVendidoPb: 5000, houvePerda: false }, REGRAS_PADRAO).limite).toBe(1500000);
+    expect(novoLimite(1400000, { diasAtraso: 0, percentualVendidoPb: 5000, houvePerda: false }, R).limite).toBe(1500000);
   });
   it('volta ao inicial com atraso acima do bloqueio', () => {
-    expect(novoLimite(300000, { diasAtraso: 6, percentualVendidoPb: 9000, houvePerda: false }, REGRAS_PADRAO).limite).toBe(150000);
+    expect(novoLimite(300000, { diasAtraso: 6, percentualVendidoPb: 9000, houvePerda: false }, R).limite).toBe(150000);
   });
   it('mantém quando vendeu pouco', () => {
-    expect(novoLimite(150000, { diasAtraso: 0, percentualVendidoPb: 1000, houvePerda: false }, REGRAS_PADRAO).limite).toBe(150000);
+    expect(novoLimite(150000, { diasAtraso: 0, percentualVendidoPb: 1000, houvePerda: false }, R).limite).toBe(150000);
   });
 });
 
@@ -130,5 +133,19 @@ describe('utilitários', () => {
   });
   it('conta dias entre datas atravessando o ano', () => {
     expect(diasEntre('2026-12-25', '2027-01-04')).toBe(10);
+  });
+});
+
+describe('padrão Jueri (sem bloqueio, sem encargos)', () => {
+  it('diasParaBloquear 0 nunca bloqueia nem reduz limite', () => {
+    const s = { limite: 300000, emMaletas: 0, maletasAbertas: 0, maiorAtrasoDias: 90, bloqueadaManualmente: false };
+    expect(podeRetirarMaleta(s, 100000, REGRAS_PADRAO).pode).toBe(true);
+    expect(novoLimite(300000, { diasAtraso: 40, percentualVendidoPb: 9000, houvePerda: false }, REGRAS_PADRAO).limite).toBe(300000);
+  });
+  it('comissão fixa de 30% e sem multa/juros', () => {
+    const itens = [{ produtoId: 'a', preco: 10000, custo: 3000, emMaleta: 1, vendida: 1, devolvida: 0, perdida: 0 }];
+    const r = calcularAcerto({ itens, forma: 'prazo', dataLimite: '2026-12-10', dataAcerto: '2027-01-30', creditoDisponivel: 0, parcial: false, regras: REGRAS_PADRAO });
+    expect(r.comissao).toBe(3000);
+    expect(r.multa + r.juros).toBe(0);
   });
 });

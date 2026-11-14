@@ -27,8 +27,8 @@ export const VARIAVEIS = [
   ['telefone', 'Telefone'], ['email', 'E-mail'], ['modelo_trabalho', 'Modelo de trabalho'],
   ['empresa_nome', 'Razão social da Aritana'], ['empresa_cnpj', 'CNPJ da Aritana'], ['empresa_cidade', 'Cidade da Aritana'],
   ['data', 'Data de hoje (dd/mm/aaaa)'], ['data_extenso', 'Data de hoje por extenso'],
-  ['prazo_acerto', 'Prazo do acerto em dias'], ['comissao_avista', 'Comissão à vista'], ['comissao_prazo', 'Comissão a prazo'],
-  ['multa', 'Multa por atraso'], ['juros', 'Juros ao mês'], ['carencia', 'Carência em dias'], ['dias_bloqueio', 'Dias de atraso para bloqueio'],
+  ['prazo_acerto', 'Prazo do acerto em dias'], ['comissao', 'Comissão (texto completo)'], ['comissao_avista', 'Comissão à vista'], ['comissao_prazo', 'Comissão a prazo'],
+  ['regra_atraso', 'Regra de multa e juros (texto completo)'], ['multa', 'Multa por atraso'], ['juros', 'Juros ao mês'], ['carencia', 'Carência em dias'], ['dias_bloqueio', 'Regra de bloqueio por atraso'],
   ['perdida', 'Como a peça perdida é cobrada'], ['limite', 'Limite de crédito'], ['limite_extenso', 'Limite por extenso'],
   ['maleta_numero', 'Número da maleta'], ['maleta_pecas', 'Peças na maleta'], ['maleta_valor', 'Valor da maleta'], ['maleta_valor_extenso', 'Valor da maleta por extenso'],
   ['maleta_data_retirada', 'Data da retirada'], ['maleta_data_limite', 'Data limite do acerto'],
@@ -65,12 +65,18 @@ export class DocumentosService {
       data: dataBR(hoje),
       data_extenso: `${hoje.getUTCDate()} de ${MESES[hoje.getUTCMonth()]} de ${hoje.getUTCFullYear()}`,
       prazo_acerto: String(regras.prazoAcertoDias),
+      comissao: regras.comissaoAvistaPb === regras.comissaoPrazoPb
+        ? `${pctTexto(regras.comissaoAvistaPb)} sobre o valor vendido`
+        : `${pctTexto(regras.comissaoAvistaPb)} sobre o valor vendido quando o acerto for pago à vista, e de ${pctTexto(regras.comissaoPrazoPb)} quando for pago a prazo`,
       comissao_avista: pctTexto(regras.comissaoAvistaPb),
       comissao_prazo: pctTexto(regras.comissaoPrazoPb),
+      regra_atraso: regras.multaAtrasoPb > 0 || regras.jurosMesPb > 0
+        ? `O acerto feito depois do prazo, passada a tolerância de ${regras.carenciaDias} dia(s), terá multa de ${pctTexto(regras.multaAtrasoPb)} e juros de ${pctTexto(regras.jurosMesPb)} ao mês, proporcionais aos dias de atraso, sobre o valor devido.`
+        : 'O acerto feito depois do prazo não terá multa nem juros, mas a Representante deve regularizá-lo assim que for avisada.',
       multa: pctTexto(regras.multaAtrasoPb),
       juros: pctTexto(regras.jurosMesPb),
       carencia: String(regras.carenciaDias),
-      dias_bloqueio: String(regras.diasParaBloquear),
+      dias_bloqueio: regras.diasParaBloquear > 0 ? `a partir de ${regras.diasParaBloquear} dias de atraso, a Representante não poderá retirar nova maleta até regularizar` : 'não há bloqueio automático; a Consignante avisará a Representante da pendência',
       perdida: regras.perdidaPeloCusto ? 'pelo preço de custo' : 'pelo preço de venda',
       limite: formatarReais(p.limiteCredito),
       limite_extenso: reaisPorExtenso(p.limiteCredito),

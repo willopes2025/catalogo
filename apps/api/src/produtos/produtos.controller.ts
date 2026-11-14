@@ -30,6 +30,19 @@ const produtoSchema = z.object({
   cfop: opcional(5),
   exibeCatalogo: z.boolean().default(true),
   ativo: z.boolean().default(true),
+  ean: opcional(20),
+  descricaoCompleta: opcional(2000),
+  tipoBanho: opcional(40),
+  estoqueMaximo: z.number().int().min(0).nullable().optional(),
+  observacao: opcional(2000),
+  custos: z.record(z.string().max(30), z.number().int().min(0)).optional(),
+  lucroVarejoPb: z.number().int().min(-10000).max(100000).nullable().optional(),
+  lucroAtacadoPb: z.number().int().min(-10000).max(100000).nullable().optional(),
+  fcpPb: z.number().int().min(0).max(10000).nullable().optional(),
+  impostoPb: z.number().int().min(0).max(10000).nullable().optional(),
+  medidas: z.record(z.string().max(30), z.number().min(0)).optional(),
+  marketplaces: z.array(z.string().trim().min(1).max(40)).max(20).optional(),
+  camposExtras: z.record(z.string().max(60), z.string().max(500)).optional(),
 });
 
 
@@ -90,8 +103,13 @@ export class ProdutosController {
   }
 
   @Get('categorias')
-  categorias() {
-    return this.db.select().from(categorias).orderBy(asc(categorias.nome));
+  async categorias() {
+    const cs = await this.db.select().from(categorias).orderBy(asc(categorias.nome));
+    const porId = new Map(cs.map((c) => [c.id, c]));
+    // "Anel › Solitário" para subcategorias, ordenado pelo caminho.
+    return cs
+      .map((c) => ({ ...c, caminho: c.paiId && porId.get(c.paiId) ? `${porId.get(c.paiId)!.nome} › ${c.nome}` : c.nome }))
+      .sort((a, b) => a.caminho.localeCompare(b.caminho, 'pt-BR'));
   }
 
   @Get(':id')

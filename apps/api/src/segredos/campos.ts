@@ -76,6 +76,16 @@ export const INTEGRACOES: Integracao[] = [
       { nome: 'ASSERTIVA_CLIENT_SECRET', rotulo: 'Client secret', secreto: true },
     ],
   },
+  {
+    chave: 'jueri',
+    nome: 'Jueri (migração)',
+    descricao: 'Traz do Jueri produtos, revendedoras, clientes, maletas abertas e contas a receber, em Configurações › Importar.',
+    ondeConseguir: 'No Jueri: Configurações › API › Gerar token. O ID do cliente da Aritana no Jueri é 11566. Depois da virada, apague o token no Jueri.',
+    campos: [
+      { nome: 'JUERI_CLIENTE_ID', rotulo: 'ID do cliente no Jueri', ajuda: 'Da Aritana: 11566' },
+      { nome: 'JUERI_TOKEN', rotulo: 'Token da API', secreto: true },
+    ],
+  },
 ];
 
 export const NOMES_PERMITIDOS = new Set(INTEGRACOES.flatMap((i) => i.campos.map((c) => c.nome)));
