@@ -12,7 +12,7 @@ import { cnpjValido, cpfValido, soDigitos } from '../comum/documentos';
 import { proximoCodigoInterno } from '../comum/codigos';
 import { categorias, empresas, importacoes, locaisEstoque, maletaItens, maletas, niveis, pessoas, produtos, referencias, titulos } from '../db/schema';
 import { hoje } from '../maletas/maletas.service';
-import { ativo, centavos, extrairLista, umRegistro, contaEmAberto, dataISO, estrutura, inteiro, pb, pedidoAberto, pegar, qtdEmAberto, txt, type Reg } from './mapear';
+import { ativo, centavos, primeiroCampo, extrairLista, umRegistro, contaEmAberto, dataISO, estrutura, inteiro, pb, pedidoAberto, pegar, qtdEmAberto, txt, type Reg } from './mapear';
 
 export const ETAPAS = ['cadastros', 'produtos', 'pessoas', 'maletas', 'financeiro'] as const;
 export type Etapa = (typeof ETAPAS)[number];
@@ -331,6 +331,7 @@ export class JueriService {
     const cats = await this.mapa(tx, categorias, 'cat:');
     const forns = await this.mapa(tx, pessoas, 'forn:');
     let pecas = 0;
+    let semPrecoN = 0;
     for (const [i, r] of lista.entries()) {
       p.lidos++;
       if (i % 200 === 0) ex.fase = `${op.simular ? 'Simulando' : 'Gravando'} produtos… ${i}/${lista.length}`;
@@ -339,8 +340,12 @@ export class JueriService {
         if (!descricao) throw new Error('sem descrição');
         const tabela = extrairLista(r.tipo_preco).itens;
         const precoDe = (re: RegExp) => centavos(pegar(tabela.find((t) => re.test(String(t.nome ?? ''))) ?? {}, 'pivot.preco', 'preco'));
-        const preco = precoDe(/varejo/i) ?? centavos(pegar(tabela[0] ?? {}, 'pivot.preco', 'preco')) ?? centavos(pegar(r, 'preco', 'preco_varejo'));
-        if (!preco || preco <= 0) throw new Error('sem preço de varejo');
+        const precoAchado =
+          precoDe(/varejo/i) ?? centavos(pegar(tabela[0] ?? {}, 'pivot.preco', 'preco', 'valor')) ?? centavos(pegar(r, 'preco_varejo', 'preco_venda', 'valor_venda', 'valor_varejo', 'preco', 'valor'));
+        // Sem preço no Jueri: entra inativo e fora do catálogo, para não quebrar maletas que têm a peça.
+        const semPreco = !precoAchado || precoAchado <= 0;
+        const preco = semPreco ? 0 : precoAchado;
+        if (semPreco) semPrecoN++;
         const custos = limpaNum({
           bruto: centavos(r.custo_compra_bruto),
           insumos: centavos(pegar(r, 'custo_insumos', 'custo_insumo')),
@@ -382,7 +387,8 @@ export class JueriService {
           medidas: limpaNum({ largura: num(r.largura), altura: num(r.altura), profundidade: num(r.profundidade), peso: num(r.peso) }),
           observacao: txt(r.observacao),
           camposExtras: limpa({ 'Número da peça': txt(r.numero_peca), 'Peso loja': txt(r.peso_loja) }),
-          ativo: ativo(r),
+          ativo: semPreco ? false : ativo(r),
+          ...(semPreco ? { exibeCatalogo: false } : {}),
           idJueri: `prod:${r.id}`,
         };
         const [porId] = await tx.select({ id: produtos.id }).from(produtos).where(eq(produtos.idJueri, valores.idJueri));
@@ -413,6 +419,7 @@ export class JueriService {
       }
     }
     if (op.atualizarEstoque) p.avisos.push(`${pecas} peça(s) no estoque da empresa, conforme o Jueri.`);
+    if (semPrecoN) p.avisos.push(`${semPrecoN} produto(s) sem preço de varejo no Jueri: entram inativos e fora do catálogo. Defina o preço antes de usar (Produtos › mostrar inativos).`);
   }
 
   // ───────────── Revendedoras, representantes e clientes ─────────────
@@ -703,10 +710,12 @@ export class JueriService {
       pc.lidos++;
       try {
         const idj = `cr:${c.id}`;
-        const valor = centavos(pegar(c, 'valor', 'valor_parcela', 'valor_original', 'valor_total'));
-        const vencimento = dataISO(pegar(c, 'data_vencimento', 'vencimento'));
-        if (!valor || valor <= 0) throw new Error('sem valor');
-        if (!vencimento) throw new Error('sem data de vencimento');
+        const valor =
+          centavos(pegar(c, 'valor', 'valor_parcela', 'valor_aberto', 'valor_receber', 'valor_a_receber', 'saldo', 'valor_original', 'valor_documento', 'valor_bruto', 'valor_total', 'total')) ??
+          primeiroCampo(c, /^(?!.*(pago|desconto|juros|multa|acrescimo|taxa))(valor|vl_|saldo|total)/i, centavos, (v) => v > 0);
+        const vencimento = dataISO(pegar(c, 'data_vencimento', 'vencimento', 'dt_vencimento')) ?? primeiroCampo(c, /venc/i, dataISO);
+        if (!valor || valor <= 0) throw new Error(`sem valor (campos recebidos: ${Object.keys(c).sort().join(', ')})`);
+        if (!vencimento) throw new Error(`sem data de vencimento (campos recebidos: ${Object.keys(c).sort().join(', ')})`);
         const pessoaId =
           (c.fk_revendedor_id != null ? revs.get(String(c.fk_revendedor_id)) : undefined) ??
           (c.fk_representante_id != null ? reps.get(String(c.fk_representante_id)) : undefined) ??

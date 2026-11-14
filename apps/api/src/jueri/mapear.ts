@@ -116,3 +116,13 @@ export function umRegistro(j: unknown): Reg {
   return o.data && typeof o.data === 'object' && !Array.isArray(o.data) && !('id' in o) ? (o.data as Reg) : o;
 }
 
+
+/** Primeiro campo cujo nome casa com o padrão e cujo valor é aproveitável (para nomes que a documentação não lista). */
+export function primeiroCampo<T>(r: Reg, padrao: RegExp, converter: (v: unknown) => T | null, aceitar: (v: T) => boolean = () => true): T | null {
+  for (const [k, v] of Object.entries(r ?? {})) {
+    if (!padrao.test(k) || v === null || typeof v === 'object') continue;
+    const c = converter(v);
+    if (c !== null && aceitar(c)) return c;
+  }
+  return null;
+}

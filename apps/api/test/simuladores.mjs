@@ -31,6 +31,7 @@ const jueri = {
   contas: [
     { id: 1, descricao: 'Parcela acerto 1/2', valor: '150.00', data_vencimento: '2026-12-10', fk_revendedor_id: 502, numero_parcela: 1 },
     { id: 2, descricao: 'Já paga', valor: 80, data_vencimento: '2026-10-01', data_pagamento: '2026-10-01' },
+    { id: 3, descricao: 'Nomes fora da documentação', valor_pago: 0, vl_parcela: '45,00', dt_venc: '2026-12-20', fk_revendedor_id: 501 },
   ],
 };
 let seq = 0;

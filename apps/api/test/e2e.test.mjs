@@ -875,14 +875,14 @@ test('Jueri pela API: testa a conexão, simula sem gravar, importa tudo e repeti
   assert.equal((await chamar('POST', '/jueri/importar', { simular: true, etapas: todas, localId: local.id })).status, 400, 'uma de cada vez');
   let ex = await esperar();
   assert.equal(ex.situacao, 'concluida', ex.erro);
-  assert.equal(ex.partes['Produtos'].criados, 2);
-  assert.equal(ex.partes['Produtos'].erros.length, 1, 'produto sem preço');
-  assert.equal(ex.partes['Produtos'].motivos['sem preço de varejo'], 1, 'problemas agrupados por motivo');
-  assert.equal(ex.partes['Produtos'].falhas, 1);
+  assert.equal(ex.partes['Produtos'].criados, 3, 'o sem preço entra inativo');
+  assert.equal(ex.partes['Produtos'].falhas, 0);
+  assert.ok(ex.partes['Produtos'].avisos.some((a) => a.startsWith('1 produto(s) sem preço')));
   assert.equal(ex.partes['Revendedoras'].criados, 2);
   assert.equal(ex.partes['Maletas abertas'].criados, 1);
   assert.match(ex.partes['Maletas abertas'].erros[0], /9999/);
-  assert.equal(ex.partes['Contas a receber'].criados, 1, 'só a conta em aberto');
+  assert.equal(ex.partes['Contas a receber'].criados, 2, 'só as contas em aberto, inclusive com nomes de campo fora da documentação');
+  assert.ok(ex.partes['Maletas abertas'].motivos['produto(s) não encontrados: #'] === 1, 'problemas agrupados por motivo');
   assert.ok(ex.estruturas.pedidoItem.includes('fk_produto_id'));
   assert.equal((await chamar('GET', '/produtos/codigo/7899990090010')).status, 404, 'simulação não grava');
 
@@ -924,12 +924,17 @@ test('Jueri pela API: testa a conexão, simula sem gravar, importa tudo e repeti
 
   const fin = await ok('GET', `/pessoas/${rev.id}`);
   assert.ok(fin.titulos.some((t) => t.valor === 15000 && t.status === 'aberto'));
+  const finLider = await ok('GET', `/pessoas/${lider.id}`);
+  assert.ok(finLider.titulos.some((t) => t.valor === 4500 && t.vencimento === '2026-12-20'), 'valor e vencimento achados por nome parecido');
 
   // Repetir: atualiza, não duplica.
   await ok('POST', '/jueri/importar', { simular: false, etapas: todas, localId: local.id });
   ex = await esperar();
   assert.equal(ex.partes['Produtos'].criados, 0);
-  assert.equal(ex.partes['Produtos'].atualizados, 2);
+  assert.equal(ex.partes['Produtos'].atualizados, 3);
+  const semPreco = await ok('GET', '/produtos/codigo/7899990090034');
+  assert.equal(semPreco.ativo, false);
+  assert.equal(semPreco.exibeCatalogo, false);
   assert.equal(ex.partes['Revendedoras'].criados, 0);
   assert.equal(ex.partes['Maletas abertas'].ignorados, 1);
   assert.equal(ex.partes['Contas a receber'].criados, 0);
