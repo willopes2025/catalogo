@@ -47,7 +47,7 @@ p { margin: 0; }
 .lateral .v2 { font-size: 10px; letter-spacing: 1px; border: 1px solid #a8927a; border-radius: 10px; padding: 0 6px; }
 .lateral .rodape { margin-top: auto; padding: 14px 22px; border-top: 1px solid #6e5b4c; font-size: 13px; }
 .lateral .rodape button { background: none; border: none; color: var(--areia); padding: 0; cursor: pointer; font: inherit; }
-.conteudo { padding: 28px 36px 60px; max-width: 1400px; width: 100%; }
+.conteudo { padding: 28px 36px 60px; max-width: 1400px; width: 100%; min-width: 0; }
 .topo { display: flex; justify-content: space-between; align-items: flex-end; gap: 16px; margin-bottom: 22px; flex-wrap: wrap; }
 .topo .eb { font-size: 12px; letter-spacing: 3px; text-transform: uppercase; color: var(--dourado-t); font-weight: 600; margin-bottom: 6px; }
 .topo .acoes { display: flex; gap: 8px; flex-wrap: wrap; }
@@ -148,6 +148,11 @@ input.invalido { border-color: var(--erro); }
 
 @media (max-width: 900px) {
   .app { grid-template-columns: 1fr; }
+  /* No celular, o menu fica compacto em cima: o que importa (ex.: bater o ponto) aparece na primeira tela. */
+  .lateral .marca { padding: 10px 16px 8px; }
+  .lateral .marca img { max-height: 30px; width: auto; }
+  .lateral .rodape { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 14px; padding: 8px 16px 10px; font-size: 13px; }
+  .lateral .rodape > * { margin: 0 !important; }
   .lateral { position: static; height: auto; }
   .lateral nav { flex-direction: row; flex-wrap: wrap; }
   .conteudo { padding: 18px 16px 40px; }

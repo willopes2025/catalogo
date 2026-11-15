@@ -10,8 +10,10 @@ import { Publico, Usuario, esquecerPresenca, invalidarSessoes, type UsuarioLogad
 import { validar } from '../comum/validacao';
 import { grupos, usuarios } from '../db/schema';
 import { AuditoriaService } from '../comum/auditoria.service';
+import { RhService } from '../rh/rh.service';
 
-const loginSchema = z.object({ email: z.string().email('E-mail inválido').toLowerCase(), senha: z.string().min(1, 'Informe a senha') });
+// Entra com o e-mail ou, para quem não tem e-mail (ex.: motoboy), com o CPF.
+const loginSchema = z.object({ email: z.string().trim().toLowerCase().refine((v) => /^\S+@\S+\.\S+$/.test(v) || v.replace(/\D/g, '').length === 11, 'Informe o e-mail ou o CPF'), senha: z.string().min(1, 'Informe a senha') });
 const trocaSchema = z.object({ atual: z.string().min(1), nova: z.string().min(10, 'A nova senha precisa de pelo menos 10 caracteres') });
 
 const falhasPorEmail = new Limitador(8, 15 * 60_000, 'Muitas tentativas de login com este e-mail.');
@@ -19,12 +21,14 @@ const falhasPorIp = new Limitador(30, 15 * 60_000, 'Muitas tentativas de login d
 
 @Controller('auth')
 export class AuthController {
-  constructor(@Inject(DB) private readonly db: Db, private readonly jwt: JwtService, private readonly auditoria: AuditoriaService) {}
+  constructor(@Inject(DB) private readonly db: Db, private readonly jwt: JwtService, private readonly auditoria: AuditoriaService, private readonly rh: RhService) {}
 
   @Publico()
   @Post('login')
   async login(@Body() body: unknown, @Req() req: Request) {
-    const { email, senha } = validar(loginSchema, body);
+    const dados = validar(loginSchema, body);
+    const senha = dados.senha;
+    const email = dados.email.includes('@') ? dados.email : ((await this.rh.usuarioPorCpf(dados.email)) ?? `${dados.email.replace(/\D/g, '')}@ponto.local`);
     const ip = req.ip ?? '?';
     falhasPorEmail.verificar(email);
     falhasPorIp.verificar(ip);

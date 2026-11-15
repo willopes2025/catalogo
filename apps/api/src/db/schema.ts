@@ -7,6 +7,7 @@
 import type { CampoFormulario } from '@aritana/regras';
 import { sql } from 'drizzle-orm';
 import {
+  doublePrecision,
   boolean,
   date,
   index,
@@ -1289,4 +1290,206 @@ export const crmRamais = pgTable('crm_ramais', {
   prefixo: text('prefixo'),
   ativo: boolean('ativo').notNull().default(true),
   atualizadoEm: atualizadoEm(),
+});
+
+// ───────────── RH e ponto eletrônico (Portaria MTP 671/2021, REP-P) ─────────────
+
+/** Horários de trabalho. `dias` tem 7 posições (0 = domingo); null = folga. */
+export const rhEscalas = pgTable('rh_escalas', {
+  id: id(),
+  nome: text('nome').notNull(),
+  dias: jsonb('dias').$type<({ entrada: string; saidaIntervalo?: string | null; voltaIntervalo?: string | null; saida: string } | null)[]>().notNull(),
+  toleranciaMarcacao: integer('tolerancia_marcacao').notNull().default(5),
+  toleranciaDia: integer('tolerancia_dia').notNull().default(10),
+  ativo: boolean('ativo').notNull().default(true),
+  criadoEm: criadoEm(),
+});
+
+/** Locais onde o ponto pode ser batido pelo celular (cerca pelo GPS). */
+export const rhLocais = pgTable('rh_locais', {
+  id: id(),
+  nome: text('nome').notNull(),
+  latitude: doublePrecision('latitude').notNull(),
+  longitude: doublePrecision('longitude').notNull(),
+  raioM: integer('raio_m').notNull().default(150),
+  ativo: boolean('ativo').notNull().default(true),
+});
+
+export const rhFuncionarios = pgTable(
+  'rh_funcionarios',
+  {
+    id: id(),
+    /** Acesso ao sistema (o mesmo login para bater ponto e, se o grupo permitir, usar o resto). */
+    usuarioId: uuid('usuario_id').references(() => usuarios.id, { onDelete: 'set null' }),
+    /** Empregador (CNPJ que assina a carteira). */
+    empresaId: uuid('empresa_id').notNull().references(() => empresas.id),
+    nome: text('nome').notNull(),
+    nomeSocial: text('nome_social'),
+    cpf: text('cpf').notNull(),
+    pis: text('pis'),
+    rg: text('rg'),
+    nascimento: date('nascimento'),
+    telefone: text('telefone'),
+    email: text('email'),
+    cep: text('cep'),
+    endereco: text('endereco'),
+    cidade: text('cidade'),
+    uf: text('uf'),
+    cargo: text('cargo'),
+    departamento: text('departamento'),
+    /** clt | experiencia | estagio | temporario | aprendiz | pj | autonomo */
+    tipoContrato: text('tipo_contrato').notNull().default('clt'),
+    salario: integer('salario'),
+    ctps: text('ctps'),
+    matriculaEsocial: text('matricula_esocial'),
+    dadosBancarios: jsonb('dados_bancarios').$type<Record<string, string>>().notNull().default({}),
+    escalaId: uuid('escala_id').references(() => rhEscalas.id),
+    dataAdmissao: date('data_admissao').notNull(),
+    dataDemissao: date('data_demissao'),
+    motivoDemissao: text('motivo_demissao'),
+    /** ativo | afastado | desligado */
+    status: text('status').notNull().default('ativo'),
+    /** Quem não bate ponto (sócio, cargo de confiança do art. 62, PJ). */
+    batePonto: boolean('bate_ponto').notNull().default(true),
+    camposExtras: jsonb('campos_extras').$type<Record<string, string>>().notNull().default({}),
+    observacao: text('observacao'),
+    criadoEm: criadoEm(),
+    atualizadoEm: atualizadoEm(),
+  },
+  (t) => ({ cpf: uniqueIndex('rh_funcionarios_cpf_idx').on(t.cpf), usuario: uniqueIndex('rh_funcionarios_usuario_idx').on(t.usuarioId) }),
+);
+
+/** Sequência do REP-P por empregador: último NSR e o hash encadeado. */
+export const rhPontoEmpresas = pgTable('rh_ponto_empresas', {
+  empresaId: uuid('empresa_id').primaryKey().references(() => empresas.id),
+  ultimoNsr: integer('ultimo_nsr').notNull().default(0),
+  ultimoHash: text('ultimo_hash'),
+});
+
+/**
+ * Registros do REP-P, um por NSR (tipos do AFD): 7 = marcação, 5 = inclusão/alteração/exclusão de empregado,
+ * 2 = mudança do empregador, 6 = evento. NUNCA são alterados nem apagados (o banco recusa).
+ * Correções viram tratamentos (rh_tratamentos), que entram no AEJ e no espelho.
+ */
+export const rhRegistros = pgTable(
+  'rh_registros',
+  {
+    id: id(),
+    empresaId: uuid('empresa_id').notNull().references(() => empresas.id),
+    nsr: integer('nsr').notNull(),
+    tipo: integer('tipo').notNull(),
+    gravadoEm: timestamp('gravado_em', { withTimezone: true }).notNull(),
+    funcionarioId: uuid('funcionario_id').references(() => rhFuncionarios.id),
+    cpf: text('cpf'),
+    /** Marcação: data e hora (do servidor, não do aparelho). */
+    marcadoEm: timestamp('marcado_em', { withTimezone: true }),
+    /** 01 aplicativo, 02 navegador, 03 desktop… */
+    coletor: text('coletor'),
+    online: boolean('online').notNull().default(true),
+    hash: text('hash'),
+    dados: jsonb('dados').$type<Record<string, unknown>>().notNull().default({}),
+    latitude: doublePrecision('latitude'),
+    longitude: doublePrecision('longitude'),
+    precisaoM: integer('precisao_m'),
+    localId: uuid('local_id').references(() => rhLocais.id),
+    foraDoLocal: boolean('fora_do_local'),
+    foto: text('foto'),
+    ip: text('ip'),
+    aparelho: text('aparelho'),
+    usuarioId: uuid('usuario_id').references(() => usuarios.id),
+  },
+  (t) => ({ nsr: uniqueIndex('rh_registros_nsr_idx').on(t.empresaId, t.nsr), porFunc: index('rh_registros_func_idx').on(t.funcionarioId, t.marcadoEm) }),
+);
+
+/** Ajustes do ponto feitos pela empresa: incluir uma batida esquecida ou desconsiderar uma batida, sempre com motivo. */
+export const rhTratamentos = pgTable('rh_tratamentos', {
+  id: id(),
+  funcionarioId: uuid('funcionario_id').notNull().references(() => rhFuncionarios.id),
+  /** inclusao | desconsiderar */
+  tipo: text('tipo').notNull(),
+  registroId: uuid('registro_id').references(() => rhRegistros.id),
+  marcadoEm: timestamp('marcado_em', { withTimezone: true }),
+  motivo: text('motivo').notNull(),
+  usuarioId: uuid('usuario_id').references(() => usuarios.id),
+  criadoEm: criadoEm(),
+});
+
+/** Faltas, atestados, férias, folgas, afastamentos. */
+export const rhOcorrencias = pgTable('rh_ocorrencias', {
+  id: id(),
+  funcionarioId: uuid('funcionario_id').notNull().references(() => rhFuncionarios.id),
+  tipo: text('tipo').notNull(),
+  de: date('de').notNull(),
+  ate: date('ate').notNull(),
+  /** O dia conta como trabalhado (atestado, férias, folga compensada…). */
+  abona: boolean('abona').notNull().default(true),
+  observacao: text('observacao'),
+  documentoId: uuid('documento_id'),
+  usuarioId: uuid('usuario_id').references(() => usuarios.id),
+  criadoEm: criadoEm(),
+});
+
+/** Pasta do funcionário: contrato, contracheques, cartas, exames, atestados… */
+export const rhDocumentos = pgTable(
+  'rh_documentos',
+  {
+    id: id(),
+    funcionarioId: uuid('funcionario_id').notNull().references(() => rhFuncionarios.id),
+    tipo: text('tipo').notNull(),
+    titulo: text('titulo').notNull(),
+    /** Mês de referência (contracheque, folha): AAAA-MM. */
+    competencia: text('competencia'),
+    data: date('data'),
+    /** Exame periódico, CNH do motoboy, contrato de experiência: quando vence. */
+    validade: date('validade'),
+    arquivo: text('arquivo').notNull(),
+    nomeArquivo: text('nome_arquivo').notNull(),
+    mime: text('mime').notNull(),
+    tamanho: integer('tamanho').notNull(),
+    /** O funcionário vê no portal dele. */
+    visivelFuncionario: boolean('visivel_funcionario').notNull().default(true),
+    /** Ciência do funcionário (recebi/li), com IP. */
+    cienteEm: timestamp('ciente_em', { withTimezone: true }),
+    cienteIp: text('ciente_ip'),
+    usuarioId: uuid('usuario_id').references(() => usuarios.id),
+    criadoEm: criadoEm(),
+  },
+  (t) => ({ porFunc: index('rh_documentos_func_idx').on(t.funcionarioId, t.tipo) }),
+);
+
+export const rhFeriados = pgTable('rh_feriados', {
+  id: id(),
+  data: date('data').notNull().unique(),
+  nome: text('nome').notNull(),
+});
+
+/** Fechamento do mês: a foto do espelho de ponto, com a ciência do funcionário. */
+export const rhFechamentos = pgTable(
+  'rh_fechamentos',
+  {
+    id: id(),
+    funcionarioId: uuid('funcionario_id').notNull().references(() => rhFuncionarios.id),
+    competencia: text('competencia').notNull(),
+    espelho: jsonb('espelho').notNull(),
+    fechadoEm: timestamp('fechado_em', { withTimezone: true }).notNull().defaultNow(),
+    fechadoPor: uuid('fechado_por').references(() => usuarios.id),
+    cienteEm: timestamp('ciente_em', { withTimezone: true }),
+    cienteIp: text('ciente_ip'),
+  },
+  (t) => ({ uq: uniqueIndex('rh_fechamentos_uq').on(t.funcionarioId, t.competencia) }),
+);
+
+/** O que foi mandado para a contabilidade, por onde e quando. */
+export const rhEnvios = pgTable('rh_envios', {
+  id: id(),
+  competencia: text('competencia').notNull(),
+  canal: text('canal').notNull(),
+  destino: text('destino').notNull(),
+  itens: jsonb('itens').$type<string[]>().notNull(),
+  arquivos: jsonb('arquivos').$type<{ nome: string; tamanho: number }[]>().notNull().default([]),
+  mensagem: text('mensagem'),
+  status: text('status').notNull(),
+  erro: text('erro'),
+  usuarioId: uuid('usuario_id').references(() => usuarios.id),
+  criadoEm: criadoEm(),
 });

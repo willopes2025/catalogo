@@ -40,6 +40,9 @@ import { GarantiaController, LotesController } from './garantia/garantia.control
 import { GarantiaService } from './garantia/garantia.service';
 import { ComissoesController } from './comissoes/comissoes.controller';
 import { ComissoesService } from './comissoes/comissoes.service';
+import { PontoController, RhController } from './rh/rh.controller';
+import { RhService } from './rh/rh.service';
+import { ContabilidadeService } from './rh/contabilidade.service';
 import { AvisosController } from './avisos/avisos.controller';
 import { AvisosService } from './avisos/avisos.service';
 import { AuditoriaController } from './auditoria/auditoria.controller';
@@ -92,7 +95,7 @@ if (!segredo || (process.env.NODE_ENV === 'production' && segredo.length < 32)) 
     VendasController,
     WebhooksController,
     FiscalController,
-    RelatoriosController, IndicadoresController,
+    RelatoriosController, IndicadoresController, RhController, PontoController,
     SuporteController,
     ImportacaoController,
     GarantiaController,
@@ -128,6 +131,8 @@ if (!segredo || (process.env.NODE_ENV === 'production' && segredo.length < 32)) 
     ImportacaoService,
     GarantiaService,
     ComissoesService,
+    RhService,
+    ContabilidadeService,
     AvisosService,
     { provide: APP_GUARD, useClass: AuthGuard },
     { provide: APP_FILTER, useClass: ErrosFilter },

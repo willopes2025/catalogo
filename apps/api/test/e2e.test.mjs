@@ -5,6 +5,8 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { createRequire } from 'node:module';
+const regras = createRequire(import.meta.url)('../../../packages/regras/dist/index.js');
 
 const API = process.env.API_URL ?? 'http://localhost:3100/api';
 let token = '';
@@ -1268,6 +1270,147 @@ test('WhatsApp por QR code no servidor próprio: só o nome, QR na tela, recebe 
   assert.equal((await ok('GET', `/crm/canais/${c.id}/situacao`)).conectado, false);
   // A Z-API (ID da instância e token) continua disponível como antes.
   assert.equal((await chamar('POST', '/crm/canais', { nome: 'Sem dados', tipo: 'qrcode', config: {} })).status, 400);
+});
+
+test('RH e ponto: cadastro, login pelo CPF, batida com foto e GPS, ajustes, espelho, ciência, documentos, AFD/AEJ e contabilidade', async () => {
+  const gestor = token;
+  const hoje = new Date(Date.now() - 3 * 3600e3).toISOString().slice(0, 10);
+  const menos = (n) => new Date(Date.now() - 3 * 3600e3 - n * 86400e3).toISOString().slice(0, 10);
+  const empresas = await ok('GET', '/empresas');
+  const emp = empresas.find((e) => e.cnpj) ?? empresas[0];
+  const escala = (await ok('GET', '/rh/escalas')).find((e) => e.nome === 'Comercial 44h');
+  assert.ok(escala, 'escala de exemplo criada pela migração');
+  await ok('POST', '/rh/locais', { nome: 'Loja Centro', latitude: -20.3297, longitude: -40.2925, raioM: 150 });
+  const cfg = await ok('GET', '/rh/config');
+  await ok('PUT', '/rh/config', { ...cfg, cercaGps: 'bloquear', exigirFoto: true, contabilidadeEmail: 'dp@contabil.exemplo' });
+  const grupos = await ok('GET', '/rh/grupos');
+  const soPonto = grupos.find((g) => g.nome === 'Somente ponto');
+  assert.ok(soPonto, 'grupo "Somente ponto" criado pela migração');
+
+  const base = { empresaId: emp.id, nome: 'Carlos Motoboy da Silva', cpf: '529.982.247-25', cargo: 'Motoboy', escalaId: escala.id, dataAdmissao: menos(70), salario: 180000 };
+  assert.equal((await chamar('POST', '/rh/funcionarios', { ...base, cpf: '111.111.111-11' })).status, 400, 'CPF inválido');
+  const f = await ok('POST', '/rh/funcionarios', { ...base, acesso: { grupoId: soPonto.id } });
+  assert.equal(f.acessoCriado.login, '52998224725', 'sem e-mail, o login é o CPF');
+  assert.equal((await chamar('POST', '/rh/funcionarios', base)).status, 400, 'CPF repetido');
+
+  // O motoboy entra com o CPF, troca a senha provisória e só enxerga o ponto.
+  token = '';
+  const login = await ok('POST', '/auth/login', { email: '529.982.247-25', senha: f.acessoCriado.senha });
+  assert.equal(login.trocarSenha, true);
+  token = login.token;
+  await ok('POST', '/auth/trocar-senha', { atual: f.acessoCriado.senha, nova: 'MotoboySenha2026' });
+  const eu = await ok('GET', '/ponto/eu');
+  assert.equal(eu.eFuncionario, true);
+  assert.equal(eu.exigirFoto, true);
+  assert.equal((await chamar('GET', '/rh/resumo')).status, 403, 'sem acesso ao RH');
+  assert.equal((await chamar('GET', '/maletas')).status, 403, 'sem acesso a nada além do ponto');
+
+  // Batida: sem foto recusa; longe da loja recusa (cerca em "bloquear"); na loja grava com NSR e hash.
+  const jpeg = Buffer.from('ffd8ffe000104a46494600010100000100010000ffd9', 'hex').toString('base64');
+  assert.equal((await chamar('POST', '/ponto/marcar', { latitude: -20.3297, longitude: -40.2925, precisao: 10 })).status, 400, 'foto obrigatória');
+  const longe = await chamar('POST', '/ponto/marcar', { latitude: -20.5, longitude: -40.5, precisao: 10, foto: jpeg });
+  assert.equal(longe.status, 400);
+  assert.match(longe.dados.mensagem, /local de trabalho/);
+  const c1 = await ok('POST', '/ponto/marcar', { latitude: -20.3298, longitude: -40.2926, precisao: 15, foto: jpeg });
+  assert.equal(c1.titulo, 'Comprovante de Registro de Ponto do Trabalhador');
+  assert.match(c1.hash, /^[0-9a-f]{64}$/);
+  assert.ok(c1.nsr >= 2, 'o NSR 1 é a inclusão do empregado (registro tipo 5)');
+  assert.match(c1.dataHora, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:00-0300$/);
+  assert.equal((await chamar('POST', '/ponto/marcar', { latitude: -20.3298, longitude: -40.2926, foto: jpeg })).status, 400, 'segunda batida no mesmo minuto é recusada');
+  assert.equal((await ok('GET', '/ponto/eu')).marcacoes.length, 1);
+  assert.equal((await ok('GET', `/ponto/comprovante/${c1.id}`)).nsr, c1.nsr);
+
+  // Gestor ajusta um dia útil do mês passado (o motoboy esqueceu de bater): inclusões com motivo.
+  token = gestor;
+  const feriados = new Set([...regras.feriadosNacionais(Number(menos(40).slice(0, 4))).map((x) => x.data)]);
+  const mesPassado = (() => { const [a, m] = hoje.split('-').map(Number); return new Date(Date.UTC(a, m - 2, 1)).toISOString().slice(0, 7); })();
+  let dia = `${mesPassado}-08`;
+  while ([0, 6].includes(new Date(`${dia}T12:00:00Z`).getUTCDay()) || feriados.has(dia)) dia = new Date(new Date(`${dia}T12:00:00Z`).getTime() + 86400e3).toISOString().slice(0, 10);
+  for (const hora of ['07:45', '12:00', '13:00', '18:20']) await ok('POST', '/rh/tratamentos', { tipo: 'inclusao', funcionarioId: f.id, data: dia, hora, motivo: 'Esqueceu de bater, confirmado pela gerente' });
+  assert.equal((await chamar('POST', '/rh/tratamentos', { tipo: 'inclusao', funcionarioId: f.id, data: dia, hora: '09:00', motivo: 'x' })).status, 400, 'motivo curto demais');
+  // Atestado no dia seguinte útil: não é falta.
+  let diaAtestado = new Date(new Date(`${dia}T12:00:00Z`).getTime() + 86400e3).toISOString().slice(0, 10);
+  while ([0, 6].includes(new Date(`${diaAtestado}T12:00:00Z`).getUTCDay()) || feriados.has(diaAtestado)) diaAtestado = new Date(new Date(`${diaAtestado}T12:00:00Z`).getTime() + 86400e3).toISOString().slice(0, 10);
+  await ok('POST', `/rh/funcionarios/${f.id}/ocorrencias`, { tipo: 'atestado', de: diaAtestado, ate: diaAtestado, observacao: 'Atestado de 1 dia' });
+  const esp = await ok('GET', `/rh/espelho/${f.id}?competencia=${mesPassado}`);
+  const d1 = esp.dias.find((x) => x.data === dia);
+  assert.equal(d1.marcacoes.length, 4);
+  assert.ok(d1.marcacoes.every((m) => m.origem === 'incluida'));
+  assert.equal(d1.extra50, 47, 'chegou 15 min antes e saiu 32 min depois');
+  const d2 = esp.dias.find((x) => x.data === diaAtestado);
+  assert.equal(d2.faltaDia, false);
+  assert.equal(d2.ocorrencia, 'Atestado médico');
+  assert.ok(esp.totais.faltasDias > 0, 'os outros dias úteis sem batida são falta');
+
+  // Hoje: desconsidera a batida real (fica guardada, só não conta).
+  await ok('POST', '/rh/tratamentos', { tipo: 'desconsiderar', funcionarioId: f.id, registroId: c1.id, motivo: 'Bateu por engano antes de sair de casa' });
+  const espHoje = await ok('GET', `/rh/espelho/${f.id}?competencia=${hoje.slice(0, 7)}`);
+  assert.equal(espHoje.dias.find((x) => x.data === hoje).marcacoes[0].desconsiderada, true);
+
+  // Fecha o mês passado; o funcionário confirma pelo celular.
+  const fech = await ok('POST', '/rh/fechar', { competencia: mesPassado });
+  assert.ok(fech.fechados >= 1);
+  token = (await ok('POST', '/auth/login', { email: '52998224725', senha: 'MotoboySenha2026' })).token;
+  assert.ok((await ok('GET', '/ponto/eu')).espelhosParaConfirmar.includes(mesPassado));
+  await ok('POST', `/ponto/espelho/${mesPassado}/ciente`, {});
+  assert.equal((await chamar('POST', `/ponto/espelho/${mesPassado}/ciente`, {})).status, 400, 'confirma uma vez só');
+
+  // Contracheque na pasta: o funcionário vê, baixa e confirma o recebimento; o que é só do RH ele não vê.
+  token = gestor;
+  const pdf = Buffer.from('%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF').toString('base64');
+  const cc = await ok('POST', `/rh/funcionarios/${f.id}/documentos`, { tipo: 'contracheque', competencia: mesPassado, nomeArquivo: 'holerite.pdf', mime: 'application/pdf', base64: pdf });
+  assert.match(cc.titulo, /^Contracheque \d{2}\/\d{4}$/);
+  await ok('POST', `/rh/funcionarios/${f.id}/documentos`, { tipo: 'aso_admissional', validade: menos(-20), nomeArquivo: 'aso.pdf', mime: 'application/pdf', base64: pdf, visivelFuncionario: false });
+  assert.ok((await ok('GET', '/rh/vencimentos')).some((v) => v.funcionarioId === f.id), 'exame vencendo em 20 dias aparece no alerta');
+  token = (await ok('POST', '/auth/login', { email: '52998224725', senha: 'MotoboySenha2026' })).token;
+  const meus = await ok('GET', '/ponto/documentos');
+  assert.equal(meus.length, 1, 'só o que foi liberado');
+  const arq = await fetch(`${API}/ponto/documentos/${meus[0].id}/arquivo`, { headers: { authorization: `Bearer ${token}` } });
+  assert.equal(arq.status, 200);
+  assert.match(await arq.text(), /^%PDF/);
+  await ok('POST', `/ponto/documentos/${meus[0].id}/ciente`, {});
+
+  // Arquivos oficiais e pacote para a contabilidade.
+  token = gestor;
+  const de = `${mesPassado}-01`;
+  const afd = await fetch(`${API}/rh/afd?empresaId=${emp.id}&de=${menos(80)}&ate=${hoje}`, { headers: { authorization: `Bearer ${token}` } });
+  if (emp.cnpj) {
+    assert.equal(afd.status, 200);
+    const linhas = Buffer.from(await afd.arrayBuffer()).toString('latin1').split('\r\n').filter(Boolean);
+    assert.equal(linhas[0].length, 302);
+    assert.ok(linhas.some((l) => l[9] === '5' && l.includes('Carlos Motoboy')), 'registro de inclusão do empregado');
+    const m7 = linhas.find((l) => l[9] === '7');
+    assert.equal(m7.length, 137);
+    assert.equal(m7.slice(73), c1.hash, 'marcação com o mesmo hash do comprovante');
+    const aej = await fetch(`${API}/rh/aej?empresaId=${emp.id}&de=${de}&ate=${hoje}`, { headers: { authorization: `Bearer ${token}` } });
+    const txt = Buffer.from(await aej.arrayBuffer()).toString('latin1');
+    assert.match(txt, /^01\|1\|/);
+    assert.match(txt, /\|I\|[^|]*\|Esqueceu de bater/, 'inclusões com motivo no AEJ');
+    assert.match(txt, /\|D\|000\|O\|\|Bateu por engano/, 'desconsideração com motivo');
+  }
+  const previa = await ok('POST', '/rh/contabilidade/previa', { competencia: mesPassado, itens: ['ponto_resumo', 'ponto_diario', 'ocorrencias', 'movimentacoes', 'vendas', 'comissoes', 'documentos'] });
+  const nomes = previa.arquivos.map((a) => a.nome);
+  assert.ok(nomes.some((n) => n.startsWith('ponto-resumo-')));
+  assert.ok(nomes.some((n) => n.startsWith('comissoes-')));
+  const resumoCsv = await fetch(`${API}/rh/contabilidade/arquivo`, { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify({ competencia: mesPassado, itens: ['ponto_resumo'], nome: nomes.find((n) => n.startsWith('ponto-resumo-')) }) });
+  const csvTxt = await resumoCsv.text();
+  assert.match(csvTxt, /Carlos Motoboy da Silva;52998224725;Motoboy;/);
+  assert.match(csvTxt, /;sim;\d{2}\/\d{2}\/\d{4}/, 'mês fechado e confirmado pelo funcionário');
+  const env = await ok('POST', '/rh/contabilidade/enviar', { competencia: mesPassado, itens: ['ponto_resumo', 'ocorrencias'], canal: 'email', destino: 'dp@contabil.exemplo' });
+  assert.equal(env.status, 'enviado');
+  const zapi = (await ok('GET', '/crm/canais')).find((c) => c.tipo === 'qrcode');
+  if (zapi) {
+    const envW = await ok('POST', '/rh/contabilidade/enviar', { competencia: mesPassado, itens: ['ponto_resumo'], canal: 'whatsapp', destino: '27999112233', canalId: zapi.id });
+    assert.equal(envW.status, 'enviado');
+    assert.ok((await recebidos()).some((r) => r.caminho.includes('/send-document/csv')), 'arquivo foi como documento no WhatsApp');
+  }
+  assert.ok((await ok('GET', '/rh/envios')).length >= 1);
+
+  // Desligamento: o acesso é cortado e o ponto não pode mais ser batido.
+  await ok('POST', `/rh/funcionarios/${f.id}/desligar`, { data: hoje, motivo: 'Pedido de demissão' });
+  token = '';
+  assert.equal((await chamar('POST', '/auth/login', { email: '52998224725', senha: 'MotoboySenha2026' })).status, 401);
+  token = gestor;
 });
 
 test('limite olha a maleta inteira depois de acerto parcial; indicadores batem entre si', async () => {

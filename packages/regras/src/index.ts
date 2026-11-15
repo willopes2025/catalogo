@@ -8,3 +8,4 @@ export * from './modulos';
 export * from './texto';
 export * from './score';
 export * from './formularios';
+export * from './jornada';

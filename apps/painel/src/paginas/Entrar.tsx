@@ -35,8 +35,8 @@ export function Entrar() {
       <form onSubmit={enviar}>
         <h2>Entrar</h2>
         <div className="campo">
-          <label htmlFor="email">E-mail</label>
-          <input id="email" type="email" autoComplete="username" value={email} onChange={(e) => setEmail(e.target.value)} required />
+          <label htmlFor="email">E-mail ou CPF</label>
+          <input id="email" type="text" inputMode="email" autoCapitalize="none" autoComplete="username" value={email} onChange={(e) => setEmail(e.target.value)} required />
         </div>
         <div className="campo">
           <label htmlFor="senha">Senha</label>

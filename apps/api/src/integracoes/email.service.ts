@@ -47,14 +47,14 @@ export class EmailService {
     return { ok: true, mensagem: `Conectado. Enviamos um e-mail de teste para ${para}.` };
   }
 
-  async enviar(para: string, assunto: string, texto: string) {
+  async enviar(para: string, assunto: string, texto: string, anexos: { nome: string; conteudo: Buffer; mime?: string }[] = []) {
     const t = this.conexao();
     if (!t) {
       if (process.env.NODE_ENV === 'production') throw new ServiceUnavailableException('O envio de e-mail ainda não foi configurado.');
-      this.log.warn(`[sem SMTP] Para ${para}: ${assunto}\n${texto}`);
+      this.log.warn(`[sem SMTP] Para ${para}: ${assunto}${anexos.length ? ` (${anexos.length} anexo(s))` : ''}\n${texto}`);
       return { simulado: true };
     }
-    await t.sendMail({ from: this.remetente, to: para, subject: assunto, text: texto });
+    await t.sendMail({ from: this.remetente, to: para, subject: assunto, text: texto, attachments: anexos.map((a) => ({ filename: a.nome, content: a.conteudo, contentType: a.mime })) });
     return { simulado: false };
   }
 }

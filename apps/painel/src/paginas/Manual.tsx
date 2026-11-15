@@ -159,6 +159,24 @@ const SECOES: Secao[] = [
     ],
   },
   {
+    id: 'rh',
+    titulo: 'RH e ponto eletrônico',
+    passos: [
+      { t: 'Cadastrar o funcionário', d: 'RH e ponto › Novo funcionário. Preencha os dados, o contrato e a escala de horário. Em "Nível de acesso", escolha "Somente ponto" para quem só bate ponto (motoboy, estoque) ou um grupo do sistema para quem também trabalha nele. Sem e-mail, o login é o CPF. A senha provisória aparece uma vez: passe para a pessoa.' },
+      { t: 'Bater o ponto', d: 'O funcionário entra pelo celular (ou pelo computador) e toca em "Registrar entrada". O sistema tira uma selfie, confere o GPS e grava com a hora do servidor. Cada batida gera um comprovante com número (NSR) e código de verificação.' },
+      { t: 'Ajustar o ponto', d: 'Na ficha do funcionário › Ponto: o "＋" inclui uma batida esquecida e o "✕" desconsidera uma batida errada, sempre com motivo. A marcação original nunca é apagada (Portaria 671). Faltas, atestados e férias ficam em "Faltas e afastamentos".' },
+      { t: 'Fechar o mês', d: 'RH e ponto › Ponto do mês › Fechar o mês. Cada funcionário recebe o espelho no celular e confirma. A ciência fica registrada com data e hora.' },
+      { t: 'Guardar documentos', d: 'Na ficha › Documentos: contrato, carta de admissão, exames (ASO), contracheques, atestados, advertências, rescisão. Com data de validade, o sistema avisa quando um exame ou contrato de experiência vai vencer. O que for liberado aparece para o funcionário, que confirma o recebimento.' },
+      { t: 'Mandar para a contabilidade', d: 'RH e ponto › Enviar à contabilidade: escolha o mês e o que vai (resumo do ponto, espelho diário, faltas e atestados, admissões e desligamentos com documentos, vendas por vendedora, comissões, AFD e AEJ). "Ver o que vai" mostra e baixa cada arquivo; "Enviar agora" manda por e-mail ou WhatsApp e guarda o histórico.' },
+    ],
+    dicas: [
+      'Cadastre os locais de trabalho com "Usar onde estou" (em Configurar) estando na loja: assim a cerca do GPS fica certa.',
+      'Para o motoboy, que trabalha na rua, deixe a regra do GPS em "Registrar e sinalizar": a batida fora do local aparece marcada no espelho, sem impedir o registro.',
+      'Para o ponto valer como registro oficial (REP-P), o programa precisa do registro no INPI. Depois de registrado, preencha o número em Configurar.',
+      'Contracheque: a contabilidade manda o PDF, você guarda na pasta do funcionário com o mês, e ele recebe no celular.',
+    ],
+  },
+  {
     id: 'indicadores',
     titulo: 'Indicadores: os números para decidir',
     passos: [

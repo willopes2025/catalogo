@@ -1,5 +1,5 @@
 /**
- * Os 19 módulos do painel, na ordem do documento de detalhamento.
+ * Os 20 módulos do painel, na ordem do documento de detalhamento.
  * Usado pelo menu do painel e pelas permissões (cada permissão é por módulo).
  */
 export const MODULOS = [
@@ -17,6 +17,7 @@ export const MODULOS = [
   { chave: 'pontos', nome: 'Pontos e prêmios', versao: 1 },
   { chave: 'financeiro', nome: 'Financeiro', versao: 1 },
   { chave: 'comissoes', nome: 'Comissões', versao: 1 },
+  { chave: 'rh', nome: 'RH e ponto', versao: 1 },
   { chave: 'fiscal', nome: 'Fiscal', versao: 1 },
   { chave: 'relatorios', nome: 'Relatórios', versao: 1 },
   { chave: 'formularios', nome: 'Formulários', versao: 1 },

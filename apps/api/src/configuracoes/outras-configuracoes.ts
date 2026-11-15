@@ -47,6 +47,36 @@ export const CONFIGS = {
     padrao: { lojaPadraoPb: 300, redeLiderPb: 0, diaPagamento: 10 },
     schema: z.object({ lojaPadraoPb: z.number().int().min(0).max(10000), redeLiderPb: z.number().int().min(0).max(10000), diaPagamento: z.number().int().min(1).max(28) }),
   },
+  regras_rh: {
+    padrao: {
+      /** Batida fora da cerca do GPS: só sinaliza no espelho ou recusa. */
+      cercaGps: 'sinalizar' as 'sinalizar' | 'bloquear',
+      exigirFoto: true,
+      /** Número de registro do programa no INPI (aparece no AFD, no AEJ e no comprovante). */
+      inpi: '',
+      contabilidadeNome: '',
+      contabilidadeEmail: '',
+      contabilidadeWhatsapp: '',
+      /** Número de WhatsApp da empresa que manda os arquivos para a contabilidade. */
+      contabilidadeCanalId: '',
+      /** Quem desenvolveu o programa de ponto (identificação obrigatória no AEJ). */
+      desenvolvedorDocumento: '',
+      desenvolvedorNome: 'Wide Inteligência Comercial',
+      desenvolvedorEmail: 'contato@wideic.com',
+    },
+    schema: z.object({
+      cercaGps: z.enum(['sinalizar', 'bloquear']),
+      exigirFoto: z.boolean(),
+      inpi: z.string().max(17),
+      contabilidadeNome: z.string().max(120),
+      contabilidadeEmail: z.union([z.literal(''), z.string().email('E-mail da contabilidade inválido')]),
+      contabilidadeWhatsapp: z.string().max(20),
+      contabilidadeCanalId: z.string().max(40),
+      desenvolvedorDocumento: z.string().max(18),
+      desenvolvedorNome: z.string().max(150),
+      desenvolvedorEmail: z.string().max(50),
+    }),
+  },
 } as const;
 
 export type ChaveConfig = keyof typeof CONFIGS;

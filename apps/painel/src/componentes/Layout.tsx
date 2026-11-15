@@ -5,7 +5,7 @@ import { api, atualizarUsuario, lerSessao, pode, salvarSessao } from '../api';
 import { Softphone } from './Softphone';
 
 /** Rotas já construídas nesta etapa; as demais abrem a página "em construção". */
-const ROTAS: Record<string, string> = { inicio: '/', rede: '/rede', cadastros: '/cadastros', produtos: '/produtos', estoque: '/estoque', maletas: '/maletas', vendas: '/vendas', lojas: '/lojas', financeiro: '/financeiro', fiscal: '/fiscal', relatorios: '/relatorios', configuracoes: '/configuracoes', suporte: '/suporte', garantia: '/garantia', comissoes: '/comissoes', crm: '/crm', pontos: '/pontos', formularios: '/formularios', marketing: '/marketing' };
+const ROTAS: Record<string, string> = { inicio: '/', rede: '/rede', cadastros: '/cadastros', produtos: '/produtos', estoque: '/estoque', maletas: '/maletas', vendas: '/vendas', lojas: '/lojas', financeiro: '/financeiro', fiscal: '/fiscal', relatorios: '/relatorios', configuracoes: '/configuracoes', suporte: '/suporte', garantia: '/garantia', comissoes: '/comissoes', crm: '/crm', pontos: '/pontos', formularios: '/formularios', marketing: '/marketing', rh: '/rh' };
 
 export function Layout() {
   const navegar = useNavigate();
@@ -15,6 +15,9 @@ export function Layout() {
   // Fila do CRM e conversas não lidas no menu.
   const crm = useQuery({ queryKey: ['crm', 'contadores'], queryFn: () => api<{ fila: number; naoLidas: number }>('/crm/contadores'), refetchInterval: 15_000, enabled: pode('crm', 'ver') });
   const avisoCrm = (crm.data?.fila ?? 0) + (crm.data?.naoLidas ?? 0);
+  // Quem é funcionário (tem cadastro no RH) vê "Meu ponto", mesmo sem nenhum outro módulo.
+  const ponto = useQuery({ queryKey: ['ponto', 'eu'], queryFn: () => api<{ eFuncionario: boolean; espelhosParaConfirmar?: string[]; documentosNovos?: number }>('/ponto/eu'), staleTime: 60_000 });
+  const avisoPonto = (ponto.data?.espelhosParaConfirmar?.length ?? 0) + (ponto.data?.documentosNovos ?? 0);
   return (
     <div className="app">
       <aside className="lateral">
@@ -22,6 +25,12 @@ export function Layout() {
           <img src="/logo-creme.png" alt="Aritana Semijoias" />
         </div>
         <nav aria-label="Módulos">
+          {ponto.data?.eFuncionario && (
+            <NavLink to="/meu-ponto" className={({ isActive }) => (isActive ? 'ativo' : '')}>
+              Meu ponto
+              {avisoPonto > 0 && <span className="bolha-menu" title="Espelho para confirmar e documentos novos">{avisoPonto}</span>}
+            </NavLink>
+          )}
           {MODULOS.filter((m) => m.chave === 'suporte' || pode(m.chave, 'ver')).map((m) =>
             (m.versao as number) === 2 ? (
               <span key={m.chave} className="item" title="Entra na Versão 2">

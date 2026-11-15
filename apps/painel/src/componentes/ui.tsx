@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from 'react';
 import { ErroApi } from '../api';
 
-export function Topo({ eb, titulo, acoes, sub }: { eb?: string; titulo: string; acoes?: ReactNode; sub?: ReactNode }) {
+export function Topo({ eb, titulo, acoes, sub }: { eb?: ReactNode; titulo: string; acoes?: ReactNode; sub?: ReactNode }) {
   return (
     <div className="topo">
       <div>

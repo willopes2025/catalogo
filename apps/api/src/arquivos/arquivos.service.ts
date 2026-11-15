@@ -65,6 +65,22 @@ export class ArquivosService {
     return nome;
   }
 
+  /** Documentos de RH (contratos, exames, fotos do ponto): pasta separada, só saem pelo sistema com permissão. */
+  async salvarPrivado(conteudo: Buffer, mime: string, pasta: 'rh') {
+    const ext = TIPOS_MIDIA[mime.split(';')[0].trim().toLowerCase()] ?? 'bin';
+    const dir = join(this.dir, pasta);
+    await mkdir(dir, { recursive: true });
+    const nome = `${createHash('sha1').update(conteudo).update(randomBytes(8)).digest('hex')}.${ext}`;
+    const tmp = join(dir, `.${nome}.tmp`);
+    await writeFile(tmp, conteudo);
+    await rename(tmp, join(dir, nome));
+    return nome;
+  }
+
+  caminhoPrivado(nome: string, pasta: 'rh') {
+    return NOME_MIDIA.test(nome) ? join(this.dir, pasta, nome) : null;
+  }
+
   caminhoMidia(nome: string) {
     return NOME_MIDIA.test(nome) ? join(this.dir, 'midia', nome) : null;
   }

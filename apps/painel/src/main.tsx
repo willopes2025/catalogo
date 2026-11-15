@@ -6,10 +6,13 @@ import '@fontsource/titillium-web/400.css';
 import '@fontsource/titillium-web/600.css';
 import '@fontsource/titillium-web/700.css';
 import './estilo.css';
-import { lerSessao } from './api';
+import { lerSessao, pode } from './api';
 import { Layout } from './componentes/Layout';
 import { Entrar } from './paginas/Entrar';
 import { Inicio } from './paginas/Inicio';
+import { MeuPonto, Comprovante } from './paginas/rh/MeuPonto';
+import { Rh } from './paginas/rh/Rh';
+import { FichaFuncionario } from './paginas/rh/FichaFuncionario';
 import { Representantes, FichaRepresentante } from './paginas/Representantes';
 import { Produtos, FichaProduto } from './paginas/Produtos';
 import { Estoque } from './paginas/Estoque';
@@ -68,6 +71,7 @@ ReactDOM.createRoot(document.getElementById('raiz')!).render(
           <Route path="/imprimir/documento/:id" element={<Protegido><ImprimirDocumento /></Protegido>} />
           <Route path="/imprimir/venda/:id" element={<Protegido><ImprimirVenda /></Protegido>} />
           <Route path="/imprimir/etiquetas" element={<Protegido><ImprimirEtiquetas /></Protegido>} />
+          <Route path="/ponto/comprovante/:id" element={<Protegido><Comprovante /></Protegido>} />
           <Route
             element={
               <Protegido>
@@ -75,7 +79,10 @@ ReactDOM.createRoot(document.getElementById('raiz')!).render(
               </Protegido>
             }
           >
-            <Route index element={<Inicio />} />
+            <Route index element={pode('inicio', 'ver') ? <Inicio /> : <Navigate to="/meu-ponto" replace />} />
+            <Route path="meu-ponto" element={<MeuPonto />} />
+            <Route path="rh" element={<Rh />} />
+            <Route path="rh/funcionario/:id" element={<FichaFuncionario />} />
             <Route path="rede" element={<Representantes />} />
             <Route path="rede/nova" element={<FichaRepresentante />} />
             <Route path="rede/niveis" element={<Niveis />} />
