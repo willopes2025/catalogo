@@ -140,7 +140,7 @@ export class AgendaService implements OnModuleInit, OnModuleDestroy {
     const avisos: string[] = [];
     const final = await this.noGoogle(c, avisos);
     if (c.leadId) await this.crm.evento(c.leadId, 'sistema', `${titulo}: ${dia(c.inicio)}, ${hora(c.inicio)}${c.online ? ' (online)' : c.local ? ` em ${c.local}` : ''}.`, usuarioId);
-    if (final.pessoaId) void this.push.paraPessoa(final.pessoaId, { titulo: 'Compromisso marcado', texto: `${final.titulo}: ${dia(final.inicio)}, ${hora(final.inicio)}`, link: '/portal' });
+    if (d.avisar && final.pessoaId) void this.push.paraPessoa(final.pessoaId, { titulo: 'Compromisso marcado', texto: `${final.titulo}: ${dia(final.inicio)}, ${hora(final.inicio)}`, link: '/portal' });
     if (d.avisar) await this.avisar(final, 'marcado').catch((e) => avisos.push(`Aviso pelo WhatsApp não foi: ${(e as Error).message}`));
     return { ...final, avisos };
   }

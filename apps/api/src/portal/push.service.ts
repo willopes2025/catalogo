@@ -1,7 +1,7 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { createSign, createPrivateKey } from 'node:crypto';
 import { connect } from 'node:http2';
-import { eq, inArray } from 'drizzle-orm';
+import { and, eq, inArray } from 'drizzle-orm';
 import { DB, type Db } from '../comum/db.module';
 import { portalDispositivos } from '../db/schema';
 import { SegredosService } from '../segredos/segredos.service';
@@ -30,8 +30,8 @@ function pem(bruto: string, tipo = 'PRIVATE KEY') {
 @Injectable()
 export class PushService {
   private readonly log = new Logger('Notificações');
-  private fcm: { token: string; ate: number; projeto: string } | null = null;
-  private apns: { jwt: string; ate: number } | null = null;
+  private fcm: { token: string; ate: number; projeto: string; chave: string } | null = null;
+  private apns: { jwt: string; ate: number; chave: string } | null = null;
 
   constructor(@Inject(DB) private readonly db: Db, private readonly segredos: SegredosService) {}
 
@@ -50,8 +50,9 @@ export class PushService {
       .onConflictDoUpdate({ target: portalDispositivos.token, set: { pessoaId, plataforma, ultimoUsoEm: new Date() } });
   }
 
-  async remover(token: string) {
-    await this.db.delete(portalDispositivos).where(eq(portalDispositivos.token, token));
+  /** Só a dona do registro tira o celular da lista (uma representante não desliga o aviso de outra). */
+  async remover(token: string, pessoaId: string) {
+    await this.db.delete(portalDispositivos).where(and(eq(portalDispositivos.token, token), eq(portalDispositivos.pessoaId, pessoaId)));
   }
 
   /** Manda para todos os celulares da representante. Nunca derruba quem chamou. */
@@ -77,8 +78,10 @@ export class PushService {
   // ───── Android: Firebase Cloud Messaging (HTTP v1) ─────
 
   private async tokenFcm() {
-    if (this.fcm && this.fcm.ate > Date.now()) return this.fcm;
-    const conta = JSON.parse(this.segredos.v('FIREBASE_CONTA_SERVICO')!) as { client_email: string; private_key: string; project_id: string; token_uri?: string };
+    const bruto = this.segredos.v('FIREBASE_CONTA_SERVICO')!;
+    // Trocar a conta de serviço na tela de integrações vale na hora (não espera o token antigo vencer).
+    if (this.fcm && this.fcm.ate > Date.now() && this.fcm.chave === bruto) return this.fcm;
+    const conta = JSON.parse(bruto) as { client_email: string; private_key: string; project_id: string; token_uri?: string };
     const agora = Math.floor(Date.now() / 1000);
     const uri = process.env.FCM_TOKEN_URL ?? conta.token_uri ?? 'https://oauth2.googleapis.com/token';
     const cab = b64url(JSON.stringify({ alg: 'RS256', typ: 'JWT' }));
@@ -92,7 +95,7 @@ export class PushService {
     });
     const j = (await res.json().catch(() => ({}))) as { access_token?: string; expires_in?: number; error_description?: string };
     if (!res.ok || !j.access_token) throw new Error(`Firebase recusou a conta de serviço: ${j.error_description ?? res.status}`);
-    this.fcm = { token: j.access_token, ate: Date.now() + ((j.expires_in ?? 3600) - 120) * 1000, projeto: conta.project_id };
+    this.fcm = { token: j.access_token, ate: Date.now() + ((j.expires_in ?? 3600) - 120) * 1000, projeto: conta.project_id, chave: bruto };
     return this.fcm;
   }
 
@@ -108,8 +111,11 @@ export class PushService {
         signal: AbortSignal.timeout(15_000),
       });
       if (res.ok) return 'ok';
-      const j = (await res.json().catch(() => ({}))) as { error?: { status?: string; message?: string } };
-      if (res.status === 404 || j.error?.status === 'NOT_FOUND' || j.error?.status === 'UNREGISTERED' || /not a valid FCM registration token/i.test(j.error?.message ?? '')) return 'invalido';
+      const j = (await res.json().catch(() => ({}))) as { error?: { status?: string; message?: string; details?: { errorCode?: string }[] } };
+      // Só apaga o celular quando o Firebase diz que ESTE token morreu (app desinstalado) ou não é um token.
+      // Um 404 qualquer (projeto errado, por exemplo) não pode limpar a lista de celulares.
+      const codigo = j.error?.details?.find((d) => d.errorCode)?.errorCode;
+      if (codigo === 'UNREGISTERED' || (j.error?.status === 'INVALID_ARGUMENT' && /registration token/i.test(j.error?.message ?? ''))) return 'invalido';
       if (res.status === 401) this.fcm = null;
       this.log.warn(`Firebase: ${j.error?.message ?? res.status}`);
       return 'erro';
@@ -122,14 +128,15 @@ export class PushService {
   // ───── iPhone: Apple Push Notification service ─────
 
   private jwtApns() {
-    if (this.apns && this.apns.ate > Date.now()) return this.apns.jwt;
+    const chave = `${this.segredos.v('APNS_KEY_ID')}|${this.segredos.v('APNS_TEAM_ID')}|${this.segredos.v('APNS_CHAVE_P8')}`;
+    if (this.apns && this.apns.ate > Date.now() && this.apns.chave === chave) return this.apns.jwt;
     const cab = b64url(JSON.stringify({ alg: 'ES256', kid: this.segredos.v('APNS_KEY_ID') }));
     const corpo = b64url(JSON.stringify({ iss: this.segredos.v('APNS_TEAM_ID'), iat: Math.floor(Date.now() / 1000) }));
     // A Apple pede a assinatura no formato "cru" (r||s), não DER.
     const assinatura = createSign('SHA256').update(`${cab}.${corpo}`).sign({ key: createPrivateKey(pem(this.segredos.v('APNS_CHAVE_P8')!)), dsaEncoding: 'ieee-p1363' });
     const jwt = `${cab}.${corpo}.${b64url(assinatura)}`;
     // A Apple aceita o mesmo token por até 1 hora; troca com folga.
-    this.apns = { jwt, ate: Date.now() + 40 * 60_000 };
+    this.apns = { jwt, ate: Date.now() + 40 * 60_000, chave };
     return jwt;
   }
 
@@ -138,7 +145,10 @@ export class PushService {
     const host = process.env.APNS_URL ?? (this.segredos.v('APNS_AMBIENTE') === 'sandbox' ? 'https://api.sandbox.push.apple.com' : 'https://api.push.apple.com');
     return new Promise((resolve) => {
       let cliente: ReturnType<typeof connect> | null = null;
+      let acabou = false;
       const fim = (r: 'ok' | 'invalido' | 'erro', motivo?: string) => {
+        if (acabou) return;
+        acabou = true;
         if (motivo) this.log.warn(`Apple: ${motivo}`);
         cliente?.close();
         resolve(r);
@@ -163,7 +173,9 @@ export class PushService {
         req.on('end', () => {
           if (status === 200) return fim('ok');
           const motivo = (() => { try { return (JSON.parse(corpo) as { reason?: string }).reason ?? String(status); } catch { return String(status); } })();
-          if (status === 410 || ['BadDeviceToken', 'Unregistered', 'DeviceTokenNotForTopic'].includes(motivo)) return fim('invalido');
+          // "BadDeviceToken" também aparece quando o ambiente (produção/testes) está trocado na tela de
+          // integrações: nesse caso não apaga, senão um ajuste errado limparia todos os iPhones.
+          if (status === 410 || ['Unregistered', 'DeviceTokenNotForTopic'].includes(motivo)) return fim('invalido');
           if (status === 403) this.apns = null;
           fim('erro', motivo);
         });

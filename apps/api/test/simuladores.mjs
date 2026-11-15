@@ -143,7 +143,7 @@ http
     if (fcm) {
       if (req.headers.authorization !== 'Bearer fcm-acesso') return responder(res, 401, { error: { status: 'UNAUTHENTICATED' } });
       const token = corpo?.message?.token;
-      if (String(token).startsWith('morto')) return responder(res, 404, { error: { status: 'NOT_FOUND', message: 'Requested entity was not found.' } });
+      if (String(token).startsWith('morto')) return responder(res, 404, { error: { code: 404, status: 'NOT_FOUND', message: 'Requested entity was not found.', details: [{ '@type': 'type.googleapis.com/google.firebase.fcm.v1.FcmError', errorCode: 'UNREGISTERED' }] } });
       pushes.push({ via: 'fcm', projeto: fcm[1], token, titulo: corpo.message.notification.title, texto: corpo.message.notification.body, link: corpo.message.data?.link });
       return responder(res, 200, { name: `projects/${fcm[1]}/messages/1` });
     }

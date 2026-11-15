@@ -143,8 +143,7 @@ export class PortalController {
   @Post('dispositivos/sair')
   async sairDispositivo(@Representante() r: RepresentanteLogada, @Body() body: unknown) {
     const d = validar(z.object({ token: z.string().min(20).max(4096) }), body);
-    await this.push.remover(d.token);
-    void r;
+    await this.push.remover(d.token, r.rep);
     return { ok: true };
   }
 

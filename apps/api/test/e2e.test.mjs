@@ -2032,8 +2032,12 @@ test('app da representante: registra o celular e recebe notificações pelo Fire
     await ok('POST', '/portal/dispositivos', { token: and, plataforma: 'android' }); // repetir não duplica
     assert.equal((await banco.query('select count(*)::int as n from portal_dispositivos where pessoa_id = $1', [rep.id])).rows[0].n, 4);
     token = admin;
+    // Marcado com "não avisar": também não notifica no app.
+    await ok('POST', '/agenda', { tipo: 'acerto_video', inicio: new Date(Date.now() + 5 * 86400e3).toISOString(), duracaoMin: 30, online: true, link: 'https://meet.google.com/aaa-bbbb-ccc', pessoaId: rep.id, avisar: false, forcar: true });
+    await new Promise((r) => setTimeout(r, 400));
+    assert.equal((await (await fetch('http://localhost:3199/__pushes')).json()).filter((p) => p.token === and || p.token === ios).length, 0, 'sem aviso, sem notificação');
     // Compromisso marcado para ela: chega nos dois celulares.
-    await ok('POST', '/agenda', { tipo: 'acerto_video', inicio: new Date(Date.now() + 3 * 86400e3).toISOString(), duracaoMin: 30, online: true, link: 'https://meet.google.com/aaa-bbbb-ccc', pessoaId: rep.id, avisar: false, forcar: true });
+    await ok('POST', '/agenda', { tipo: 'acerto_video', inicio: new Date(Date.now() + 3 * 86400e3).toISOString(), duracaoMin: 30, online: true, link: 'https://meet.google.com/aaa-bbbb-ccc', pessoaId: rep.id, avisar: true, forcar: true });
     let recebidas = [];
     for (let i = 0; i < 40 && recebidas.length < 2; i++) {
       await new Promise((r) => setTimeout(r, 100));
@@ -2052,6 +2056,13 @@ test('app da representante: registra o celular e recebe notificações pelo Fire
       await new Promise((r) => setTimeout(r, 100));
     }
     assert.equal((await banco.query('select count(*)::int as n from portal_dispositivos where pessoa_id = $1', [rep.id])).rows[0].n, 2);
+    // Outra representante não consegue desligar o celular dela.
+    const outra = await ok('POST', '/pessoas', { tipo: 'representante', nome: 'Outra Representante App', telefone1: '27991230001', cidade: 'Vitória', uf: 'ES' });
+    const linkOutra = await ok('POST', `/portal/gerar-link/${outra.id}`);
+    token = (await ok('POST', `/portal/link/${linkOutra.token}`)).token;
+    await ok('POST', '/portal/dispositivos/sair', { token: ios });
+    assert.equal((await banco.query('select count(*)::int as n from portal_dispositivos where pessoa_id = $1', [rep.id])).rows[0].n, 2, 'o celular continua com a dona');
+    token = admin;
     // Saiu do app: aquele celular para de receber.
     const link2 = await ok('POST', `/portal/gerar-link/${rep.id}`);
     token = (await ok('POST', `/portal/link/${link2.token}`)).token;

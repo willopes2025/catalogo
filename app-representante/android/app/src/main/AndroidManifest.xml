@@ -32,4 +32,6 @@
     <!-- Permissions -->
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Android 13+: sem isto o celular nem pergunta se pode notificar. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 </manifest>
