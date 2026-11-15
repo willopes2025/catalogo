@@ -1604,6 +1604,160 @@ test('conciliação de cartão: marca vários, informa o depósito, baixa tudo e
   assert.equal((await chamar('POST', '/financeiro/cartao/conciliar', { ids, valorRecebido: bruto, recebidoEm: c.hoje, contaId: conta.id })).status, 400, 'não concilia duas vezes');
 });
 
+test('números de WhatsApp: excluir apaga o que nunca foi usado e arquiva o que tem conversas', async () => {
+  const pg = createRequire(import.meta.url)('pg');
+  const banco = new pg.Client({ connectionString: process.env.DATABASE_URL ?? 'postgres://aritana:aritana@localhost:5432/aritana_teste' });
+  await banco.connect();
+  try {
+    const novo = await ok('POST', '/crm/canais', { nome: 'Número para excluir', tipo: 'evolution' });
+    const r1 = await ok('DELETE', `/crm/canais/${novo.id}`);
+    assert.equal(r1.apagado, true, 'sem conversas: apaga de vez');
+    assert.ok(!(await ok('GET', '/crm/canais')).some((c) => c.id === novo.id));
+    const inst = await fetch(`http://localhost:3199/evo/instance/connectionState/aritana-${novo.id}`, { headers: { apikey: 'chave-evo-teste' } });
+    assert.equal(inst.status, 404, 'a sessão no servidor de WhatsApp também foi apagada');
+
+    const usado = await ok('POST', '/crm/canais', { nome: 'Número com histórico', tipo: 'evolution' });
+    const contato = (await banco.query(`insert into crm_contatos (telefone, nome) values ('5527988887777', 'Cliente Histórico') returning id`)).rows[0];
+    const cv = (await banco.query(`insert into crm_conversas (contato_id, canal_id, status) values ($1, $2, 'fila') returning id`, [contato.id, usado.id])).rows[0];
+    const r2 = await ok('DELETE', `/crm/canais/${usado.id}`);
+    assert.equal(r2.apagado, false);
+    assert.equal(r2.conversas, 1);
+    assert.ok(!(await ok('GET', '/crm/canais')).some((c) => c.id === usado.id), 'some da tela');
+    const linha = (await banco.query('select ativo, excluido_em, config from crm_canais where id = $1', [usado.id])).rows[0];
+    assert.equal(linha.ativo, false);
+    assert.ok(linha.excluido_em);
+    assert.deepEqual(linha.config, {}, 'credenciais apagadas');
+    assert.equal((await banco.query('select status from crm_conversas where id = $1', [cv.id])).rows[0].status, 'resolvida', 'conversa continua, encerrada');
+    assert.equal((await chamar('PATCH', `/crm/canais/${usado.id}`, { ativo: true })).status, 400, 'não reativa um número excluído');
+  } finally {
+    await banco.end();
+  }
+});
+
+test('leads por localização: vai para a consultora mais perto, ela aceita no portal, prazo vencido passa para a próxima', async () => {
+  const pg = createRequire(import.meta.url)('pg');
+  const banco = new pg.Client({ connectionString: process.env.DATABASE_URL ?? 'postgres://aritana:aritana@localhost:5432/aritana_teste' });
+  await banco.connect();
+  try {
+    const funis = await ok('GET', '/crm/funis');
+    const clientes = funis.find((f) => f.tipo === 'clientes');
+    const recrut = funis.find((f) => f.tipo === 'recrutamento');
+    await ok('PUT', `/crm/distribuicao/${clientes.id}`, { ativo: true, destino: 'consultoras', raioKm: 40, prazoMinutos: 30, maxTentativas: 2, maxAbertos: 5, avisarWhatsapp: false });
+    assert.ok((await ok('GET', '/crm/distribuicao')).some((x) => x.funil.id === clientes.id && x.config.raioKm === 40));
+    // Anúncio → formulário de cliente → card no funil Clientes → consultora mais perto.
+    const form = await ok('POST', '/formularios', {
+      titulo: 'Quero comprar semijoias', acao: 'cliente', funilId: clientes.id,
+      campos: [
+        { id: 'nome', tipo: 'texto', rotulo: 'Seu nome', obrigatorio: true, papel: 'nome' },
+        { id: 'tel', tipo: 'telefone', rotulo: 'WhatsApp', obrigatorio: true, papel: 'telefone' },
+        { id: 'cidade', tipo: 'texto', rotulo: 'Cidade', obrigatorio: true, papel: 'cidade' },
+        { id: 'peca', tipo: 'escolha', rotulo: 'O que procura', obrigatorio: false, opcoes: ['Brincos', 'Colares'] },
+      ],
+    });
+    const responder = (nome, tel, cidade) => ok('POST', `/publico/formularios/${form.slug}`, { respostas: { nome, tel, cidade, peca: 'Brincos' }, origem: { utm_campaign: 'novembro' } });
+    await responder('Cliente Perto Vila Velha', '27991110001', 'Vila Velha');
+    // A distribuição roda logo depois de criar o card (em segundo plano): espera ela terminar.
+    const acha = async (nome, funil = clientes.id) => {
+      for (let i = 0; i < 40; i++) {
+        const c = (await ok('GET', `/crm/leads?funilId=${funil}&busca=${encodeURIComponent(nome)}`))[0];
+        if (c?.distribuicao) return c;
+        await new Promise((r) => setTimeout(r, 100));
+      }
+      throw new Error(`card de ${nome} não foi distribuído`);
+    };
+    let card = await acha('Cliente Perto Vila Velha');
+    assert.ok(card, 'formulário de cliente abriu card no funil');
+    let det = await ok('GET', `/crm/leads/${card.id}`);
+    assert.equal(det.distribuicao, 'aguardando');
+    const perto = await ok('GET', `/crm/leads/${card.id}/perto`);
+    assert.equal(perto.local.cidade, 'Vila Velha');
+    assert.equal(det.consultoraId, perto.lista[0].id, 'a mais perto recebe');
+    assert.equal(det.distanciaKm, perto.lista[0].distanciaKm);
+    assert.ok(perto.lista.every((x, i, a) => i === 0 || a[i - 1].distanciaKm <= x.distanciaKm), 'lista em ordem de distância');
+    assert.equal(det.camposExtras['O que procura'], 'Brincos');
+    assert.equal(card.consultora, det.consultora.nome, 'nome da consultora aparece no quadro');
+
+    // Portal: antes de aceitar, só o primeiro nome e sem telefone; depois, tudo.
+    const admin = token;
+    const entrar = async (pessoaId) => { token = admin; const link = await ok('POST', `/portal/gerar-link/${pessoaId}`); token = (await ok('POST', `/portal/link/${link.token}`)).token; };
+    await entrar(det.consultoraId);
+    let meus = await ok('GET', '/portal/leads');
+    let meu = meus.find((x) => x.id === card.id);
+    assert.equal(meu.nome, 'Cliente');
+    assert.equal(meu.telefone, null);
+    assert.ok(meu.aceitarAte);
+    await ok('POST', `/portal/leads/${card.id}/aceitar`);
+    meu = (await ok('GET', '/portal/leads')).find((x) => x.id === card.id);
+    assert.equal(meu.nome, 'Cliente Perto Vila Velha');
+    assert.match(meu.telefone, /991110001$/);
+    assert.ok(meu.interesse.some(([k, v]) => k === 'O que procura' && v === 'Brincos'));
+    await ok('POST', `/portal/leads/${card.id}/resultado`, { deuCerto: true });
+    token = admin;
+    det = await ok('GET', `/crm/leads/${card.id}`);
+    const comprou = (await ok('GET', '/crm/funis')).find((f) => f.id === clientes.id).etapas.find((e) => e.chave === 'comprou');
+    assert.equal(det.etapaId, comprou.id, 'vendeu: card vai para "Comprou" (segue para o pós-venda)');
+    assert.equal(det.distribuicao, 'concluido');
+
+    // Prazo vencido sem aceite → próxima mais perto; esgotadas as tentativas → volta para a equipe.
+    await responder('Cliente Prazo Vencido', '27991110002', 'Vitória');
+    card = await acha('Cliente Prazo Vencido');
+    const primeira = (await ok('GET', `/crm/leads/${card.id}`)).consultoraId;
+    await banco.query(`update crm_leads set distribuido_em = now() - interval '31 minutes' where id = $1`, [card.id]);
+    assert.ok((await ok('POST', '/crm/distribuicao/verificar-prazos')).movidos >= 1);
+    det = await ok('GET', `/crm/leads/${card.id}`);
+    assert.notEqual(det.consultoraId, primeira, 'passou para outra');
+    assert.equal(det.distribuicao, 'aguardando');
+    assert.equal(det.jaOferecido.length, 2);
+    await entrar(primeira);
+    assert.equal((await chamar('POST', `/portal/leads/${card.id}/aceitar`)).status, 404, 'quem perdeu o prazo não aceita mais');
+    await entrar(det.consultoraId);
+    await ok('POST', `/portal/leads/${card.id}/recusar`, { motivo: 'Estou viajando' });
+    token = admin;
+    det = await ok('GET', `/crm/leads/${card.id}`);
+    assert.equal(det.distribuicao, 'devolvido', 'duas tentativas: volta para a equipe');
+    assert.equal(det.consultoraId, null);
+    assert.ok(det.etiquetas.includes('Sem consultora'));
+    assert.ok(det.eventos.some((e) => /Estou viajando/.test(e.texto)));
+    // A equipe escolhe na mão.
+    const escolhida = (await ok('GET', `/crm/leads/${card.id}/perto`)).lista[3];
+    await ok('POST', `/crm/leads/${card.id}/distribuir`, { pessoaId: escolhida.id });
+    assert.equal((await ok('GET', `/crm/leads/${card.id}`)).consultoraId, escolhida.id);
+    await ok('POST', `/crm/leads/${card.id}/devolver`);
+    assert.equal((await ok('GET', `/crm/leads/${card.id}`)).distribuicao, 'devolvido');
+
+    // Longe de todas (fora do raio): fica com a equipe e o motivo aparece no card.
+    await responder('Cliente Manaus Longe', '92991110003', 'Manaus');
+    det = await ok('GET', `/crm/leads/${(await acha('Cliente Manaus Longe')).id}`);
+    assert.equal(det.distribuicao, 'sem_consultora');
+    assert.ok(det.eventos.some((e) => /40 km de Manaus\/AM/.test(e.texto)));
+
+    // Recrutamento: a candidata vai para a líder mais perto; aprovada, essa líder vira a líder dela.
+    await ok('PUT', `/crm/distribuicao/${recrut.id}`, { ativo: true, destino: 'lideres', raioKm: 100, prazoMinutos: 60, maxTentativas: 3, maxAbertos: 20, avisarWhatsapp: false });
+    await ok('POST', '/crm/candidaturas', { nome: 'Candidata Da Lider Perto', telefone: '27991110004', cidade: 'Vila Velha', uf: 'ES', modeloInteresse: 'consignado', consentimentoLgpd: true });
+    const cc = await acha('Candidata Da Lider Perto', recrut.id);
+    det = await ok('GET', `/crm/leads/${cc.id}`);
+    assert.equal(det.distribuicao, 'aguardando');
+    const lider = det.consultoraId;
+    assert.ok((await ok('GET', `/pessoas?liderId=${lider}`)).itens.length > 0 || /l[ií]der/i.test(det.consultora.nome), 'foi para uma líder');
+    await entrar(lider);
+    const minha = (await ok('GET', '/portal/leads')).find((x) => x.id === cc.id);
+    assert.equal(minha.tipo, 'candidata');
+    await ok('POST', `/portal/leads/${cc.id}/aceitar`);
+    await ok('POST', `/portal/leads/${cc.id}/resultado`, { deuCerto: true, motivo: 'Já vende roupas, tem clientela' });
+    token = admin;
+    det = await ok('GET', `/crm/leads/${cc.id}`);
+    assert.ok(det.etiquetas.includes('Líder recomenda'));
+    assert.equal(det.status, 'aberto', 'no recrutamento quem aprova é a matriz');
+    const nova = await ok('POST', `/crm/candidaturas/${det.candidaturaId}/aprovar`, { modeloTrabalho: 'consignado' });
+    const ficha = await ok('GET', `/pessoas/${nova.pessoaId}`);
+    assert.equal(ficha.liderId, lider, 'a líder que atendeu vira a líder da nova revendedora');
+    await ok('PUT', `/crm/distribuicao/${recrut.id}`, { ativo: false, destino: 'lideres', raioKm: 100, prazoMinutos: 60, maxTentativas: 3, maxAbertos: 20, avisarWhatsapp: false });
+    await ok('PUT', `/crm/distribuicao/${clientes.id}`, { ativo: false, destino: 'consultoras', raioKm: 40, prazoMinutos: 30, maxTentativas: 2, maxAbertos: 5, avisarWhatsapp: false });
+  } finally {
+    await banco.end();
+  }
+});
+
 test('metas do mês: define, recusa repetida, acompanha venda nova e mostra o ritmo', async () => {
   const comp = new Date(Date.now() - 3 * 3600_000).toISOString().slice(0, 7);
   const loja = (await ok('GET', '/estoque/locais')).find((l) => l.tipo === 'loja');

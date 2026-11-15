@@ -205,6 +205,8 @@ export class AtendimentoController {
         naoLidas: sql<number>`(select coalesce(sum(c.nao_lidas),0)::int from crm_conversas c where c.contato_id = ${crmLeads.contatoId})`,
         tarefas: sql<number>`(select count(*)::int from crm_tarefas t where t.lead_id = ${crmLeads.id} and t.feita_em is null)`,
         tarefaVencida: sql<boolean>`exists (select 1 from crm_tarefas t where t.lead_id = ${crmLeads.id} and t.feita_em is null and t.vence_em < now())`,
+        distribuicao: crmLeads.distribuicao,
+        consultora: sql<string | null>`(select p.nome from pessoas p where p.id = ${crmLeads.consultoraId})`,
       })
       .from(crmLeads)
       .innerJoin(crmContatos, eq(crmContatos.id, crmLeads.contatoId))
@@ -274,7 +276,8 @@ export class AtendimentoController {
     const [candidatura] = l.candidaturaId ? await this.db.select().from(candidaturas).where(eq(candidaturas.id, l.candidaturaId)) : [];
     const pessoaId = l.pessoaId ?? contato.pessoaId;
     const [pessoa] = pessoaId ? await this.db.select({ id: pessoas.id, nome: pessoas.nome, tipo: pessoas.tipo, status: pessoas.status, cidade: pessoas.cidade }).from(pessoas).where(eq(pessoas.id, pessoaId)) : [];
-    return { ...l, contato, eventos, tarefas, conversas, outrosCards: outros, candidatura: candidatura ?? null, pessoa: pessoa ?? null };
+    const [consultora] = l.consultoraId ? await this.db.select({ id: pessoas.id, nome: pessoas.nome, cidade: pessoas.cidade, uf: pessoas.uf, telefone: pessoas.telefone1 }).from(pessoas).where(eq(pessoas.id, l.consultoraId)) : [];
+    return { ...l, contato, eventos, tarefas, conversas, outrosCards: outros, candidatura: candidatura ?? null, pessoa: pessoa ?? null, consultora: consultora ?? null };
   }
 
   @Patch('crm/leads/:id')
@@ -796,6 +799,15 @@ export class AtendimentoController {
   async webhook(@Param('id', ParseUUIDPipe) id: string) {
     await this.canais.apontarWebhookZapi(await this.canais.obter(id));
     return { ok: true };
+  }
+
+  @Delete('crm/canais/:id')
+  @Permissao('configuracoes', 'editar')
+  async excluirCanal(@Usuario() u: UsuarioLogado, @Param('id', ParseUUIDPipe) id: string) {
+    const c = await this.canais.obter(id);
+    const r = await this.canais.excluir(id);
+    await this.auditoria.registrar({ usuarioId: u.id, acao: 'excluir', entidade: 'crm_canal', entidadeId: id, dados: { nome: c.nome, tipo: c.tipo, apagado: r.apagado } });
+    return r;
   }
 
   @Post('crm/canais/:id/desconectar')

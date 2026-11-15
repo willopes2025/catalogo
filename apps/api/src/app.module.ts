@@ -60,6 +60,8 @@ import { AtendimentoController } from './crm/atendimento.controller';
 import { CrmService } from './crm/crm.service';
 import { CanaisService } from './crm/canais.service';
 import { AutomacaoService } from './crm/automacao.service';
+import { DistribuicaoService } from './crm/distribuicao.service';
+import { DistribuicaoController } from './crm/distribuicao.controller';
 import { ArquivosController } from './arquivos/arquivos.controller';
 import { ArquivosService } from './arquivos/arquivos.service';
 import { JueriService } from './jueri/jueri.service';
@@ -96,7 +98,7 @@ if (!segredo || (process.env.NODE_ENV === 'production' && segredo.length < 32)) 
     VendasController,
     WebhooksController,
     FiscalController,
-    RelatoriosController, IndicadoresController, MetasController, RhController, PontoController,
+    RelatoriosController, IndicadoresController, MetasController, DistribuicaoController, RhController, PontoController,
     SuporteController,
     ImportacaoController,
     GarantiaController,
@@ -117,6 +119,7 @@ if (!segredo || (process.env.NODE_ENV === 'production' && segredo.length < 32)) 
     CrmService,
     CanaisService,
     AutomacaoService,
+    DistribuicaoService,
     ArquivosService,
     PontosService,
     AuditoriaService,

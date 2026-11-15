@@ -131,6 +131,8 @@ http
       if (r === 'instance/connectionState') return responder(res, 200, { instance: { instanceName: partes[2], state: inst.estado } });
       if (r === 'instance/connect') return responder(res, 200, inst.estado === 'open' ? { instance: { state: 'open' } } : qr);
       if (r === 'instance/logout') { inst.estado = 'close'; return responder(res, 200, { status: 'SUCCESS' }); }
+      if (r === 'instance/delete') { evo.delete(partes[2]); return responder(res, 200, { status: 'SUCCESS' }); }
+      if (url.pathname === '/evo/__existe') return responder(res, 200, { existe: evo.has(url.searchParams.get('i')) });
       if (r === 'webhook/set') { inst.webhook = corpo.webhook; return responder(res, 201, { webhook: corpo.webhook }); }
       if (r === 'message/sendText' || r === 'message/sendMedia' || r === 'message/sendWhatsAppAudio') {
         if (inst.estado !== 'open') return responder(res, 400, { status: 400, error: 'Bad Request', response: { message: ['Connection Closed'] } });

@@ -5,7 +5,7 @@ import { dataHora } from '../formato';
 import { Campo, Carregando, Erro, Indicador, Topo } from '../componentes/ui';
 
 interface CampoForm { id: string; tipo: string; rotulo: string; obrigatorio: boolean; opcoes?: string[]; ajuda?: string | null; papel?: string | null }
-interface Form { id?: string; slug?: string; titulo: string; descricao: string | null; campos: CampoForm[]; acao: string; mensagemFinal: string | null; consentimento: string | null; ativo?: boolean }
+interface Form { id?: string; slug?: string; titulo: string; descricao: string | null; campos: CampoForm[]; acao: string; funilId?: string | null; mensagemFinal: string | null; consentimento: string | null; ativo?: boolean }
 
 const TIPOS: [string, string][] = [['texto', 'Texto curto'], ['texto_longo', 'Texto longo'], ['telefone', 'Telefone'], ['email', 'E-mail'], ['cpf', 'CPF'], ['numero', 'Número'], ['data', 'Data'], ['escolha', 'Escolha uma opção'], ['multipla', 'Várias opções'], ['nota', 'Nota de 0 a 10']];
 const PAPEIS: [string, string][] = [['', '—'], ['nome', 'Nome'], ['telefone', 'Telefone'], ['email', 'E-mail'], ['cpf', 'CPF'], ['cidade', 'Cidade'], ['uf', 'Estado (UF)']];
@@ -62,11 +62,12 @@ export function Formularios() {
 function Editor({ id, base, voltar }: { id: string | null; base?: Form; voltar: () => void }) {
   const qc = useQueryClient();
   const atual = useQuery({ queryKey: ['formulario', id], queryFn: () => api<Form>(`/formularios/${id}`), enabled: !!id });
+  const funis = useQuery({ queryKey: ['crm', 'funis-simples'], queryFn: () => api<{ id: string; nome: string }[]>('/crm/funis'), enabled: pode('crm', 'ver') });
   const [f, setF] = useState<Form | null>(base ?? null);
   useEffect(() => { if (atual.data) setF(atual.data); }, [atual.data]);
   const salvar = useMutation({
     mutationFn: () => {
-      const corpo = { titulo: f!.titulo, descricao: f!.descricao || null, campos: f!.campos.map((c) => ({ ...c, papel: c.papel || null, ajuda: c.ajuda || null, opcoes: ['escolha', 'multipla'].includes(c.tipo) ? (c.opcoes ?? []).filter((o) => o.trim()) : undefined })), acao: f!.acao, mensagemFinal: f!.mensagemFinal || null, consentimento: f!.consentimento || null, ativo: f!.ativo ?? true, ...(f!.slug ? { slug: f!.slug } : {}) };
+      const corpo = { titulo: f!.titulo, descricao: f!.descricao || null, campos: f!.campos.map((c) => ({ ...c, papel: c.papel || null, ajuda: c.ajuda || null, opcoes: ['escolha', 'multipla'].includes(c.tipo) ? (c.opcoes ?? []).filter((o) => o.trim()) : undefined })), acao: f!.acao, funilId: f!.acao === 'cliente' ? f!.funilId || null : null, mensagemFinal: f!.mensagemFinal || null, consentimento: f!.consentimento || null, ativo: f!.ativo ?? true, ...(f!.slug ? { slug: f!.slug } : {}) };
       return id ? api<Form>(`/formularios/${id}`, { metodo: 'PATCH', corpo }) : api<Form>('/formularios', { corpo });
     },
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['formularios'] }); voltar(); },
@@ -93,6 +94,11 @@ function Editor({ id, base, voltar }: { id: string | null; base?: Form; voltar: 
           <Campo rotulo="Ao receber uma resposta" className="l2" ajuda={f.acao !== 'nenhuma' ? 'Marque uma pergunta obrigatória com o papel "Nome" e outra com "Telefone".' : undefined}>
             <select value={f.acao} onChange={(e) => setF({ ...f, acao: e.target.value })}>{Object.entries(ACOES).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select>
           </Campo>
+          {f.acao === 'cliente' && (
+            <Campo rotulo="Abrir card no CRM" className="l2" ajuda="Com a distribuição por localização ligada neste funil, a cliente vai sozinha para a consultora mais perto. Pergunte a cidade (papel Cidade).">
+              <select value={f.funilId ?? ''} onChange={(e) => setF({ ...f, funilId: e.target.value || null })}><option value="">Não abrir card</option>{funis.data?.map((x) => <option key={x.id} value={x.id}>{x.nome}</option>)}</select>
+            </Campo>
+          )}
           <Campo rotulo="Mensagem depois de enviar" className="l2"><input value={f.mensagemFinal ?? ''} onChange={(e) => setF({ ...f, mensagemFinal: e.target.value })} placeholder="Resposta enviada. Obrigada!" /></Campo>
           <Campo rotulo="Autorização (LGPD)" className="l2" ajuda="Se preencher, a pessoa precisa marcar para enviar. Use quando guardar contato."><input value={f.consentimento ?? ''} onChange={(e) => setF({ ...f, consentimento: e.target.value })} /></Campo>
         </div>

@@ -150,6 +150,22 @@ const SECOES: Secao[] = [
     ],
   },
   {
+    id: 'distribuicao',
+    titulo: 'Leads para a consultora mais perto',
+    passos: [
+      { t: 'Ligue no funil', d: 'CRM › Configurar › Distribuição por localização: escolha o funil (Clientes da loja, Recrutamento…), para quem vai (consultoras ou só líderes), a distância máxima, o prazo para aceitar e quantas pessoas tentar.' },
+      { t: 'Formulário do anúncio', d: 'No formulário de cliente, pergunte a cidade (papel Cidade) e escolha "Abrir card no CRM". Cada resposta vira um card que vai sozinho para a consultora mais perto.' },
+      { t: 'A consultora aceita no portal', d: 'Ela recebe o aviso no WhatsApp e abre "Clientes" no portal. Antes de aceitar vê só o primeiro nome e a cidade; depois, o telefone e o botão para chamar no WhatsApp. No fim, marca "Vendi" ou "Não deu certo".' },
+      { t: 'Sem aceite no prazo', d: 'Passa para a próxima mais perto. Esgotadas as tentativas, ou se ninguém estiver perto, o card fica com a equipe com a etiqueta "Sem consultora".' },
+      { t: 'No card', d: 'O bloco "Consultora perto" mostra com quem está e desde quando, e deixa escolher outra na mão, passar para a próxima ou tirar dela.' },
+    ],
+    dicas: [
+      'A distância é medida entre as cidades (centro de cada uma). Sem cidade, vale a região do DDD do telefone.',
+      'Só recebe quem está ativa e tem a cidade no cadastro.',
+      'No recrutamento, a líder que atendeu e recomendou vira a líder da nova revendedora quando a matriz aprova.',
+    ],
+  },
+  {
     id: 'marketing',
     titulo: 'Marketing: custo e retorno das campanhas',
     passos: [

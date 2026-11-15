@@ -1,0 +1,1 @@
+ALTER TABLE "crm_canais" ADD COLUMN "excluido_em" timestamp with time zone;

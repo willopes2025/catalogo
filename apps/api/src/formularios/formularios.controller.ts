@@ -1,4 +1,4 @@
-import { BadRequestException, Body, Controller, Get, Inject, NotFoundException, Param, ParseUUIDPipe, Patch, Post, Query, Req } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, Inject, Logger, NotFoundException, Param, ParseUUIDPipe, Patch, Post, Query, Req } from '@nestjs/common';
 import type { Request } from 'express';
 import { and, desc, eq, or, sql } from 'drizzle-orm';
 import { z } from 'zod';
@@ -10,6 +10,7 @@ import { Limitador } from '../comum/limitador';
 import { AuditoriaService } from '../comum/auditoria.service';
 import { candidaturaNotas, candidaturas, formularioRespostas, formularios, pessoas } from '../db/schema';
 import { MODELOS_FORMULARIO } from './modelos';
+import { CrmService } from '../crm/crm.service';
 
 const envios = new Limitador(20, 60 * 60_000, 'Muitas respostas enviadas deste aparelho.');
 
@@ -31,6 +32,7 @@ const formSchema = z
     descricao: opcional(1000),
     campos: z.array(campoSchema).min(1, 'Coloque ao menos uma pergunta').max(40),
     acao: z.enum(['nenhuma', 'cliente', 'candidata']).default('nenhuma'),
+    funilId: z.string().uuid().nullable().optional(),
     mensagemFinal: opcional(300),
     consentimento: opcional(500),
     ativo: z.boolean().optional(),
@@ -45,7 +47,8 @@ const formSchema = z
 /** Formulários montados pela equipe: pesquisa de satisfação, cadastro de cliente, inscrição em evento… */
 @Controller()
 export class FormulariosController {
-  constructor(@Inject(DB) private readonly db: Db, private readonly auditoria: AuditoriaService) {}
+  private readonly log = new Logger('Formulários');
+  constructor(@Inject(DB) private readonly db: Db, private readonly auditoria: AuditoriaService, private readonly crm: CrmService) {}
 
   private async slugLivre(base: string, id?: string) {
     const raiz = (gerarSlug(base) || 'formulario').slice(0, 50);
@@ -161,7 +164,7 @@ export class FormulariosController {
       return typeof v === 'string' && v ? v : null;
     };
 
-    return this.db.transaction(async (tx) => {
+    const r2 = await this.db.transaction(async (tx) => {
       let pessoaId: string | null = null;
       let candidaturaId: string | null = null;
       const nome = porPapel('nome');
@@ -198,8 +201,30 @@ export class FormulariosController {
         await tx.insert(candidaturaNotas).values({ candidaturaId, texto: `Respondeu o formulário "${f.titulo}".` });
       }
       await tx.insert(formularioRespostas).values({ formularioId: f.id, respostas: r.valores, origem, pessoaId, candidaturaId });
-      return { ok: true, mensagem: f.mensagemFinal || 'Resposta enviada. Obrigada!' };
+      return { ok: true, mensagem: f.mensagemFinal || 'Resposta enviada. Obrigada!', pessoaId };
     });
+    // Cliente vinda do anúncio: card no funil escolhido (é ele que a distribuição por localização entrega à consultora mais perto).
+    const nome = porPapel('nome');
+    const telefone = porPapel('telefone');
+    if (f.acao === 'cliente' && f.funilId && nome && telefone) {
+      try {
+        const extras: Record<string, string> = {};
+        for (const c of f.campos) {
+          const v = r.valores[c.id];
+          if (v === null || v === undefined || ['nome', 'telefone', 'cpf'].includes(c.papel ?? '')) continue;
+          const rotulo = c.papel === 'cidade' ? 'Cidade' : c.papel === 'uf' ? 'UF' : c.rotulo.slice(0, 60);
+          extras[rotulo] = (Array.isArray(v) ? v.join(', ') : String(v)).slice(0, 300);
+        }
+        const contato = await this.crm.garantirContato({ telefone, nome, email: porPapel('email'), pessoaId: r2.pessoaId });
+        if (!(await this.crm.leadAberto(contato.id, f.funilId))) {
+          await this.crm.criarLead({ funilId: f.funilId, contatoId: contato.id, titulo: nome, pessoaId: r2.pessoaId, origem: { ...origem, formulario: f.slug }, camposExtras: extras });
+        }
+      } catch (e) {
+        // Telefone que não serve para WhatsApp etc.: a resposta e o cadastro já ficaram; só o card não.
+        this.log.warn(`Card do formulário ${f.slug} não criado: ${(e as Error).message}`);
+      }
+    }
+    return { ok: r2.ok, mensagem: r2.mensagem };
   }
 }
 

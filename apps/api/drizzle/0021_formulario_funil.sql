@@ -1,0 +1,2 @@
+ALTER TABLE "formularios" ADD COLUMN "funil_id" uuid;--> statement-breakpoint
+ALTER TABLE "formularios" ADD CONSTRAINT "formularios_funil_id_crm_funis_id_fk" FOREIGN KEY ("funil_id") REFERENCES "public"."crm_funis"("id") ON DELETE set null ON UPDATE no action;

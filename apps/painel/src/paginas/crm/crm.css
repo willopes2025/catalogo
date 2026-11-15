@@ -126,3 +126,9 @@
 .multipla summary:hover, .multipla[open] summary { border-color: var(--linha); }
 .multipla .check { display: flex; align-items: center; gap: 8px; justify-content: flex-start; font-size: 14px; }
 .multipla .check input[type=checkbox] { width: auto; padding: 0; margin: 0; }
+
+/* Distribuição por localização: lista de consultoras perto no card */
+.lc-opcao { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; width: 100%; text-align: left; padding: 7px 9px; margin-bottom: 4px; border: 1px solid var(--linha); border-radius: 8px; background: var(--papel); font: inherit; font-size: 13px; cursor: pointer; }
+.lc-opcao:hover { border-color: var(--dourado); }
+.lc-opcao:disabled { opacity: .6; cursor: wait; }
+.kc-consultora { font-size: 11px; color: var(--dourado); margin-top: 3px; }

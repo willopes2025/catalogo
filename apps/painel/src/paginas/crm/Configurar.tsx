@@ -2,19 +2,21 @@ import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, pode } from '../../api';
 import { Abas, Campo, Carregando, Erro } from '../../componentes/ui';
+import { Distribuicao } from './Distribuicao';
 import { NOME_TIPO_CANAL, NovoCampo, TIPOS_CAMPO, usarAtendentes, usarCampos, usarCanais, usarFunis, variavelDoCampo, type CampoDef, type Canal, type Template, type TipoCanal } from './comum';
 
-type Sub = 'numeros' | 'funis' | 'campos' | 'templates' | 'respostas' | 'ramais';
+type Sub = 'numeros' | 'funis' | 'distribuicao' | 'campos' | 'templates' | 'respostas' | 'ramais';
 const sel = { padding: 7, borderRadius: 8, border: '1px solid var(--linha)', font: 'inherit' } as const;
 
 export function Configurar() {
   const [sub, setSub] = useState<Sub>('numeros');
-  const abas: [Sub, string][] = [['numeros', 'Números de WhatsApp'], ['funis', 'Funis e etapas'], ['campos', 'Campos personalizados'], ['templates', 'Templates'], ['respostas', 'Respostas rápidas'], ...(pode('configuracoes', 'editar') ? ([['ramais', 'Ramais (softphone)']] as [Sub, string][]) : [])];
+  const abas: [Sub, string][] = [['numeros', 'Números de WhatsApp'], ['funis', 'Funis e etapas'], ['distribuicao', 'Distribuição por localização'], ['campos', 'Campos personalizados'], ['templates', 'Templates'], ['respostas', 'Respostas rápidas'], ...(pode('configuracoes', 'editar') ? ([['ramais', 'Ramais (softphone)']] as [Sub, string][]) : [])];
   return (
     <div>
       <Abas ativa={sub} mudar={setSub} abas={abas} />
       {sub === 'numeros' && <Numeros />}
       {sub === 'funis' && <Funis />}
+      {sub === 'distribuicao' && <Distribuicao />}
       {sub === 'campos' && <Campos />}
       {sub === 'templates' && <Templates />}
       {sub === 'respostas' && <Respostas />}
@@ -58,6 +60,13 @@ function CartaoCanal({ canal: c, editar, destaque }: { canal: Canal; editar: () 
   const sit = useQuery({ queryKey: ['crm', 'canal', c.id, 'situacao'], queryFn: () => api<{ conectado: boolean; detalhe: string; qrcode?: string | null }>(`/crm/canais/${c.id}/situacao`), refetchInterval: (q) => (q.state.data && !q.state.data.conectado && c.tipo !== 'oficial' ? (c.tipo === 'evolution' ? 3000 : 5000) : 60_000) });
   const acao = useMutation({ mutationFn: (a: string) => api<any>(`/crm/canais/${c.id}/${a}`, { corpo: {} }), onSuccess: () => qc.invalidateQueries({ queryKey: ['crm'] }) });
   const [copiado, setCopiado] = useState(false);
+  const excluir = useMutation({ mutationFn: () => api<{ apagado: boolean }>(`/crm/canais/${c.id}`, { metodo: 'DELETE' }), onSuccess: () => qc.invalidateQueries({ queryKey: ['crm'] }) });
+  const confirmarExclusao = () =>
+    window.confirm(
+      `Excluir o número "${c.nome}"?\n\n` +
+        (c.tipo === 'oficial' ? 'Ele para de mandar e receber mensagens por este sistema (na Meta o número continua existindo).' : 'O celular é desconectado e o número para de mandar e receber mensagens por aqui.') +
+        '\nAs conversas que já existem continuam no histórico para consulta.',
+    ) && excluir.mutate();
   return (
     <div className="cartao" style={destaque ? { borderColor: 'var(--dourado)', boxShadow: '0 0 0 3px rgba(137,111,75,.15)' } : undefined}>
       <div className="flex entre" style={{ gap: 10, flexWrap: 'wrap' }}>
@@ -75,11 +84,12 @@ function CartaoCanal({ canal: c, editar, destaque }: { canal: Canal; editar: () 
             {c.tipo === 'qrcode' && <button className="botao claro pequeno" disabled={acao.isPending} onClick={() => acao.mutate('webhook')}>Reapontar webhook</button>}
             {c.tipo !== 'oficial' && sit.data?.conectado && <button className="botao claro pequeno" onClick={() => window.confirm('Desconectar este celular do sistema?') && acao.mutate('desconectar')}>Desconectar</button>}
             <button className="botao claro pequeno" onClick={editar}>Editar</button>
+            <button className="botao claro pequeno perigo" disabled={excluir.isPending} onClick={confirmarExclusao}>{excluir.isPending ? 'Excluindo…' : 'Excluir'}</button>
           </div>
         )}
       </div>
       {acao.data?.total !== undefined && <div className="aviso ok" style={{ marginTop: 8 }}>{acao.data.total} template(s) na Meta, {acao.data.aprovados} aprovado(s).</div>}
-      {acao.error && <Erro erro={acao.error} />}
+      {(acao.error || excluir.error) && <Erro erro={acao.error ?? excluir.error} />}
       {c.tipo !== 'oficial' && sit.data && !sit.data.conectado && sit.data.qrcode && (
         <div className="flex" style={{ gap: 18, marginTop: 12, alignItems: 'center', flexWrap: 'wrap' }}>
           <img src={sit.data.qrcode} alt="QR code para conectar" style={{ width: 240, height: 240, background: '#fff', padding: 8, borderRadius: 8, border: '1px solid var(--linha)' }} />

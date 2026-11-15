@@ -1,3 +1,4 @@
+import { BlocoDistribuicao } from './Distribuicao';
 import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate, useParams } from 'react-router-dom';
@@ -188,6 +189,8 @@ export function LeadCard() {
               {Object.entries(l.origem).map(([k, v]) => <div key={k} className="par"><span>{ROTULO_UTM[k] ?? k}</span><span style={{ wordBreak: 'break-all' }}>{String(v)}</span></div>)}
             </div>
           )}
+
+          <BlocoDistribuicao lead={l} />
 
           {l.candidatura && (
             <div className="bloco">

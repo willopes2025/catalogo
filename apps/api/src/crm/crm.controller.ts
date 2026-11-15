@@ -245,8 +245,12 @@ export class CrmController {
       // Card do recrutamento vai para "Aprovada" e passa a apontar para a revendedora.
       const [card] = await tx.select().from(crmLeads).where(eq(crmLeads.candidaturaId, id));
       const alvo = await this.crmSvc.etapaAuto('recrutamento', 'aprovada', tx);
+      // Líder que recebeu a candidata pela distribuição e aceitou passa a ser a líder dela (comissão de rede).
+      if (card?.consultoraId && ['aceito', 'concluido'].includes(card.distribuicao ?? '')) {
+        await tx.update(pessoas).set({ liderId: card.consultoraId }).where(and(eq(pessoas.id, p.id), sql`${pessoas.liderId} is null`));
+      }
       if (card && alvo) {
-        await tx.update(crmLeads).set({ pessoaId: p.id }).where(eq(crmLeads.id, card.id));
+        await tx.update(crmLeads).set({ pessoaId: p.id, distribuicao: card.distribuicao === 'aceito' ? 'concluido' : card.distribuicao }).where(eq(crmLeads.id, card.id));
         await tx.execute(sql`update crm_contatos set pessoa_id = ${p.id} where id = ${card.contatoId} and pessoa_id is null`);
         await this.crmSvc.moverLead(card.id, alvo.etapaId, { usuarioId: u.id, origem: 'automatico' }, tx);
       }

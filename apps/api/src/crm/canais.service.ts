@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { BadRequestException, ForbiddenException, Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
-import { and, desc, eq, gte, inArray, sql } from 'drizzle-orm';
+import { and, desc, eq, gte, inArray, isNull, sql } from 'drizzle-orm';
 import { DB, type Db } from '../comum/db.module';
 import { SegredosService } from '../segredos/segredos.service';
 import { ArquivosService } from '../arquivos/arquivos.service';
@@ -9,7 +9,7 @@ import { CrmService } from './crm.service';
 import { PEDIU_SAIR, preencherTexto, primeiroNome, variaveisDosCampos } from './telefone';
 import { ConexaoOficial } from './whatsapp/oficial';
 import { ConexaoZapi } from './whatsapp/zapi';
-import { ConexaoEvolution, criarInstancia, evolutionDisponivel, nomeInstancia } from './whatsapp/evolution';
+import { ConexaoEvolution, apagarInstancia, criarInstancia, evolutionDisponivel, nomeInstancia } from './whatsapp/evolution';
 import { ErroCanal, type Conexao, type MensagemEntrada, type MensagemSaida, type StatusEntrada } from './whatsapp/tipos';
 
 type Canal = typeof crmCanais.$inferSelect;
@@ -88,7 +88,7 @@ export class CanaisService {
   }
 
   async listar() {
-    return (await this.db.select().from(crmCanais).orderBy(crmCanais.criadoEm)).map((c) => this.publico(c));
+    return (await this.db.select().from(crmCanais).where(isNull(crmCanais.excluidoEm)).orderBy(crmCanais.criadoEm)).map((c) => this.publico(c));
   }
 
   async obter(id: string) {
@@ -127,6 +127,7 @@ export class CanaisService {
 
   async atualizar(id: string, d: Partial<{ nome: string; config: Record<string, string>; usuarioId: string | null; atendentes: string[]; funilEntradaId: string | null; ativo: boolean }>) {
     const atual = await this.obter(id);
+    if (atual.excluidoEm) throw new BadRequestException('Este número foi excluído. Para usar de novo, conecte como um número novo.');
     const config = d.config ? this.cifrarConfig({ ...Object.fromEntries(Object.entries(atual.config).filter(([k]) => !SECRETOS.includes(k))), ...d.config }, atual.config) : atual.config;
     if (d.config) this.validarConfig(atual.tipo, { ...this.abrirConfig({ ...atual, config }) });
     const [c] = await this.db.update(crmCanais).set({ ...d, config }).where(eq(crmCanais.id, id)).returning();
@@ -151,6 +152,28 @@ export class CanaisService {
     const s = await this.conexao(c).situacao();
     if (s.numero && s.numero !== c.numero) await this.db.update(crmCanais).set({ numero: s.numero }).where(eq(crmCanais.id, id));
     return s;
+  }
+
+  /**
+   * Exclui o número. Sem nenhuma conversa nem disparo, apaga de vez; com histórico, tira da tela,
+   * para de mandar e receber e apaga as credenciais, mas as conversas antigas continuam para consulta.
+   * No QR code do servidor próprio, a sessão do celular é encerrada e apagada lá também.
+   */
+  async excluir(id: string) {
+    const c = await this.obter(id);
+    if (c.excluidoEm) return { ok: true, apagado: false };
+    if (c.tipo === 'evolution') await apagarInstancia(this.abrirConfig(c).instancia || nomeInstancia(c.id));
+    else if (c.tipo === 'qrcode') await (this.conexao(c) as ConexaoZapi).desconectar().catch(() => undefined);
+    const [uso] = await this.db.execute<{ conversas: number; disparos: number }>(sql`
+      select (select count(*)::int from crm_conversas where canal_id = ${id}) as conversas, (select count(*)::int from crm_disparos where canal_id = ${id}) as disparos`).then((r) => r.rows);
+    if (!uso.conversas && !uso.disparos) {
+      await this.db.delete(crmCanais).where(eq(crmCanais.id, id));
+      return { ok: true, apagado: true };
+    }
+    await this.db.update(crmCanais).set({ ativo: false, excluidoEm: new Date(), config: {}, tokenWebhook: randomBytes(18).toString('base64url') }).where(eq(crmCanais.id, id));
+    // Conversas que estavam na fila ou em atendimento por este número são encerradas.
+    await this.db.execute(sql`update crm_conversas set status = 'resolvida' where canal_id = ${id} and status <> 'resolvida'`);
+    return { ok: true, apagado: false, conversas: uso.conversas };
   }
 
   async desconectar(id: string) {

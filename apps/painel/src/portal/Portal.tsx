@@ -103,6 +103,9 @@ function EntrarPorLink() {
 // ───── Área logada ─────
 
 function Area() {
+  // Contatos esperando o aceite: aparece no menu e faz a lista se atualizar sozinha.
+  const leads = useQuery({ queryKey: ['p-leads'], queryFn: () => apiPortal<LeadPortal[]>('/leads'), refetchInterval: 60_000 });
+  const esperando = leads.data?.filter((l) => l.situacao === 'aguardando').length ?? 0;
   return (
     <>
       <main className="p-conteudo">
@@ -113,12 +116,14 @@ function Area() {
           <Route path="pedir" element={<Pedir />} />
           <Route path="financeiro" element={<Financeiro />} />
           <Route path="pontos" element={<PontosRep />} />
+          <Route path="leads" element={<Leads />} />
           <Route path="*" element={<Navigate to="/portal" replace />} />
         </Routes>
       </main>
       <nav className="p-menu" aria-label="Menu">
         <NavLink end to="/portal">Início</NavLink>
         <NavLink to="/portal/maletas">Maleta</NavLink>
+        <NavLink to="/portal/leads">Clientes{esperando > 0 && <span className="p-bolha">{esperando}</span>}</NavLink>
         <NavLink to="/portal/pedir">Pedir peças</NavLink>
         <NavLink to="/portal/financeiro">Parcelas</NavLink>
         <NavLink to="/portal/pontos">Pontos</NavLink>
@@ -174,6 +179,7 @@ function Inicio() {
           </Link>
         );
       })}
+      <AvisoLeads />
       {!e.maletas.length && <div className="p-cartao p-suave">Você não tem maleta aberta agora. Peça peças em "Pedir peças".</div>}
       <div className="p-grade2">
         <div className="p-cartao"><div className="p-rotulo">Crédito livre</div><div className="p-grande">{reais(e.credito.livre)}</div><div className="p-suave">de {reais(e.credito.limite)}</div></div>
@@ -488,6 +494,102 @@ function PontosRep() {
           {d.extrato.map((e: any) => <div key={e.id} className="p-linha"><span>{e.motivo}<br /><span className="p-suave">{data(e.criadoEm.slice(0, 10))}</span></span><b className={e.pontos < 0 ? 'p-erro' : ''}>{e.pontos > 0 ? '+' : ''}{e.pontos}</b></div>)}
         </details>
       )}
+    </>
+  );
+}
+
+// ───── Clientes e candidatas que a Aritana mandou (perto dela) ─────
+
+interface LeadPortal {
+  id: string;
+  tipo: 'cliente' | 'candidata';
+  situacao: 'aguardando' | 'aceito' | 'concluido';
+  nome: string;
+  telefone: string | null;
+  cidade: string | null;
+  distanciaKm: number | null;
+  recebidoEm: string | null;
+  aceitarAte: string | null;
+  status: string;
+  interesse: [string, string][];
+}
+
+const faltam = (ate: string) => {
+  const min = Math.max(0, Math.round((new Date(ate).getTime() - Date.now()) / 60_000));
+  return min >= 60 ? `${Math.floor(min / 60)} h ${min % 60} min` : `${min} min`;
+};
+
+function AvisoLeads() {
+  const q = useQuery({ queryKey: ['p-leads'], queryFn: () => apiPortal<LeadPortal[]>('/leads') });
+  const n = q.data?.filter((l) => l.situacao === 'aguardando').length ?? 0;
+  if (!n) return null;
+  return <Link to="/portal/leads" className="p-aviso alerta p-bloco">📍 {n === 1 ? 'Uma pessoa perto de você está' : `${n} pessoas perto de você estão`} esperando atendimento. Toque para aceitar.</Link>;
+}
+
+function Leads() {
+  const qc = useQueryClient();
+  const q = useQuery({ queryKey: ['p-leads'], queryFn: () => apiPortal<LeadPortal[]>('/leads'), refetchInterval: 30_000 });
+  const [resultado, setResultado] = useState<{ id: string; deuCerto: boolean; motivo: string } | null>(null);
+  const acao = useMutation({
+    mutationFn: ({ id, a, corpo }: { id: string; a: 'aceitar' | 'recusar' | 'resultado'; corpo?: unknown }) => apiPortal(`/leads/${id}/${a}`, { corpo: corpo ?? {} }),
+    onSuccess: () => { setResultado(null); qc.invalidateQueries({ queryKey: ['p-leads'] }); },
+  });
+  const [, atualizar] = useState(0);
+  useEffect(() => { const t = setInterval(() => atualizar((x) => x + 1), 30_000); return () => clearInterval(t); }, []);
+  if (q.isLoading) return <Carregando />;
+  if (q.error) return <Aviso erro={q.error} />;
+  const lista = q.data!;
+  const grupos: [string, LeadPortal[]][] = [
+    ['Esperando você aceitar', lista.filter((l) => l.situacao === 'aguardando')],
+    ['Em atendimento', lista.filter((l) => l.situacao === 'aceito')],
+    ['Atendidas nos últimos 30 dias', lista.filter((l) => l.situacao === 'concluido')],
+  ];
+  const zap = (t: string, nome: string) => `https://wa.me/${t}?text=${encodeURIComponent(`Oi, ${nome.split(' ')[0]}! Aqui é da Aritana Semijoias, recebi seu contato.`)}`;
+  return (
+    <>
+      <Topo titulo="Clientes perto de você" sub="A Aritana manda para quem está mais perto. Aceite logo: depois do prazo, passa para outra pessoa." />
+      <Aviso erro={acao.error} />
+      {!lista.length && <div className="p-cartao p-suave">Nenhum contato agora. Quando chegar alguém da sua região, você recebe um aviso no WhatsApp.</div>}
+      {grupos.map(([titulo, ls]) => ls.length > 0 && (
+        <section key={titulo} className="p-col" style={{ gap: 10 }}>
+          <div className="p-rotulo">{titulo}</div>
+          {ls.map((l) => (
+            <div key={l.id} className="p-cartao p-col">
+              <div className="p-linha" style={{ padding: 0 }}>
+                <b>{l.nome}</b>
+                <span className="p-suave">{l.tipo === 'candidata' ? 'Quer ser revendedora' : 'Cliente'}</span>
+              </div>
+              <div className="p-suave">{[l.cidade, l.distanciaKm == null ? null : l.distanciaKm < 1 ? 'na sua cidade' : `${String(l.distanciaKm).replace('.', ',')} km de você`].filter(Boolean).join(' · ')}</div>
+              {l.situacao === 'aguardando' && (
+                <>
+                  {l.aceitarAte && <div className="p-erro">Aceite em até {faltam(l.aceitarAte)}</div>}
+                  <button className="p-botao" disabled={acao.isPending} onClick={() => acao.mutate({ id: l.id, a: 'aceitar' })}>Aceitar e ver o contato</button>
+                  <button className="p-botao claro" disabled={acao.isPending} onClick={() => { const m = window.prompt('Por que não pode atender? (opcional)'); if (m !== null) acao.mutate({ id: l.id, a: 'recusar', corpo: { motivo: m || null } }); }}>Não posso atender</button>
+                </>
+              )}
+              {l.situacao !== 'aguardando' && l.interesse.length > 0 && l.interesse.map(([k, v]) => <div key={k} className="p-linha"><span className="p-suave">{k}</span><span>{v}</span></div>)}
+              {l.situacao === 'aceito' && l.telefone && (
+                <>
+                  <a className="p-botao" href={zap(l.telefone, l.nome)} target="_blank" rel="noreferrer">Chamar no WhatsApp</a>
+                  {resultado?.id === l.id ? (
+                    <div className="p-col">
+                      <textarea rows={2} placeholder={resultado.deuCerto ? 'Algo a contar? (opcional)' : 'O que aconteceu? (opcional)'} value={resultado.motivo} onChange={(e) => setResultado({ ...resultado, motivo: e.target.value })} style={{ font: 'inherit', padding: 10, borderRadius: 10, border: '1px solid var(--linha)' }} />
+                      <button className="p-botao" disabled={acao.isPending} onClick={() => acao.mutate({ id: l.id, a: 'resultado', corpo: { deuCerto: resultado.deuCerto, motivo: resultado.motivo || null } })}>Confirmar</button>
+                    </div>
+                  ) : (
+                    <div className="p-grade2">
+                      <button className="p-botao claro" onClick={() => setResultado({ id: l.id, deuCerto: true, motivo: '' })}>{l.tipo === 'candidata' ? 'Recomendo' : 'Vendi'}</button>
+                      <button className="p-botao claro" onClick={() => setResultado({ id: l.id, deuCerto: false, motivo: '' })}>Não deu certo</button>
+                    </div>
+                  )}
+                  <button className="p-link" onClick={() => { const m = window.prompt('Por que vai devolver este contato? (opcional)'); if (m !== null) acao.mutate({ id: l.id, a: 'recusar', corpo: { motivo: m || null } }); }}>Devolver para a Aritana</button>
+                </>
+              )}
+              {l.situacao === 'concluido' && <div className="p-suave">Atendimento encerrado.</div>}
+            </div>
+          ))}
+        </section>
+      ))}
     </>
   );
 }

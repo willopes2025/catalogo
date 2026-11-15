@@ -6,7 +6,7 @@ import { reais } from '../../formato';
 import { Campo, Carregando, Erro } from '../../componentes/ui';
 import { ha, iniciais, telefoneBonito, usarAtendentes, usarCampos, usarFunis, useRelogio, valorLegivel, type Etapa, type Funil as TFunil } from './comum';
 
-interface Card { id: string; numero: number; titulo: string; valor: number; funilId: string; etapaId: string; status: string; etiquetas: string[]; responsavelId: string | null; responsavel: string | null; contato: string; telefone: string; entrouNaEtapaEm: string; naoLidas: number; tarefas: number; tarefaVencida: boolean; camposExtras?: Record<string, string>; contatoExtras?: Record<string, string> }
+interface Card { id: string; numero: number; titulo: string; valor: number; funilId: string; etapaId: string; status: string; etiquetas: string[]; responsavelId: string | null; responsavel: string | null; contato: string; telefone: string; entrouNaEtapaEm: string; naoLidas: number; tarefas: number; tarefaVencida: boolean; camposExtras?: Record<string, string>; contatoExtras?: Record<string, string>; distribuicao?: string | null; consultora?: string | null }
 
 const CHAVE_FUNIL = 'aritana.crm.funil';
 
@@ -147,6 +147,7 @@ export function Funil() {
                       const vals = noQuadro.map((d) => [d.nome, valorLegivel(d, (d.entidade === 'lead' ? c.camposExtras : c.contatoExtras)?.[d.nome])] as const).filter(([, v]) => v);
                       return vals.length > 0 && <div className="kcampos">{vals.map(([n, v]) => <span key={n}>{n}: <b>{v}</b></span>)}</div>;
                     })()}
+                    {c.consultora && <div className="kc-consultora" title={c.distribuicao === 'aguardando' ? 'Esperando ela aceitar' : 'Com a consultora'}>{c.distribuicao === 'aguardando' ? '⏳' : '📍'} {c.consultora}</div>}
                     {c.etiquetas.length > 0 && <div className="tags">{c.etiquetas.slice(0, 4).map((t) => <span key={t} className="tag">{t}</span>)}</div>}
                     <div className="linha2">
                       <span>{c.valor ? <b style={{ color: 'var(--tinta)' }}>{reais(c.valor)}</b> : null} {c.tarefas > 0 && <span title="Tarefas abertas" style={{ color: c.tarefaVencida ? 'var(--erro)' : undefined }}>☑ {c.tarefas}</span>}</span>

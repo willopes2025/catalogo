@@ -779,6 +779,8 @@ export const formularios = pgTable(
     campos: jsonb('campos').$type<CampoFormulario[]>().notNull(),
     /** O que fazer com cada resposta: nada, cadastrar/atualizar cliente ou abrir candidatura. */
     acao: text('acao').notNull().default('nenhuma'), // nenhuma | cliente | candidata
+    /** Cliente: abre também um card neste funil do CRM (ex.: "Clientes"), que pode ser distribuído por localização. */
+    funilId: uuid('funil_id').references((): AnyPgColumn => crmFunis.id, { onDelete: 'set null' }),
     mensagemFinal: text('mensagem_final'),
     /** Texto de autorização (LGPD) que a pessoa precisa marcar; vazio = não pede. */
     consentimento: text('consentimento'),
@@ -1042,6 +1044,15 @@ export const crmLeads = pgTable(
     motivoPerda: text('motivo_perda'),
     candidaturaId: uuid('candidatura_id').references(() => candidaturas.id, { onDelete: 'set null' }),
     pessoaId: uuid('pessoa_id').references(() => pessoas.id, { onDelete: 'set null' }),
+    /** Distribuição por localização: a consultora (ou líder) que recebeu o lead. */
+    consultoraId: uuid('consultora_id').references(() => pessoas.id, { onDelete: 'set null' }),
+    /** aguardando (ela ainda não aceitou) | aceito | sem_consultora | devolvido (voltou para a equipe) | concluido */
+    distribuicao: text('distribuicao'),
+    distribuidoEm: timestamp('distribuido_em', { withTimezone: true }),
+    aceitoEm: timestamp('aceito_em', { withTimezone: true }),
+    distanciaKm: doublePrecision('distancia_km'),
+    /** Quem já recebeu e não aceitou a tempo (ou recusou): não recebe de novo. */
+    jaOferecido: jsonb('ja_oferecido').$type<string[]>().notNull().default([]),
     entrouNaEtapaEm: timestamp('entrou_na_etapa_em', { withTimezone: true }).notNull().defaultNow(),
     ultimaInteracaoEm: timestamp('ultima_interacao_em', { withTimezone: true }),
     criadoEm: criadoEm(),
@@ -1051,6 +1062,7 @@ export const crmLeads = pgTable(
     porEtapa: index('crm_leads_etapa_idx').on(t.funilId, t.etapaId),
     porContato: index('crm_leads_contato_idx').on(t.contatoId),
     porPessoa: index('crm_leads_pessoa_idx').on(t.pessoaId),
+    porConsultora: index('crm_leads_consultora_idx').on(t.consultoraId, t.distribuicao),
   }),
 );
 
@@ -1104,6 +1116,8 @@ export const crmCanais = pgTable('crm_canais', {
   /** Funil onde entra o card de quem escreve pela primeira vez (vazio = não cria card). */
   funilEntradaId: uuid('funil_entrada_id').references(() => crmFunis.id, { onDelete: 'set null' }),
   ativo: boolean('ativo').notNull().default(true),
+  /** Excluído pela equipe: some da tela e não manda nem recebe mais; as conversas antigas continuam no histórico. */
+  excluidoEm: timestamp('excluido_em', { withTimezone: true }),
   criadoEm: criadoEm(),
 });
 
@@ -1586,3 +1600,24 @@ export const marketingGastos = pgTable(
   },
   (t) => ({ porMes: index('marketing_gastos_mes_idx').on(t.competencia), porCampanha: index('marketing_gastos_campanha_idx').on(t.campanhaId) }),
 );
+
+/**
+ * Distribuição por localização, por funil: o lead novo vai para a consultora (ou líder) ativa mais perto,
+ * que tem um prazo para aceitar; sem aceite, passa para a próxima; esgotadas as tentativas, volta para a equipe.
+ */
+export const crmDistribuicoes = pgTable('crm_distribuicoes', {
+  funilId: uuid('funil_id').primaryKey().references(() => crmFunis.id, { onDelete: 'cascade' }),
+  ativo: boolean('ativo').notNull().default(true),
+  /** consultoras | lideres */
+  destino: text('destino').notNull().default('consultoras'),
+  raioKm: integer('raio_km').notNull().default(50),
+  prazoMinutos: integer('prazo_minutos').notNull().default(60),
+  maxTentativas: integer('max_tentativas').notNull().default(3),
+  /** Cada uma recebe até isto de leads em aberto ao mesmo tempo. */
+  maxAbertos: integer('max_abertos').notNull().default(10),
+  /** Só quem está com maleta aberta (está trabalhando agora). */
+  soComMaleta: boolean('so_com_maleta').notNull().default(false),
+  avisarWhatsapp: boolean('avisar_whatsapp').notNull().default(true),
+  canalId: uuid('canal_id').references(() => crmCanais.id, { onDelete: 'set null' }),
+  atualizadoEm: atualizadoEm(),
+});

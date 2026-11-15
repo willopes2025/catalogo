@@ -14,7 +14,8 @@ import { EmailService } from '../integracoes/email.service';
 import { AsaasService } from '../integracoes/asaas.service';
 import { MaletasService, hoje } from '../maletas/maletas.service';
 import { PontosService } from '../pontos/pontos.service';
-import { acertos, categorias, documentos, locaisEstoque, maletas, niveis, pedidosPecas, pessoas, portalAcessos, premios, produtos, resgates, saldos, titulos } from '../db/schema';
+import { DistribuicaoService } from '../crm/distribuicao.service';
+import { acertos, categorias, crmContatos, crmFunis, crmLeads, documentos, locaisEstoque, maletas, niveis, pedidosPecas, pessoas, portalAcessos, premios, produtos, resgates, saldos, titulos } from '../db/schema';
 
 const sha256 = (t: string) => createHash('sha256').update(t).digest('hex');
 const pedidosDeCodigo = new Limitador(5, 30 * 60_000, 'Muitos pedidos de código.');
@@ -36,6 +37,7 @@ export class PortalController {
     private readonly maletasSvc: MaletasService,
     private readonly auditoria: AuditoriaService,
     private readonly pontosSvc: PontosService,
+    private readonly distribuicao: DistribuicaoService,
   ) {}
 
   private sessao(p: { id: string; nome: string }) {
@@ -117,6 +119,63 @@ export class PortalController {
     await this.db.insert(portalAcessos).values({ pessoaId, tipo: 'link', hash: sha256(token), expiraEm: new Date(Date.now() + 7 * 86_400_000), criadoPor: u.id });
     await this.auditoria.registrar({ usuarioId: u.id, acao: 'gerar_link_portal', entidade: 'pessoa', entidadeId: pessoaId });
     return { token, caminho: `/portal/entrar/${token}`, telefone: p.telefone1, nome: p.nome };
+  }
+
+  // ───── Clientes e candidatas que a matriz mandou (distribuição por localização) ─────
+
+  /** Enquanto não aceita, ela vê só o primeiro nome e a cidade; depois de aceitar, o telefone. */
+  @RotaPortal()
+  @Get('leads')
+  async leads(@Representante() r: RepresentanteLogada) {
+    const ls = await this.db
+      .select({ l: crmLeads, nome: crmContatos.nome, telefone: crmContatos.telefone, extras: crmContatos.camposExtras, funilTipo: crmFunis.tipo })
+      .from(crmLeads)
+      .innerJoin(crmContatos, eq(crmContatos.id, crmLeads.contatoId))
+      .innerJoin(crmFunis, eq(crmFunis.id, crmLeads.funilId))
+      .where(and(eq(crmLeads.consultoraId, r.rep), sql`(${crmLeads.distribuicao} in ('aguardando', 'aceito') or (${crmLeads.distribuicao} = 'concluido' and ${crmLeads.atualizadoEm} > now() - interval '30 days'))`))
+      .orderBy(desc(crmLeads.distribuidoEm))
+      .limit(100);
+    const prazos = new Map<string, number>();
+    for (const x of ls) if (!prazos.has(x.l.funilId)) prazos.set(x.l.funilId, (await this.distribuicao.config(x.l.funilId))?.prazoMinutos ?? 60);
+    return ls.map(({ l, nome, telefone, extras, funilTipo }) => {
+      const aberto = l.distribuicao !== 'aguardando';
+      const cidade = Object.entries({ ...extras, ...l.camposExtras }).find(([k]) => /^cidade$/i.test(k))?.[1] ?? null;
+      return {
+        id: l.id,
+        tipo: funilTipo === 'recrutamento' ? 'candidata' : 'cliente',
+        situacao: l.distribuicao,
+        nome: aberto ? nome : nome.split(' ')[0],
+        telefone: aberto ? telefone : null,
+        cidade,
+        distanciaKm: l.distanciaKm,
+        recebidoEm: l.distribuidoEm,
+        aceitarAte: l.distribuicao === 'aguardando' && l.distribuidoEm ? new Date(l.distribuidoEm.getTime() + (prazos.get(l.funilId) ?? 60) * 60_000) : null,
+        status: l.status,
+        interesse: aberto ? Object.entries(l.camposExtras).filter(([k]) => !/^(cidade|uf|estado)$/i.test(k)).slice(0, 6) : [],
+      };
+    });
+  }
+
+  @RotaPortal()
+  @Post('leads/:id/aceitar')
+  async aceitarLead(@Representante() r: RepresentanteLogada, @Param('id', ParseUUIDPipe) id: string) {
+    await this.distribuicao.aceitar(id, r.rep);
+    return { ok: true };
+  }
+
+  @RotaPortal()
+  @Post('leads/:id/recusar')
+  async recusarLead(@Representante() r: RepresentanteLogada, @Param('id', ParseUUIDPipe) id: string, @Body() body: unknown) {
+    const d = validar(z.object({ motivo: z.string().trim().max(200).nullable().optional() }), body ?? {});
+    await this.distribuicao.recusar(id, r.rep, d.motivo);
+    return { ok: true };
+  }
+
+  @RotaPortal()
+  @Post('leads/:id/resultado')
+  async resultadoLead(@Representante() r: RepresentanteLogada, @Param('id', ParseUUIDPipe) id: string, @Body() body: unknown) {
+    const d = validar(z.object({ deuCerto: z.boolean(), motivo: z.string().trim().max(200).nullable().optional() }), body);
+    return this.distribuicao.resultado(id, r.rep, d.deuCerto, d.motivo);
   }
 
   // ───── Área da representante ─────
