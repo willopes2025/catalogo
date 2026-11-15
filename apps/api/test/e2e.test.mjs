@@ -1462,6 +1462,38 @@ test('limite olha a maleta inteira depois de acerto parcial; indicadores batem e
   assert.equal(typeof ini.financeiro.vencido, 'number');
 });
 
+test('conciliação de cartão: marca vários, informa o depósito, baixa tudo e lança a taxa como despesa', async () => {
+  const loja = (await ok('GET', '/estoque/locais')).find((l) => l.tipo === 'loja');
+  const p = (await ok('GET', '/produtos')).itens.find((x) => x.preco >= 1000);
+  await ok('POST', '/estoque/entradas', { destinoId: loja.id, itens: [{ codigoBarras: p.codigoBarras, quantidade: 3 }] });
+  for (const forma of ['debito', 'credito', 'credito']) await ok('POST', '/vendas', { localId: loja.id, tipo: 'avulsa', itens: [{ codigoBarras: p.codigoBarras, quantidade: 1 }], pagamentos: [{ forma, valor: p.preco, maquininha: 'Stone', parcelas: forma === 'credito' ? 2 : 1 }] });
+  const c = await ok('GET', '/financeiro/cartao');
+  const deb = c.grupos.find((g) => g.forma === 'debito' && g.maquininha === 'Stone');
+  assert.ok(deb && deb.total >= p.preco, 'débito agrupado pela maquininha');
+  const cred = c.grupos.filter((g) => g.forma === 'credito' && g.maquininha === 'Stone');
+  assert.ok(cred.length >= 2, 'parcelas do crédito em dias diferentes');
+  const ids = [...deb.ids, ...cred[0].ids];
+  const bruto = c.itens.filter((i) => ids.includes(i.id)).reduce((a, i) => a + i.valor, 0);
+  const conta = (await ok('GET', '/financeiro/contas')).find((x) => x.empresa === deb.empresa);
+  const outra = (await ok('GET', '/financeiro/contas')).find((x) => x.empresa !== deb.empresa);
+  if (outra) assert.equal((await chamar('POST', '/financeiro/cartao/conciliar', { ids, valorRecebido: bruto, recebidoEm: c.hoje, contaId: outra.id })).status, 400, 'conta de outra empresa');
+  assert.equal((await chamar('POST', '/financeiro/cartao/conciliar', { ids, valorRecebido: bruto + 1, recebidoEm: c.hoje, contaId: conta.id })).status, 400, 'caiu mais que o marcado');
+  const alta = await chamar('POST', '/financeiro/cartao/conciliar', { ids, valorRecebido: Math.round(bruto * 0.5), recebidoEm: c.hoje, contaId: conta.id });
+  assert.equal(alta.status, 400);
+  assert.match(alta.dados.mensagem, /confirme a diferença/);
+  const taxa = Math.round(bruto * 0.025);
+  const r = await ok('POST', '/financeiro/cartao/conciliar', { ids, valorRecebido: bruto - taxa, recebidoEm: c.hoje, contaId: conta.id });
+  assert.equal(r.quantidade, ids.length);
+  assert.equal(r.taxa, taxa);
+  const contaDepois = (await ok('GET', '/financeiro/contas')).find((x) => x.id === conta.id);
+  assert.equal(contaDepois.saldo - conta.saldo, bruto - taxa, 'saldo da conta bate com o extrato');
+  const despesas = await ok('GET', '/financeiro/titulos?tipo=pagar&aba=pagos&busca=Taxa da maquininha');
+  assert.ok(despesas.itens.some((t) => t.valor === taxa && t.categoria === 'Taxas de cartão'));
+  const depois = await ok('GET', '/financeiro/cartao');
+  assert.ok(ids.every((id) => !depois.itens.some((i) => i.id === id)), 'saem da lista de cartão');
+  assert.equal((await chamar('POST', '/financeiro/cartao/conciliar', { ids, valorRecebido: bruto, recebidoEm: c.hoje, contaId: conta.id })).status, 400, 'não concilia duas vezes');
+});
+
 test('metas do mês: define, recusa repetida, acompanha venda nova e mostra o ritmo', async () => {
   const comp = new Date(Date.now() - 3 * 3600_000).toISOString().slice(0, 7);
   const loja = (await ok('GET', '/estoque/locais')).find((l) => l.tipo === 'loja');

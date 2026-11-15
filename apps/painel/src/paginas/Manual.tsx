@@ -105,6 +105,7 @@ const SECOES: Secao[] = [
       { t: 'Contas a receber', d: 'Parcelas dos acertos e vendas a prazo. Gere Pix ou boleto pelo Asaas; a baixa é automática quando a cliente paga.' },
       { t: 'Contas a pagar', d: 'Fornecedores, despesas e comissões fechadas.' },
       { t: 'Baixa manual', d: 'Para pagamentos fora do Asaas, informe a data e o valor recebido.' },
+      { t: 'Cartões (conciliar)', d: 'Com o extrato da maquininha aberto, marque o que caiu (por dia, débito ou crédito e maquininha), digite o valor depositado e escolha a conta. O sistema baixa tudo de uma vez e lança a diferença como despesa "Taxas de cartão", então o saldo da conta bate com o banco.' },
     ],
   },
   {
@@ -185,6 +186,7 @@ const SECOES: Secao[] = [
       { t: 'Produtos', d: 'O que mais fatura e dá margem, a sugestão de reposição (produtos com menos de 30 dias de estoque), o capital parado (90+ dias sem vender) e o que a rede mais devolve.' },
       { t: 'Financeiro', d: 'Resultado mês a mês (vendas, comissão, custo das peças, despesas), o caixa previsto para as próximas 8 semanas e quem deve, por tempo de atraso.' },
       { t: 'CRM', d: 'Conversão de cada funil, de onde vêm os leads que fecham, motivos de perda e tempo de espera na fila.' },
+      { t: 'Metas', d: 'Defina no começo do mês o faturamento, a meta da rede, de cada loja ou evento e de novas revendedoras. Todo dia o sistema mostra o realizado, a projeção pelo ritmo e quanto falta vender por dia. "Copiar do mês anterior" agiliza. As metas aparecem também no Início.' },
     ],
     dicas: [
       'Faturamento é sempre líquido: vendas canceladas não entram e devoluções são descontadas.',

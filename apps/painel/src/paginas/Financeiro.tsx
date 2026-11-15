@@ -3,9 +3,10 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { api, pode } from '../api';
 import { data, paraCentavos, reais } from '../formato';
+import { ConciliarCartao } from './ConciliarCartao';
 import { Abas, Campo, Carregando, Erro, Indicador, Topo } from '../componentes/ui';
 
-type Aba = 'abertos' | 'vencidos' | 'pagos';
+type Aba = 'abertos' | 'vencidos' | 'pagos' | 'cartoes';
 
 export function Financeiro() {
   const [tipo, setTipo] = useState<'receber' | 'pagar'>('receber');
@@ -38,13 +39,14 @@ export function Financeiro() {
   };
   return (
     <>
-      <Topo eb="Financeiro" titulo={tipo === 'receber' ? 'Contas a receber' : 'Contas a pagar'} acoes={<div className="flex"><button className={`botao ${tipo === 'receber' ? '' : 'claro'}`} onClick={() => setTipo('receber')}>A receber</button><button className={`botao ${tipo === 'pagar' ? '' : 'claro'}`} onClick={() => setTipo('pagar')}>A pagar</button></div>} />
+      <Topo eb="Financeiro" titulo={tipo === 'receber' ? 'Contas a receber' : 'Contas a pagar'} acoes={<div className="flex"><button className={`botao ${tipo === 'receber' ? '' : 'claro'}`} onClick={() => setTipo('receber')}>A receber</button><button className={`botao ${tipo === 'pagar' ? '' : 'claro'}`} onClick={() => { setTipo('pagar'); if (aba === 'cartoes') setAba('abertos'); }}>A pagar</button></div>} />
       {contas.data && (
         <div className="grade g4" style={{ marginBottom: 14 }}>
           {contas.data.slice(0, 4).map((c) => <Indicador key={c.id} rotulo={c.nome} valor={reais(c.saldo)} detalhe={c.empresa} />)}
         </div>
       )}
-      <Abas ativa={aba} mudar={setAba} abas={[['abertos', 'Em aberto'], ['vencidos', 'Vencidos'], ['pagos', 'Pagos']]} />
+      <Abas ativa={aba} mudar={setAba} abas={[['abertos', 'Em aberto'], ['vencidos', 'Vencidos'], ['pagos', 'Pagos'], ...(tipo === 'receber' ? ([['cartoes', 'Cartões (conciliar)']] as [Aba, string][]) : [])]} />
+      {aba === 'cartoes' ? <ConciliarCartao contas={contas.data ?? []} /> : <>
       <div className="busca">
         <input placeholder="Buscar por descrição ou nome…" value={busca} onChange={(e) => setBusca(e.target.value)} />
         <label className="check" style={{ alignSelf: 'center' }}><input type="checkbox" checked={semPessoa} onChange={(e) => setSemPessoa(e.target.checked)} /> Só sem pessoa ligada</label>
@@ -110,6 +112,7 @@ export function Financeiro() {
           <tfoot><tr><td colSpan={4}>Total{q.data!.quantidade > q.data!.itens.length ? ` (${q.data!.quantidade} títulos; a lista mostra os ${q.data!.itens.length} primeiros, use a busca)` : ` (${q.data!.quantidade} títulos)`}</td><td className="num">{reais(q.data!.total)}</td><td colSpan={2}></td></tr></tfoot>
         </table>
       )}
+      </>}
     </>
   );
 }
