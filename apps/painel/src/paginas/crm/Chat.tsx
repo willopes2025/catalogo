@@ -6,7 +6,7 @@ import { ha, ligar, meuId, telefoneBonito, useMidia, useRelogio, usarAtendentes,
 
 interface Mensagem { id: string; direcao: 'entrada' | 'saida' | 'interna'; tipo: string; texto: string | null; midia: string | null; midiaNome: string | null; templateNome: string | null; status: string; erro: string | null; autor: string | null; automatica: boolean; criadoEm: string }
 interface Dados {
-  conversa: { id: string; status: 'fila' | 'atendimento' | 'resolvida'; atendenteId: string | null; canalId: string; canal: string; canalTipo: 'oficial' | 'qrcode'; dentroDaJanela: boolean; filaDesde: string | null; contatoId: string };
+  conversa: { id: string; status: 'fila' | 'atendimento' | 'resolvida'; atendenteId: string | null; canalId: string; canal: string; canalTipo: 'oficial' | 'qrcode' | 'evolution'; dentroDaJanela: boolean; filaDesde: string | null; contatoId: string };
   contato: { id: string; nome: string; telefone: string; descadastrado: boolean };
   mensagens: Mensagem[];
 }
@@ -95,7 +95,7 @@ export function Chat({ conversaId, leadId, aoMudar }: { conversaId: string; lead
   const deOutro = c.status === 'atendimento' && c.atendenteId && c.atendenteId !== eu;
   const nomeAtendente = atendentes.data?.find((a) => a.id === c.atendenteId)?.nome;
   const podeEscrever = editar && (!deOutro || gestor || interna);
-  const usaveis = (templates.data ?? []).filter((t) => (t.tipo === 'meta' ? t.status === 'APPROVED' && c.canalTipo === 'oficial' : c.canalTipo === 'qrcode' || c.dentroDaJanela));
+  const usaveis = (templates.data ?? []).filter((t) => (t.tipo === 'meta' ? t.status === 'APPROVED' && c.canalTipo === 'oficial' : c.canalTipo !== 'oficial' || c.dentroDaJanela));
   const esperaMin = c.filaDesde ? (Date.now() - new Date(c.filaDesde).getTime()) / 60000 : 0;
 
   let diaAnterior = '';

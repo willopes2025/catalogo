@@ -30,6 +30,9 @@ services:
       PORT: "3000"
       DATABASE_URL: postgres://aritana:${DB_PASSWORD}@db:5432/aritana
       ARQUIVOS_DIR: /dados
+      # Servidor de WhatsApp por QR code (abaixo), falando pela rede interna
+      EVOLUTION_URL: http://aritana-whatsapp:8080
+      EVOLUTION_WEBHOOK_URL: http://aritana-api:3000
     volumes:
       # Fotos dos produtos (copiadas todo dia para /opt/aritana-backups/arquivos)
       - /opt/aritana-arquivos:/dados
@@ -37,6 +40,43 @@ services:
       db: { condition: service_healthy }
     ports:
       - "127.0.0.1:${PORTA_API:-3310}:3000"
+    networks: [interna]
+
+  # WhatsApp por QR code (Evolution API, código aberto). Sem porta aberta: só a API do sistema fala com ele.
+  # A sessão de cada celular fica no volume aritana_whatsapp e no banco "evolution" (o mesmo Postgres, base separada).
+  whatsapp:
+    image: ${EVOLUTION_IMAGE:-evoapicloud/evolution-api:v2.3.7}
+    container_name: aritana-whatsapp
+    restart: unless-stopped
+    environment:
+      SERVER_URL: http://aritana-whatsapp:8080
+      AUTHENTICATION_API_KEY: ${EVOLUTION_API_KEY:?rode o instalador para criar EVOLUTION_API_KEY no .env}
+      DEL_INSTANCE: "false"
+      LANGUAGE: pt-BR
+      DATABASE_PROVIDER: postgresql
+      DATABASE_CONNECTION_URI: postgresql://aritana:${DB_PASSWORD}@db:5432/evolution?schema=public
+      DATABASE_CONNECTION_CLIENT_NAME: aritana
+      DATABASE_SAVE_DATA_INSTANCE: "true"
+      # As conversas ficam no banco do sistema; o servidor de WhatsApp não guarda cópia.
+      DATABASE_SAVE_DATA_NEW_MESSAGE: "false"
+      DATABASE_SAVE_MESSAGE_UPDATE: "false"
+      DATABASE_SAVE_DATA_CONTACTS: "false"
+      DATABASE_SAVE_DATA_CHATS: "false"
+      DATABASE_SAVE_DATA_LABELS: "false"
+      DATABASE_SAVE_DATA_HISTORIC: "false"
+      CACHE_REDIS_ENABLED: "false"
+      CACHE_LOCAL_ENABLED: "true"
+      WEBHOOK_GLOBAL_ENABLED: "false"
+      CONFIG_SESSION_PHONE_CLIENT: Aritana
+      CONFIG_SESSION_PHONE_NAME: Chrome
+      CONFIG_SESSION_PHONE_VERSION: ${EVOLUTION_VERSAO_WHATSAPP:-}
+      QRCODE_LIMIT: "30"
+      LOG_LEVEL: ERROR,WARN
+      LOG_BAILEYS: error
+    volumes:
+      - aritana_whatsapp:/evolution/instances
+    depends_on:
+      db: { condition: service_healthy }
     networks: [interna]
 
   painel:
@@ -49,6 +89,7 @@ services:
 
 volumes:
   aritana_db:
+  aritana_whatsapp:
 
 networks:
   interna:

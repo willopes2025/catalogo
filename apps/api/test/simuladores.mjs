@@ -7,6 +7,8 @@ import http from 'node:http';
 
 const recebidos = [];
 const wa = { n: 0, zapiConectado: true, webhookZapi: null };
+/** Evolution API (servidor próprio de WhatsApp por QR code): instâncias por nome. */
+const evo = new Map();
 
 /** Dados fictícios do Jueri (CPFs gerados, válidos só no dígito). */
 const jueri = {
@@ -95,6 +97,46 @@ http
       if (r === 'midia-recebida-1') return responder(res, 200, { url: 'http://localhost:3199/meta-wa/arquivo/1', mime_type: 'image/png' });
       if (r === 'arquivo/1') { res.writeHead(200, { 'content-type': 'image/png' }); return res.end(Buffer.from('89504e470d0a1a0a0000000d4948445200000001000000010806000000', 'hex')); }
       return responder(res, 404, { error: { message: 'not found' } });
+    }
+
+    // ── WhatsApp por QR code no servidor próprio (Evolution API v2) ──
+    if (url.pathname === '/__evo/conectar') {
+      const i = evo.get(url.searchParams.get('i'));
+      if (i) i.estado = 'open';
+      return responder(res, 200, { ok: !!i });
+    }
+    if (url.pathname === '/__evo/apagar') { evo.delete(url.searchParams.get('i')); return responder(res, 200, { ok: true }); }
+    if (url.pathname.startsWith('/evo/')) {
+      if (req.headers.apikey !== 'chave-evo-teste') return responder(res, 401, { status: 401, error: 'Unauthorized', response: { message: 'Unauthorized' } });
+      const partes = url.pathname.slice(5).split('/').map(decodeURIComponent);
+      const qr = { base64: `data:image/png;base64,iVBORw0KGgoQR${++wa.n}`, code: `2@qr${wa.n}`, count: 1 };
+      if (partes[0] === 'instance' && partes[1] === 'create') {
+        if (evo.has(corpo.instanceName)) return responder(res, 403, { status: 403, error: 'Forbidden', response: { message: [`This name "${corpo.instanceName}" is already in use.`] } });
+        evo.set(corpo.instanceName, { estado: 'connecting', webhook: corpo.webhook });
+        return responder(res, 201, { instance: { instanceName: corpo.instanceName, status: 'connecting' }, hash: 'h', qrcode: qr });
+      }
+      if (partes[0] === 'instance' && partes[1] === 'fetchInstances') {
+        const n = url.searchParams.get('instanceName');
+        return responder(res, 200, evo.has(n) ? [{ name: n, connectionStatus: evo.get(n).estado, ownerJid: '5527977776666@s.whatsapp.net', profileName: 'Aritana Loja' }] : []);
+      }
+      const inst = evo.get(partes[2] ?? partes[1]);
+      if (!inst) return responder(res, 404, { status: 404, error: 'Not Found', response: { message: [`The "${partes[2]}" instance does not exist`] } });
+      const r = `${partes[0]}/${partes[1]}`;
+      if (r === 'instance/connectionState') return responder(res, 200, { instance: { instanceName: partes[2], state: inst.estado } });
+      if (r === 'instance/connect') return responder(res, 200, inst.estado === 'open' ? { instance: { state: 'open' } } : qr);
+      if (r === 'instance/logout') { inst.estado = 'close'; return responder(res, 200, { status: 'SUCCESS' }); }
+      if (r === 'webhook/set') { inst.webhook = corpo.webhook; return responder(res, 201, { webhook: corpo.webhook }); }
+      if (r === 'message/sendText' || r === 'message/sendMedia' || r === 'message/sendWhatsAppAudio') {
+        if (inst.estado !== 'open') return responder(res, 400, { status: 400, error: 'Bad Request', response: { message: ['Connection Closed'] } });
+        if (String(corpo.number).endsWith('0000')) return responder(res, 400, { status: 400, error: 'Bad Request', response: { message: [{ exists: false, jid: `${corpo.number}@s.whatsapp.net`, number: corpo.number }] } });
+        return responder(res, 201, { key: { remoteJid: `${corpo.number}@s.whatsapp.net`, fromMe: true, id: `EVO${++wa.n}` }, status: 'PENDING' });
+      }
+      if (r === 'chat/getBase64FromMediaMessage') {
+        // Como o servidor real com o banco de mensagens desligado: só acha a mídia se receber a mensagem inteira.
+        if (!corpo?.message?.message) return responder(res, 400, { status: 400, error: 'Bad Request', response: { message: ['Message not found'] } });
+        return responder(res, 201, { mediaType: 'imageMessage', mimetype: 'image/jpeg', base64: Buffer.from('ffd8ffe000104a46494600010100000100010000ffd9', 'hex').toString('base64') });
+      }
+      return responder(res, 404, { status: 404, error: 'Not Found', response: { message: ['rota'] } });
     }
 
     // ── WhatsApp por QR code (Z-API) ──

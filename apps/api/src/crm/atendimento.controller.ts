@@ -740,8 +740,8 @@ export class AtendimentoController {
     const d = validar(
       z.object({
         nome: z.string().trim().min(2).max(80),
-        tipo: z.enum(['oficial', 'qrcode']),
-        config: z.record(z.string().max(40), z.string().max(2000)),
+        tipo: z.enum(['oficial', 'qrcode', 'evolution']),
+        config: z.record(z.string().max(40), z.string().max(2000)).default({}),
         usuarioId: uuid.nullable().optional(),
         atendentes: z.array(uuid).default([]),
         funilEntradaId: uuid.nullable().optional(),
@@ -770,6 +770,13 @@ export class AtendimentoController {
     const c = await this.canais.atualizar(id, d);
     await this.auditoria.registrar({ usuarioId: u.id, acao: 'editar', entidade: 'crm_canal', entidadeId: id, dados: { campos: Object.keys(d) } });
     return c;
+  }
+
+  /** O que a tela pode oferecer ao ligar um número. */
+  @Get('crm/canais-opcoes')
+  @Permissao('crm', 'ver')
+  opcoesCanais() {
+    return { qrcodeProprio: this.canais.qrcodeProprioDisponivel() };
   }
 
   @Get('crm/canais/:id/situacao')

@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, pode } from '../../api';
 import { Abas, Campo, Carregando, Erro } from '../../componentes/ui';
-import { NovoCampo, TIPOS_CAMPO, usarAtendentes, usarCampos, usarCanais, usarFunis, variavelDoCampo, type CampoDef, type Canal, type Template } from './comum';
+import { NOME_TIPO_CANAL, NovoCampo, TIPOS_CAMPO, usarAtendentes, usarCampos, usarCanais, usarFunis, variavelDoCampo, type CampoDef, type Canal, type Template, type TipoCanal } from './comum';
 
 type Sub = 'numeros' | 'funis' | 'campos' | 'templates' | 'respostas' | 'ramais';
 const sel = { padding: 7, borderRadius: 8, border: '1px solid var(--linha)', font: 'inherit' } as const;
@@ -27,37 +27,42 @@ export function Configurar() {
 
 function Numeros() {
   const canais = usarCanais();
-  const [novo, setNovo] = useState<'oficial' | 'qrcode' | null>(null);
+  const opcoes = useQuery({ queryKey: ['crm', 'canais-opcoes'], queryFn: () => api<{ qrcodeProprio: boolean }>('/crm/canais-opcoes'), staleTime: 60_000 });
+  const [novo, setNovo] = useState<TipoCanal | null>(null);
   const [editando, setEditando] = useState<string | null>(null);
+  const [recemCriado, setRecemCriado] = useState<string | null>(null);
   const admin = pode('configuracoes', 'editar');
   if (canais.isLoading) return <Carregando />;
+  const qrProprio = !!opcoes.data?.qrcodeProprio;
   return (
     <div className="coluna" style={{ gap: 10 }}>
       {admin && !novo && (
-        <div className="flex" style={{ gap: 8 }}>
-          <button className="botao" onClick={() => setNovo('oficial')}>+ WhatsApp oficial (Meta)</button>
-          <button className="botao claro" onClick={() => setNovo('qrcode')}>+ WhatsApp por QR code (Z-API)</button>
+        <div className="flex" style={{ gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+          <button className="botao" disabled={!qrProprio} title={qrProprio ? undefined : 'O servidor de WhatsApp por QR code ainda não foi instalado nesta VPS'} onClick={() => setNovo('evolution')}>+ Conectar WhatsApp por QR code</button>
+          <button className="botao claro" onClick={() => setNovo('oficial')}>+ WhatsApp oficial (Meta)</button>
+          <button className="botao claro" onClick={() => setNovo('qrcode')}>+ Z-API (ID da instância e token)</button>
+          {opcoes.data && !qrProprio && <span className="muted" style={{ fontSize: 13 }}>O QR code direto fica disponível depois de rodar o instalador da VPS de novo.</span>}
         </div>
       )}
-      {novo && <FormCanal tipo={novo} fechar={() => setNovo(null)} />}
+      {novo && <FormCanal tipo={novo} fechar={(id) => { setNovo(null); if (id) setRecemCriado(id); }} />}
       {canais.error && <Erro erro={canais.error} />}
-      {!canais.data?.length && !novo && <div className="cartao vazio">Nenhum número ligado. O oficial serve para disparos em massa com templates aprovados; o QR code liga qualquer celular (da empresa ou de uma atendente).</div>}
-      {canais.data?.map((c) => (editando === c.id ? <FormCanal key={c.id} tipo={c.tipo} canal={c} fechar={() => setEditando(null)} /> : <CartaoCanal key={c.id} canal={c} editar={() => setEditando(c.id)} />))}
+      {!canais.data?.length && !novo && <div className="cartao vazio">Nenhum número ligado. O QR code liga qualquer celular (da empresa ou de uma atendente) só lendo o código na tela. O oficial serve para disparos em massa com templates aprovados pela Meta.</div>}
+      {canais.data?.map((c) => (editando === c.id ? <FormCanal key={c.id} tipo={c.tipo} canal={c} fechar={() => setEditando(null)} /> : <CartaoCanal key={c.id} canal={c} destaque={recemCriado === c.id} editar={() => setEditando(c.id)} />))}
     </div>
   );
 }
 
-function CartaoCanal({ canal: c, editar }: { canal: Canal; editar: () => void }) {
+function CartaoCanal({ canal: c, editar, destaque }: { canal: Canal; editar: () => void; destaque?: boolean }) {
   const qc = useQueryClient();
   const admin = pode('configuracoes', 'editar');
-  const sit = useQuery({ queryKey: ['crm', 'canal', c.id, 'situacao'], queryFn: () => api<{ conectado: boolean; detalhe: string; qrcode?: string | null }>(`/crm/canais/${c.id}/situacao`), refetchInterval: (q) => (q.state.data && !q.state.data.conectado && c.tipo === 'qrcode' ? 5000 : 60_000) });
+  const sit = useQuery({ queryKey: ['crm', 'canal', c.id, 'situacao'], queryFn: () => api<{ conectado: boolean; detalhe: string; qrcode?: string | null }>(`/crm/canais/${c.id}/situacao`), refetchInterval: (q) => (q.state.data && !q.state.data.conectado && c.tipo !== 'oficial' ? (c.tipo === 'evolution' ? 3000 : 5000) : 60_000) });
   const acao = useMutation({ mutationFn: (a: string) => api<any>(`/crm/canais/${c.id}/${a}`, { corpo: {} }), onSuccess: () => qc.invalidateQueries({ queryKey: ['crm'] }) });
   const [copiado, setCopiado] = useState(false);
   return (
-    <div className="cartao">
+    <div className="cartao" style={destaque ? { borderColor: 'var(--dourado)', boxShadow: '0 0 0 3px rgba(137,111,75,.15)' } : undefined}>
       <div className="flex entre" style={{ gap: 10, flexWrap: 'wrap' }}>
         <div>
-          <b>{c.nome}</b> <span className="tag">{c.tipo === 'oficial' ? 'Oficial (Meta)' : 'QR code (Z-API)'}</span> {!c.ativo && <span className="etiqueta erro">Desativado</span>}
+          <b>{c.nome}</b> <span className="tag">{NOME_TIPO_CANAL[c.tipo] ?? c.tipo}</span> {!c.ativo && <span className="etiqueta erro">Desativado</span>}
           <div className="muted" style={{ fontSize: 13 }}>
             <span className={`ponto ${sit.data?.conectado ? 'on' : ''}`} />
             {sit.isLoading ? 'Verificando…' : sit.data?.detalhe}
@@ -68,20 +73,25 @@ function CartaoCanal({ canal: c, editar }: { canal: Canal; editar: () => void })
           <div className="flex" style={{ gap: 6, flexWrap: 'wrap' }}>
             {c.tipo === 'oficial' && pode('crm', 'excluir') && <button className="botao claro pequeno" disabled={acao.isPending} onClick={() => acao.mutate('templates')}>Sincronizar templates</button>}
             {c.tipo === 'qrcode' && <button className="botao claro pequeno" disabled={acao.isPending} onClick={() => acao.mutate('webhook')}>Reapontar webhook</button>}
-            {c.tipo === 'qrcode' && sit.data?.conectado && <button className="botao claro pequeno" onClick={() => window.confirm('Desconectar este celular do sistema?') && acao.mutate('desconectar')}>Desconectar</button>}
+            {c.tipo !== 'oficial' && sit.data?.conectado && <button className="botao claro pequeno" onClick={() => window.confirm('Desconectar este celular do sistema?') && acao.mutate('desconectar')}>Desconectar</button>}
             <button className="botao claro pequeno" onClick={editar}>Editar</button>
           </div>
         )}
       </div>
       {acao.data?.total !== undefined && <div className="aviso ok" style={{ marginTop: 8 }}>{acao.data.total} template(s) na Meta, {acao.data.aprovados} aprovado(s).</div>}
       {acao.error && <Erro erro={acao.error} />}
-      {c.tipo === 'qrcode' && sit.data && !sit.data.conectado && sit.data.qrcode && (
-        <div className="flex" style={{ gap: 16, marginTop: 10, alignItems: 'center' }}>
-          <img src={sit.data.qrcode} alt="QR code para conectar" style={{ width: 220, height: 220, background: '#fff', padding: 8, borderRadius: 8, border: '1px solid var(--linha)' }} />
-          <div className="muted">No celular: WhatsApp › Aparelhos conectados › Conectar um aparelho, e aponte para o código. Ele se renova sozinho.</div>
+      {c.tipo !== 'oficial' && sit.data && !sit.data.conectado && sit.data.qrcode && (
+        <div className="flex" style={{ gap: 18, marginTop: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+          <img src={sit.data.qrcode} alt="QR code para conectar" style={{ width: 240, height: 240, background: '#fff', padding: 8, borderRadius: 8, border: '1px solid var(--linha)' }} />
+          <ol className="muted" style={{ margin: 0, paddingLeft: 18, lineHeight: 1.7, maxWidth: 380 }}>
+            <li>Abra o WhatsApp no celular deste número.</li>
+            <li>Toque em <b>⋮</b> (ou Configurações no iPhone) › <b>Aparelhos conectados</b>.</li>
+            <li>Toque em <b>Conectar um aparelho</b> e aponte para este código.</li>
+            <li>Pronto: a bolinha fica verde sozinha. O código se renova a cada poucos segundos.</li>
+          </ol>
         </div>
       )}
-      {admin && c.webhook && (
+      {admin && c.webhook && c.tipo !== 'evolution' && (
         <div className="muted" style={{ fontSize: 12, marginTop: 8, wordBreak: 'break-all' }}>
           Webhook: <code>{c.webhook}</code>{' '}
           <button className="botao claro pequeno" onClick={async () => { try { await navigator.clipboard.writeText(c.webhook!); setCopiado(true); } catch { window.prompt('Webhook:', c.webhook); } }}>{copiado ? 'Copiado' : 'Copiar'}</button>
@@ -92,7 +102,7 @@ function CartaoCanal({ canal: c, editar }: { canal: Canal; editar: () => void })
   );
 }
 
-function FormCanal({ tipo, canal, fechar }: { tipo: 'oficial' | 'qrcode'; canal?: Canal; fechar: () => void }) {
+function FormCanal({ tipo, canal, fechar }: { tipo: TipoCanal; canal?: Canal; fechar: (criadoId?: string) => void }) {
   const qc = useQueryClient();
   const atendentes = usarAtendentes();
   const funis = usarFunis();
@@ -100,11 +110,11 @@ function FormCanal({ tipo, canal, fechar }: { tipo: 'oficial' | 'qrcode'; canal?
   const salvar = useMutation({
     mutationFn: () => {
       const corpo = { nome: f.nome, config: f.config, atendentes: f.atendentes, usuarioId: f.usuarioId || null, funilEntradaId: f.funilEntradaId || null, ...(canal ? { ativo: f.ativo } : { tipo }) };
-      return canal ? api(`/crm/canais/${canal.id}`, { metodo: 'PATCH', corpo }) : api('/crm/canais', { corpo });
+      return canal ? api<{ id: string }>(`/crm/canais/${canal.id}`, { metodo: 'PATCH', corpo }) : api<{ id: string }>('/crm/canais', { corpo });
     },
-    onSuccess: () => {
+    onSuccess: (r) => {
       qc.invalidateQueries({ queryKey: ['crm'] });
-      fechar();
+      fechar(canal ? undefined : r?.id);
     },
   });
   const cfg = (k: string, rotulo: string, ajuda?: string, secreto?: boolean) => (
@@ -114,7 +124,8 @@ function FormCanal({ tipo, canal, fechar }: { tipo: 'oficial' | 'qrcode'; canal?
   );
   return (
     <div className="cartao form">
-      <div className="secao" style={{ gridColumn: '1 / -1', marginTop: 0 }}>{canal ? `Editar ${canal.nome}` : tipo === 'oficial' ? 'Novo WhatsApp oficial (API Cloud da Meta)' : 'Novo WhatsApp por QR code (Z-API)'}</div>
+      <div className="secao" style={{ gridColumn: '1 / -1', marginTop: 0 }}>{canal ? `Editar ${canal.nome}` : tipo === 'oficial' ? 'Novo WhatsApp oficial (API Cloud da Meta)' : tipo === 'evolution' ? 'Conectar WhatsApp por QR code' : 'Novo WhatsApp pela Z-API (ID da instância e token)'}</div>
+      {tipo === 'evolution' && !canal && <p className="muted l4" style={{ margin: 0 }}>Só dê um nome ao número e salve. O QR code aparece na hora: é ler com o celular e pronto, sem digitar nenhum código.</p>}
       <Campo rotulo="Nome do número" className="l2"><input value={f.nome} onChange={(e) => setF({ ...f, nome: e.target.value })} placeholder={tipo === 'oficial' ? 'Matriz oficial' : 'Celular da Ana'} /></Campo>
       {tipo === 'oficial' ? (
         <>
@@ -123,7 +134,7 @@ function FormCanal({ tipo, canal, fechar }: { tipo: 'oficial' | 'qrcode'; canal?
           {cfg('token', 'Token de acesso permanente', 'Usuário do sistema no Gerenciador de Negócios', true)}
           {cfg('appSecret', 'App Secret (recomendado)', 'Confere que o aviso veio mesmo da Meta', true)}
         </>
-      ) : (
+      ) : tipo === 'evolution' ? null : (
         <>
           {cfg('instancia', 'ID da instância', 'Painel da Z-API › Instâncias')}
           {cfg('token', 'Token da instância', undefined, true)}
@@ -133,7 +144,7 @@ function FormCanal({ tipo, canal, fechar }: { tipo: 'oficial' | 'qrcode'; canal?
       <Campo rotulo="Card novo entra no funil" className="l2" ajuda="Quem escreve pela primeira vez vira card aqui">
         <select value={f.funilEntradaId} onChange={(e) => setF({ ...f, funilEntradaId: e.target.value })}><option value="">Não criar card</option>{funis.data?.map((x) => <option key={x.id} value={x.id}>{x.nome}</option>)}</select>
       </Campo>
-      {tipo === 'qrcode' && (
+      {tipo !== 'oficial' && (
         <Campo rotulo="Dono do número (opcional)" className="l2" ajuda="Celular de uma atendente">
           <select value={f.usuarioId} onChange={(e) => setF({ ...f, usuarioId: e.target.value })}><option value="">Número da empresa</option>{atendentes.data?.map((a) => <option key={a.id} value={a.id}>{a.nome}</option>)}</select>
         </Campo>
@@ -147,8 +158,8 @@ function FormCanal({ tipo, canal, fechar }: { tipo: 'oficial' | 'qrcode'; canal?
       {canal && <label className="check l4"><input type="checkbox" checked={f.ativo} onChange={(e) => setF({ ...f, ativo: e.target.checked })} /> Número ativo</label>}
       {salvar.error && <div className="l4"><Erro erro={salvar.error} /></div>}
       <div className="flex l4">
-        <button className="botao" disabled={!f.nome.trim() || salvar.isPending} onClick={() => salvar.mutate()}>Salvar</button>
-        <button className="botao claro" onClick={fechar}>Voltar</button>
+        <button className="botao" disabled={!f.nome.trim() || salvar.isPending} onClick={() => salvar.mutate()}>{salvar.isPending ? 'Preparando…' : tipo === 'evolution' && !canal ? 'Salvar e mostrar o QR code' : 'Salvar'}</button>
+        <button className="botao claro" onClick={() => fechar()}>Voltar</button>
       </div>
     </div>
   );

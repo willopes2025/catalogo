@@ -9,7 +9,7 @@
 # O script:
 #  - baixa o código em /opt/aritana (atualiza com git pull nas próximas vezes);
 #  - cria o .env com senhas aleatórias (só na primeira vez; nunca sobrescreve);
-#  - sobe banco, API e painel em Docker, ouvindo só em 127.0.0.1 (portas 3310 e 3311);
+#  - sobe banco, API, painel e o servidor de WhatsApp por QR code em Docker, ouvindo só em 127.0.0.1 (portas 3310 e 3311);
 #  - roda as migrações e, na primeira vez, cria o usuário administrador e dados de exemplo;
 #  - ACRESCENTA um bloco para o domínio no Caddyfile existente (com cópia de segurança),
 #    valida a configuração e recarrega o Caddy sem derrubar os outros sites.
@@ -79,6 +79,24 @@ if ! grep -q '^CHAVE_CRIPTOGRAFIA=' .env; then
   echo "Chave de criptografia criada no .env (guarde uma cópia do .env junto com o backup)."
 fi
 
+# Chave do servidor de WhatsApp por QR code. Ninguém precisa digitá-la: o sistema usa sozinho.
+if ! grep -q '^EVOLUTION_API_KEY=' .env; then
+  echo "EVOLUTION_API_KEY=$(openssl rand -hex 32)" >> .env
+fi
+
+passo "Subindo o banco"
+docker compose -f docker-compose.vps.yml --env-file .env up -d db
+for i in $(seq 1 60); do
+  docker exec aritana-db pg_isready -U aritana >/dev/null 2>&1 && break
+  sleep 2
+  [ "$i" = 60 ] && erro "O banco não subiu."
+done
+# Base separada para as sessões do WhatsApp por QR code.
+if ! docker exec aritana-db psql -U aritana -d aritana -tAc "select 1 from pg_database where datname = 'evolution'" | grep -q 1; then
+  docker exec aritana-db createdb -U aritana evolution
+  echo "Base do WhatsApp por QR code criada."
+fi
+
 passo "Montando e subindo os containers (a primeira vez demora alguns minutos)"
 docker compose -f docker-compose.vps.yml --env-file .env up -d --build
 
@@ -97,6 +115,13 @@ for i in $(seq 1 20); do
   [ "$i" = 20 ] && { docker logs --tail 40 aritana-painel; erro "O painel não respondeu. Veja o log acima."; }
 done
 echo "Painel no ar."
+
+passo "Conferindo o servidor de WhatsApp por QR code"
+for i in $(seq 1 45); do
+  docker exec aritana-api node -e "fetch('http://aritana-whatsapp:8080/').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))" 2>/dev/null && { echo "WhatsApp por QR code no ar."; break; }
+  sleep 2
+  [ "$i" = 45 ] && { docker logs --tail 30 aritana-whatsapp; echo "Aviso: o servidor de WhatsApp ainda não respondeu. O resto do sistema funciona; veja o log acima."; }
+done
 
 if [ "$PRIMEIRA_VEZ" = 1 ]; then
   passo "Criando o administrador e os dados de exemplo (fictícios)"
@@ -168,6 +193,8 @@ cat > /etc/cron.d/aritana-backup <<EOF
 17 3 * * * root docker exec aritana-db pg_dump -U aritana aritana | gzip > /opt/aritana-backups/aritana-\$(date +\%F).sql.gz && find /opt/aritana-backups -name '*.sql.gz' -mtime +30 -delete
 # Cópia do .env (tem a chave que abre as credenciais salvas no banco)
 20 3 * * * root install -m 600 /opt/aritana/.env /opt/aritana-backups/env-copia
+# Cópia das sessões do WhatsApp por QR code (evita ler o QR de novo depois de uma restauração)
+22 3 * * * root docker exec aritana-db pg_dump -U aritana evolution | gzip > /opt/aritana-backups/whatsapp-\$(date +\%F).sql.gz && find /opt/aritana-backups -name 'whatsapp-*.sql.gz' -mtime +7 -delete
 # Cópia das fotos dos produtos (só acrescenta e atualiza; não apaga nada da cópia)
 25 3 * * * root cp -au /opt/aritana-arquivos/. /opt/aritana-backups/arquivos/
 EOF

@@ -292,7 +292,7 @@ function NovoDisparo({ fechar }: { fechar: () => void }) {
           <select value={f.templateId} onChange={(e) => setF({ ...f, templateId: e.target.value })}><option value="">{canal?.tipo === 'oficial' ? 'Escolha…' : 'Mensagem livre'}</option>{usaveis.map((t) => <option key={t.id} value={t.id}>{t.nome}</option>)}</select>
         </Campo>
       )}
-      {f.canalId && canal?.tipo === 'qrcode' && !f.templateId && <Campo rotulo="Mensagem" className="l2"><textarea rows={3} value={f.texto} onChange={(e) => setF({ ...f, texto: e.target.value })} placeholder="Oi {{primeiro_nome}}!…" /></Campo>}
+      {f.canalId && canal && canal.tipo !== 'oficial' && !f.templateId && <Campo rotulo="Mensagem" className="l2"><textarea rows={3} value={f.texto} onChange={(e) => setF({ ...f, texto: e.target.value })} placeholder="Oi {{primeiro_nome}}!…" /></Campo>}
       <Campo rotulo="Funil" className="l2"><select value={f.funilId} onChange={(e) => setF({ ...f, funilId: e.target.value, etapaIds: [] })}><option value="">Todos os funis</option>{funis.data?.map((x) => <option key={x.id} value={x.id}>{x.nome}</option>)}</select></Campo>
       <Campo rotulo="Situação dos cards" className="l2"><select value={f.status} onChange={(e) => setF({ ...f, status: e.target.value })}><option value="aberto">Abertos</option><option value="ganho">Ganhos</option><option value="perdido">Perdidos</option><option value="">Todos</option></select></Campo>
       {funil && (
@@ -304,7 +304,7 @@ function NovoDisparo({ fechar }: { fechar: () => void }) {
         </div>
       )}
       <Campo rotulo="Com estas etiquetas (opcional)" className="l2" ajuda="Separadas por vírgula"><input value={f.etiquetas} onChange={(e) => setF({ ...f, etiquetas: e.target.value })} /></Campo>
-      <Campo rotulo="Mensagens por minuto" className="l2" ajuda={canal?.tipo === 'qrcode' ? 'No QR code, até 20 por minuto reduz o risco de bloqueio' : 'Oficial: respeita o limite da conta na Meta'}><input type="number" min={1} max={200} value={f.ritmo} onChange={(e) => setF({ ...f, ritmo: Number(e.target.value) })} /></Campo>
+      <Campo rotulo="Mensagens por minuto" className="l2" ajuda={canal && canal.tipo !== 'oficial' ? 'No QR code, até 20 por minuto reduz o risco de bloqueio' : 'Oficial: respeita o limite da conta na Meta'}><input type="number" min={1} max={200} value={f.ritmo} onChange={(e) => setF({ ...f, ritmo: Number(e.target.value) })} /></Campo>
       <p className="muted l4" style={{ fontSize: 13 }}>Quem pediu para não receber (respondeu SAIR) fica de fora sozinho. O disparo é criado como rascunho com a contagem; você confere e manda enviar ou agenda.</p>
       {criar.error && <div className="l4"><Erro erro={criar.error} /></div>}
       <div className="flex l4">

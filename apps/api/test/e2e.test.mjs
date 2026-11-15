@@ -1212,6 +1212,64 @@ test('CRM: funis, números de WhatsApp, fila de atendimento, chat, conversa inte
   assert.equal((await ok('GET', `/crm/leads/${novo.id}`)).tarefas.length, 0);
 });
 
+test('WhatsApp por QR code no servidor próprio: só o nome, QR na tela, recebe e responde', async () => {
+  assert.equal((await ok('GET', '/crm/canais-opcoes')).qrcodeProprio, true);
+  const c = await ok('POST', '/crm/canais', { nome: 'Celular da vitrine', tipo: 'evolution' });
+  assert.ok(c.qrcode?.startsWith('data:image/png;base64,'), 'QR já vem na criação');
+  assert.equal(c.config.instancia, `aritana-${c.id}`, 'instância criada pelo sistema, sem nada digitado');
+  let sit = await ok('GET', `/crm/canais/${c.id}/situacao`);
+  assert.equal(sit.conectado, false);
+  assert.ok(sit.qrcode);
+  // Leu o QR no celular.
+  await fetch(`${SIM}/__evo/conectar?i=${encodeURIComponent(c.config.instancia)}`);
+  sit = await ok('GET', `/crm/canais/${c.id}/situacao`);
+  assert.equal(sit.conectado, true);
+  assert.equal(sit.numero, '5527977776666');
+  // O webhook foi apontado pela rede interna, com o token do canal.
+  const criacao = (await recebidos()).filter((r) => r.caminho === '/evo/instance/create').pop();
+  assert.ok(criacao.corpo.webhook.url.startsWith(`http://localhost:3100/api/webhooks/whatsapp/${c.id}/`));
+  assert.deepEqual(criacao.corpo.webhook.events.sort(), ['CONNECTION_UPDATE', 'MESSAGES_UPDATE', 'MESSAGES_UPSERT']);
+  const hook = criacao.corpo.webhook.url.replace('http://localhost:3100', '');
+  const postar = (b) => fetch(API.replace(/\/api$/, '') + hook, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(b) });
+  // Mensagem de conta nova (@lid): o número vem no campo alternativo. Grupo é ignorado.
+  await postar({ event: 'messages.upsert', instance: c.config.instancia, data: { key: { remoteJid: '123456789@lid', remoteJidAlt: '5527966665555@s.whatsapp.net', fromMe: false, id: 'EVIN1' }, pushName: 'Simone Prado', message: { conversation: 'Oi, vi a vitrine. Tem brinco de pérola?' }, messageType: 'conversation', messageTimestamp: Math.floor(Date.now() / 1000) } });
+  await postar({ event: 'messages.upsert', instance: c.config.instancia, data: { key: { remoteJid: '120363@g.us', fromMe: false, id: 'EVGRUPO' }, message: { conversation: 'grupo' }, messageTimestamp: 1 } });
+  await postar({ event: 'messages.upsert', instance: c.config.instancia, data: { key: { remoteJid: '5527966665555@s.whatsapp.net', fromMe: false, id: 'EVIN2' }, pushName: 'Simone Prado', message: { imageMessage: { mimetype: 'image/jpeg', caption: 'este aqui' } }, messageTimestamp: Math.floor(Date.now() / 1000) } });
+  const fila = await ok('GET', '/crm/conversas?aba=fila');
+  const cv = fila.find((x) => x.telefone === '5527966665555');
+  assert.ok(cv, 'conversa entrou na fila');
+  assert.equal(cv.canal, 'Celular da vitrine');
+  const msgs = await ok('GET', `/crm/conversas/${cv.id}/mensagens`);
+  const lista = msgs.mensagens ?? msgs;
+  assert.ok(lista.some((m) => m.texto === 'Oi, vi a vitrine. Tem brinco de pérola?'));
+  const foto = lista.find((m) => m.tipo === 'imagem');
+  assert.ok(foto?.midia, 'foto baixada mandando a mensagem inteira de volta ao servidor');
+  assert.ok(!lista.some((m) => m.texto === 'grupo'));
+  // Responde pelo sistema: sai pelo servidor próprio, e o "entregue" volta pelo webhook.
+  await ok('POST', `/crm/conversas/${cv.id}/pegar`);
+  const enviada = await ok('POST', `/crm/conversas/${cv.id}/mensagens`, { texto: 'Tem sim, Simone! Te mando as fotos.' });
+  const envio = (await recebidos()).filter((r) => r.caminho.startsWith('/evo/message/sendText/')).pop();
+  assert.equal(envio.corpo.number, '5527966665555');
+  assert.equal(envio.headers.apikey, 'chave-evo-teste');
+  await postar({ event: 'messages.update', instance: c.config.instancia, data: { keyId: enviada.idExterno, remoteJid: '5527966665555@s.whatsapp.net', fromMe: true, status: 'DELIVERY_ACK' } });
+  const depois = await ok('GET', `/crm/conversas/${cv.id}/mensagens`);
+  assert.ok(enviada.idExterno?.startsWith('EVO'), 'id da mensagem veio do servidor');
+  assert.equal((depois.mensagens ?? depois).find((m) => m.texto === 'Tem sim, Simone! Te mando as fotos.')?.status, 'entregue');
+  // Webhook com token errado é recusado.
+  assert.equal((await fetch(API.replace(/\/api$/, '') + `/api/webhooks/whatsapp/${c.id}/errado`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })).status, 403);
+  // Instância sumiu do servidor (reinstalação): o sistema recria sozinho e mostra o QR de novo.
+  await fetch(`${SIM}/__evo/apagar?i=${encodeURIComponent(c.config.instancia)}`);
+  sit = await ok('GET', `/crm/canais/${c.id}/situacao`);
+  assert.equal(sit.conectado, false);
+  assert.ok(sit.qrcode, 'recriou a instância');
+  // Desconectar pelo sistema.
+  await fetch(`${SIM}/__evo/conectar?i=${encodeURIComponent(c.config.instancia)}`);
+  await ok('POST', `/crm/canais/${c.id}/desconectar`, {});
+  assert.equal((await ok('GET', `/crm/canais/${c.id}/situacao`)).conectado, false);
+  // A Z-API (ID da instância e token) continua disponível como antes.
+  assert.equal((await chamar('POST', '/crm/canais', { nome: 'Sem dados', tipo: 'qrcode', config: {} })).status, 400);
+});
+
 test('limite olha a maleta inteira depois de acerto parcial; indicadores batem entre si', async () => {
   const dia = (n) => new Date(Date.now() - 3 * 3600e3 - n * 86400e3).toISOString().slice(0, 10);
   const regras = await ok('GET', '/configuracoes/regras-consignado');

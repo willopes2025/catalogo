@@ -9,6 +9,7 @@ import { CrmService } from './crm.service';
 import { PEDIU_SAIR, preencherTexto, primeiroNome, variaveisDosCampos } from './telefone';
 import { ConexaoOficial } from './whatsapp/oficial';
 import { ConexaoZapi } from './whatsapp/zapi';
+import { ConexaoEvolution, criarInstancia, evolutionDisponivel, nomeInstancia } from './whatsapp/evolution';
 import { ErroCanal, type Conexao, type MensagemEntrada, type MensagemSaida, type StatusEntrada } from './whatsapp/tipos';
 
 type Canal = typeof crmCanais.$inferSelect;
@@ -75,6 +76,17 @@ export class CanaisService {
     return `${base}/api/webhooks/whatsapp/${c.id}/${c.tokenWebhook}`;
   }
 
+  /** O servidor de WhatsApp próprio fala com a API pela rede interna da VPS, sem passar pela internet. */
+  private urlWebhookInterno(c: Canal) {
+    const base = (process.env.EVOLUTION_WEBHOOK_URL ?? process.env.API_PUBLICA_URL ?? process.env.PAINEL_URL ?? '').replace(/\/$/, '');
+    return `${base}/api/webhooks/whatsapp/${c.id}/${c.tokenWebhook}`;
+  }
+
+  /** Se a VPS tem o servidor de WhatsApp por QR code (a tela usa para escolher o que oferecer). */
+  qrcodeProprioDisponivel() {
+    return evolutionDisponivel();
+  }
+
   async listar() {
     return (await this.db.select().from(crmCanais).orderBy(crmCanais.criadoEm)).map((c) => this.publico(c));
   }
@@ -88,15 +100,28 @@ export class CanaisService {
   validarConfig(tipo: string, cfg: Record<string, string>) {
     if (tipo === 'oficial' && !(cfg.phoneNumberId && cfg.wabaId && cfg.token)) throw new BadRequestException('Preencha o Phone Number ID, o WABA ID e o token da Meta.');
     if (tipo === 'qrcode' && !(cfg.instancia && cfg.token)) throw new BadRequestException('Preencha a instância e o token da Z-API.');
+    if (tipo === 'evolution' && !evolutionDisponivel()) throw new BadRequestException('O servidor de WhatsApp por QR code não está instalado nesta VPS. Rode o instalador de novo para ativá-lo.');
   }
 
-  async criar(d: { nome: string; tipo: 'oficial' | 'qrcode'; config: Record<string, string>; usuarioId?: string | null; atendentes?: string[]; funilEntradaId?: string | null }) {
+  async criar(d: { nome: string; tipo: 'oficial' | 'qrcode' | 'evolution'; config: Record<string, string>; usuarioId?: string | null; atendentes?: string[]; funilEntradaId?: string | null }) {
     this.validarConfig(d.tipo, d.config);
     const [c] = await this.db
       .insert(crmCanais)
-      .values({ nome: d.nome, tipo: d.tipo, config: this.cifrarConfig(d.config), tokenWebhook: randomBytes(18).toString('base64url'), usuarioId: d.usuarioId ?? null, atendentes: d.atendentes ?? [], funilEntradaId: d.funilEntradaId ?? null })
+      .values({ nome: d.nome, tipo: d.tipo, config: d.tipo === 'evolution' ? {} : this.cifrarConfig(d.config), tokenWebhook: randomBytes(18).toString('base64url'), usuarioId: d.usuarioId ?? null, atendentes: d.atendentes ?? [], funilEntradaId: d.funilEntradaId ?? null })
       .returning();
     if (c.tipo === 'qrcode') await this.apontarWebhookZapi(c).catch((e) => this.log.warn(`Webhook da Z-API não configurado: ${(e as Error).message}`));
+    if (c.tipo === 'evolution') {
+      // Nada para digitar: o sistema cria a instância no servidor próprio, com o webhook já apontado.
+      const instancia = nomeInstancia(c.id);
+      try {
+        const r = await criarInstancia(instancia, this.urlWebhookInterno(c));
+        const [pronto] = await this.db.update(crmCanais).set({ config: { instancia } }).where(eq(crmCanais.id, c.id)).returning();
+        return { ...this.publico(pronto), qrcode: r.qrcode };
+      } catch (e) {
+        await this.db.delete(crmCanais).where(eq(crmCanais.id, c.id));
+        throw new BadRequestException((e as Error).message);
+      }
+    }
     return this.publico(c);
   }
 
@@ -111,10 +136,12 @@ export class CanaisService {
   conexao(c: Canal): Conexao {
     const cfg = this.abrirConfig(c);
     if (c.tipo === 'oficial') return new ConexaoOficial({ phoneNumberId: cfg.phoneNumberId, wabaId: cfg.wabaId, token: cfg.token, appSecret: cfg.appSecret || undefined });
+    if (c.tipo === 'evolution') return new ConexaoEvolution(cfg.instancia || nomeInstancia(c.id), this.urlWebhookInterno(c));
     return new ConexaoZapi({ instancia: cfg.instancia, token: cfg.token, clientToken: cfg.clientToken || undefined });
   }
 
   async apontarWebhookZapi(c: Canal) {
+    if (c.tipo === 'evolution') return (this.conexao(c) as ConexaoEvolution).configurarWebhooks();
     if (c.tipo !== 'qrcode') return;
     await (this.conexao(c) as ConexaoZapi).configurarWebhooks(this.urlWebhook(c));
   }
@@ -128,8 +155,8 @@ export class CanaisService {
 
   async desconectar(id: string) {
     const c = await this.obter(id);
-    if (c.tipo !== 'qrcode') throw new BadRequestException('Só números por QR code se desconectam por aqui.');
-    await (this.conexao(c) as ConexaoZapi).desconectar();
+    if (c.tipo === 'oficial') throw new BadRequestException('Só números por QR code se desconectam por aqui.');
+    await (this.conexao(c) as ConexaoZapi | ConexaoEvolution).desconectar();
     return { ok: true };
   }
 
