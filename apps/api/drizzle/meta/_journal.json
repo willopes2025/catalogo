@@ -134,6 +134,13 @@
       "when": 1794765672937,
       "tag": "0018_rh_certificados",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1794765948945,
+      "tag": "0019_marketing_gastos",
+      "breakpoints": true
     }
   ]
 }

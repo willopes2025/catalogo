@@ -194,8 +194,12 @@ export function Integracoes() {
       </p>
       {q.data!.map((i) => <CartaoIntegracao key={i.chave} i={i} />)}
       <div className="cartao">
-        <div className="secao" style={{ marginTop: 0 }}>Próximas integrações (Versão 2)</div>
-        <p className="muted" style={{ margin: 0 }}>WhatsApp oficial, Serasa, Meta Ads e Google Ads, PagBank e Sicoob.</p>
+        <div className="secao" style={{ marginTop: 0 }}>Próximas integrações</div>
+        <p className="muted" style={{ margin: 0 }}>
+          Serasa (consulta de crédito da candidata), Google Ads pela API (até lá, lance o gasto em Marketing › Mês a mês e gastos),
+          PagBank e Sicoob para baixar o extrato sozinho (até lá, use Financeiro › Cartões (conciliar) e a baixa manual).
+          Cada uma precisa do acesso da Aritana ao serviço; quando tiver, é só pedir para ligar.
+        </p>
       </div>
     </div>
   );

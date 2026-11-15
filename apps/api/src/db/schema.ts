@@ -1567,3 +1567,22 @@ export const rhCertificados = pgTable('rh_certificados', {
   usuarioId: uuid('usuario_id').references(() => usuarios.id),
   atualizadoEm: atualizadoEm(),
 });
+
+/**
+ * Investimento em marketing por mês: lançado à mão (agência, impulsionamento, influenciadora, brindes)
+ * ou trazido do Meta Ads mês a mês. Com campanha, entra no custo dela; sem campanha, só no custo geral do mês.
+ */
+export const marketingGastos = pgTable(
+  'marketing_gastos',
+  {
+    id: id(),
+    competencia: text('competencia').notNull(),
+    campanhaId: uuid('campanha_id').references(() => campanhas.id, { onDelete: 'cascade' }),
+    descricao: text('descricao').notNull(),
+    valor: integer('valor').notNull(),
+    origem: text('origem').notNull().default('manual'), // manual | meta
+    usuarioId: uuid('usuario_id').references(() => usuarios.id),
+    criadoEm: criadoEm(),
+  },
+  (t) => ({ porMes: index('marketing_gastos_mes_idx').on(t.competencia), porCampanha: index('marketing_gastos_campanha_idx').on(t.campanhaId) }),
+);

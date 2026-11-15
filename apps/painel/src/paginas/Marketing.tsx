@@ -4,17 +4,20 @@ import { Link } from 'react-router-dom';
 import { api, pode } from '../api';
 import { centavosParaTexto, dataHora, paraCentavos, reais } from '../formato';
 import { Abas, Campo, Carregando, Erro, Indicador, Topo } from '../componentes/ui';
+import { BarrasTempo, COR, mesCurto, Tabela } from './indicadores/comum';
+import './indicadores/indicadores.css';
 
 const CANAIS: Record<string, string> = { meta: 'Meta Ads (Facebook/Instagram)', google: 'Google Ads', instagram: 'Instagram orgânico', whatsapp: 'WhatsApp', evento: 'Evento', outro: 'Outro' };
 const codigo = (s: string) => s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 60);
 
 export function Marketing() {
-  const [aba, setAba] = useState<'resultados' | 'campanhas' | 'links'>('resultados');
+  const [aba, setAba] = useState<'resultados' | 'mensal' | 'campanhas' | 'links'>('resultados');
   return (
     <>
       <Topo eb="Marketing" titulo="Quanto custa cada nova revendedora" sub="Campanhas, custo por candidata e por aprovada, e quanto as aprovadas já venderam" />
-      <Abas ativa={aba} mudar={setAba} abas={[['resultados', 'Resultados'], ['campanhas', 'Campanhas'], ['links', 'Gerar link rastreável']]} />
+      <Abas ativa={aba} mudar={setAba} abas={[['resultados', 'Resultados'], ['mensal', 'Mês a mês e gastos'], ['campanhas', 'Campanhas'], ['links', 'Gerar link rastreável']]} />
       {aba === 'resultados' && <Resultados />}
+      {aba === 'mensal' && <Mensal />}
       {aba === 'campanhas' && <Campanhas />}
       {aba === 'links' && <Links />}
     </>
@@ -52,14 +55,16 @@ function Resultados() {
       {sinc.data && <div className="aviso ok">{sinc.data.atualizadas} campanha(s) atualizada(s){sinc.data.semDados ? `; ${sinc.data.semDados} sem gasto no Meta` : ''}.</div>}
       <div style={{ overflowX: 'auto' }}>
         <table className="tabela">
-          <thead><tr><th>Campanha</th><th className="num">Investido</th><th className="num">Candidatas</th><th className="num">Aprovadas</th><th className="num">Custo/candidata</th><th className="num">Custo/aprovada</th><th className="num">Respostas</th><th className="num">Vendido pelas aprovadas</th><th className="num">Retorno</th></tr></thead>
+          <thead><tr><th>Campanha</th><th className="num">Investido</th><th className="num">Leads (CRM)</th><th className="num">Candidatas</th><th className="num">Aprovadas</th><th className="num">Custo/lead</th><th className="num">Custo/candidata</th><th className="num">Custo/aprovada</th><th className="num">Respostas</th><th className="num">Vendido pelas aprovadas</th><th className="num">Retorno</th></tr></thead>
           <tbody>
             {linhas.map((l: any) => (
               <tr key={l.utm}>
                 <td>{l.campanha ? <><b>{l.campanha.nome}</b><div className="muted">{CANAIS[l.campanha.canal]} · {l.utm}{l.campanha.sincronizado ? ' · gasto do Meta' : ''}</div></> : <><span className="etiqueta alerta">Sem campanha</span> <span className="muted">{l.utm}</span></>}</td>
                 <td className="num">{l.campanha ? reais(l.investimento) : '—'}</td>
+                <td className="num">{l.leads}</td>
                 <td className="num">{l.candidatas}</td>
                 <td className="num">{l.aprovadas}</td>
+                <td className="num">{l.custoPorLead !== null ? reais(l.custoPorLead) : '—'}</td>
                 <td className="num">{l.custoPorCandidata !== null ? reais(l.custoPorCandidata) : '—'}</td>
                 <td className="num">{l.custoPorAprovada !== null ? reais(l.custoPorAprovada) : '—'}</td>
                 <td className="num">{l.respostas}{l.clientes ? <div className="muted">{l.clientes} cliente(s)</div> : null}</td>
@@ -67,7 +72,7 @@ function Resultados() {
                 <td className="num">{l.retorno !== null ? `${String(l.retorno).replace('.', ',')}×` : '—'}</td>
               </tr>
             ))}
-            {!linhas.length && <tr><td colSpan={9} className="vazio">Ainda não há campanhas. Cadastre uma e use o link rastreável nos anúncios.</td></tr>}
+            {!linhas.length && <tr><td colSpan={11} className="vazio">Ainda não há campanhas. Cadastre uma e use o link rastreável nos anúncios.</td></tr>}
           </tbody>
         </table>
       </div>
@@ -165,6 +170,84 @@ function Links() {
       <div className="coluna" style={{ gridColumn: 'span 4' }}>
         <input readOnly value={url} onFocus={(e) => e.target.select()} />
         <div className="flex"><button className="botao" disabled={!d.campanha} onClick={() => void copiar()}>Copiar link</button>{!d.campanha && <span className="muted">Escolha a campanha (cadastre em Campanhas).</span>}</div>
+      </div>
+    </div>
+  );
+}
+
+/** Investimento e aquisição mês a mês, com os gastos lançados à mão (agência, influenciadora, impulsionamento). */
+function Mensal() {
+  const qc = useQueryClient();
+  const q = useQuery({ queryKey: ['marketing-mensal'], queryFn: () => api<any>('/marketing/mensal?meses=12') });
+  const gastos = useQuery({ queryKey: ['marketing-gastos'], queryFn: () => api<any[]>('/marketing/gastos') });
+  const campanhas = useQuery({ queryKey: ['campanhas'], queryFn: () => api<any[]>('/marketing/campanhas') });
+  const mesAtual = new Date(Date.now() - 3 * 3600_000).toISOString().slice(0, 7);
+  const [novo, setNovo] = useState({ competencia: mesAtual, campanhaId: '', descricao: '', valor: '' });
+  const atualizar = () => ['marketing-mensal', 'marketing-gastos', 'marketing-resultados'].forEach((k) => qc.invalidateQueries({ queryKey: [k] }));
+  const lancar = useMutation({
+    mutationFn: () => api('/marketing/gastos', { corpo: { competencia: novo.competencia, campanhaId: novo.campanhaId || null, descricao: novo.descricao, valor: paraCentavos(novo.valor) } }),
+    onSuccess: () => { setNovo({ ...novo, descricao: '', valor: '' }); atualizar(); },
+  });
+  const apagar = useMutation({ mutationFn: (id: string) => api(`/marketing/gastos/${id}`, { metodo: 'DELETE' }), onSuccess: atualizar });
+  if (q.isLoading) return <Carregando />;
+  if (q.error) return <Erro erro={q.error} />;
+  const { linhas, totais } = q.data;
+  const editar = pode('marketing', 'editar');
+  const vezes = (r: number | null) => (r === null ? '—' : `${String(r).replace('.', ',')}×`);
+  return (
+    <div className="coluna">
+      <div className="grade g4">
+        <Indicador tipo="destaque" rotulo="Investido em 12 meses" valor={reais(totais.investimento)} detalhe={`${totais.leads} leads · ${totais.candidatas} candidatas · ${totais.aprovadas} aprovadas`} />
+        <Indicador rotulo="Custo por lead" valor={totais.custoPorLead !== null ? reais(totais.custoPorLead) : '—'} detalhe="leads que entraram no CRM" />
+        <Indicador rotulo="Custo por revendedora aprovada" valor={totais.custoPorAprovada !== null ? reais(totais.custoPorAprovada) : '—'} detalhe="quanto custa trazer cada uma" />
+        <Indicador rotulo="Retorno" valor={vezes(totais.retorno)} detalhe={`as aprovadas já venderam ${reais(totais.vendido)}`} />
+      </div>
+      <div className="cartao">
+        <BarrasTempo
+          rotuloACada={2}
+          pontos={linhas.map((l: any) => ({ rotulo: mesCurto(l.mes), valores: { investimento: l.investimento, vendido: l.vendidoPelasAprovadas }, extra: `${l.aprovadas} aprovada(s)${l.custoPorAprovada ? ` · ${reais(l.custoPorAprovada)} cada` : ''}` }))}
+          series={[['investimento', 'Investido', COR.ruim], ['vendido', 'Vendido pelas aprovadas do mês', COR.bom]]}
+        />
+      </div>
+      <Tabela
+        nome="marketing-mes-a-mes"
+        linhas={[...linhas].reverse()}
+        colunas={[['mes', 'Mês'], ['investimento', 'Investido', 'dinheiro'], ['leads', 'Leads', 'num'], ['candidatas', 'Candidatas', 'num'], ['aprovadas', 'Aprovadas', 'num'], ['custoPorLead', 'Custo/lead', 'dinheiro'], ['custoPorCandidata', 'Custo/candidata', 'dinheiro'], ['custoPorAprovada', 'Custo/aprovada', 'dinheiro'], ['vendidoPelasAprovadas', 'Vendido pelas aprovadas', 'dinheiro'], ['retorno', 'Retorno']]}
+        celula={(l, k) => (k === 'mes' ? mesCurto(l.mes) : k === 'retorno' ? vezes(l.retorno) : undefined)}
+      />
+      <p className="muted" style={{ margin: 0 }}>
+        Investido no mês = gastos lançados abaixo + gasto do Meta Ads mês a mês. Campanha com só o valor total é dividida pelos dias em que rodou.
+        Candidatas e aprovadas contam pelo mês em que chegaram; "vendido" é tudo que as aprovadas daquele mês já venderam até hoje.
+      </p>
+
+      <div className="cartao">
+        <h3>Gastos lançados</h3>
+        {editar && (
+          <div className="form" style={{ marginTop: 8 }}>
+            <Campo rotulo="Mês"><input type="month" value={novo.competencia} onChange={(e) => setNovo({ ...novo, competencia: e.target.value })} /></Campo>
+            <Campo rotulo="Campanha" ajuda="Vazio = custo geral do mês"><select value={novo.campanhaId} onChange={(e) => setNovo({ ...novo, campanhaId: e.target.value })}><option value="">Sem campanha</option>{campanhas.data?.map((c) => <option key={c.id} value={c.id}>{c.nome}</option>)}</select></Campo>
+            <Campo rotulo="O que foi"><input value={novo.descricao} onChange={(e) => setNovo({ ...novo, descricao: e.target.value })} placeholder="Agência, influenciadora, Google Ads…" /></Campo>
+            <Campo rotulo="Valor (R$)"><input inputMode="decimal" value={novo.valor} onChange={(e) => setNovo({ ...novo, valor: e.target.value })} /></Campo>
+            <div className="l4 flex" style={{ gap: 8 }}><button className="botao" disabled={!novo.descricao.trim() || !novo.valor || lancar.isPending} onClick={() => lancar.mutate()}>Lançar gasto</button></div>
+            {lancar.error && <div className="l4"><Erro erro={lancar.error} /></div>}
+          </div>
+        )}
+        {apagar.error && <Erro erro={apagar.error} />}
+        <table className="tabela" style={{ marginTop: 10 }}>
+          <thead><tr><th>Mês</th><th>O que foi</th><th>Campanha</th><th className="num">Valor</th><th></th></tr></thead>
+          <tbody>
+            {gastos.data?.map((g) => (
+              <tr key={g.id}>
+                <td>{mesCurto(g.competencia)}</td>
+                <td>{g.descricao}{g.origem === 'meta' && <span className="etiqueta" style={{ marginLeft: 6 }}>Meta Ads</span>}</td>
+                <td>{g.campanha ?? <span className="muted">geral</span>}</td>
+                <td className="num">{reais(g.valor)}</td>
+                <td>{editar && g.origem === 'manual' && <button className="botao claro pequeno" disabled={apagar.isPending} onClick={() => apagar.mutate(g.id)}>Apagar</button>}</td>
+              </tr>
+            ))}
+            {!gastos.data?.length && <tr><td colSpan={5} className="vazio">Nenhum gasto lançado. Lance aqui o que não vem do Meta (agência, Google Ads, influenciadora, brindes).</td></tr>}
+          </tbody>
+        </table>
       </div>
     </div>
   );

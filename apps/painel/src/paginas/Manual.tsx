@@ -156,7 +156,8 @@ const SECOES: Secao[] = [
       { t: 'Cadastre a campanha', d: 'Marketing › Campanhas: nome, canal, código (utm_campaign) e quanto foi investido.' },
       { t: 'Use o link rastreável', d: 'Em "Gerar link rastreável", escolha a campanha e o destino (formulário de revendedoras ou outro). Use esse link no anúncio.' },
       { t: 'Acompanhe', d: 'Resultados mostra, por campanha, as candidatas, as aprovadas, o custo de cada uma e quanto as aprovadas já venderam nos acertos.' },
-      { t: 'Meta Ads', d: 'Com a integração ligada (Configurações › Integrações) e o id da campanha do Meta preenchido, "Atualizar gasto do Meta Ads" traz o valor investido sozinho.' },
+      { t: 'Meta Ads', d: 'Com a integração ligada (Configurações › Integrações) e o id da campanha do Meta preenchido, "Atualizar gasto do Meta Ads" traz o valor investido sozinho, mês a mês.' },
+      { t: 'Mês a mês e gastos', d: 'Lance o que não vem do Meta (agência, Google Ads, influenciadora, brindes), com ou sem campanha. A tela mostra por mês o investido, os leads do CRM, as candidatas, as aprovadas, o custo de cada revendedora aprovada e quanto elas já venderam.' },
     ],
   },
   {

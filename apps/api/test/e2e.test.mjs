@@ -853,6 +853,26 @@ test('marketing: custo por candidata e por aprovada, retorno e investimento vind
   l = res.linhas.find((x) => x.utm === 'novembro');
   assert.equal(l.investimento, 12345, 'soma das duas páginas do Meta');
   assert.equal(l.campanha.sincronizado, true);
+  // Meta mês a mês vira lançamento por mês; gastos à mão somam (com campanha) ou entram só no custo geral (sem).
+  const gs = await ok('GET', '/marketing/gastos');
+  assert.deepEqual(gs.filter((g) => g.origem === 'meta').map((g) => [g.competencia, g.valor]).sort(), [['2026-10', 10000], ['2026-11', 2345]]);
+  const mesAtual = new Date(Date.now() - 3 * 3600e3).toISOString().slice(0, 7);
+  const g1 = await ok('POST', '/marketing/gastos', { competencia: mesAtual, campanhaId: c.id, descricao: 'Impulsionamento extra', valor: 5000 });
+  await ok('POST', '/marketing/gastos', { competencia: mesAtual, descricao: 'Influenciadora', valor: 3000 });
+  assert.equal((await chamar('POST', '/marketing/gastos', { competencia: '2026-13', descricao: 'x', valor: 1 })).status, 400);
+  assert.equal((await ok('GET', '/marketing/resultados')).linhas.find((x) => x.utm === 'novembro').investimento, 12345 + 5000, 'gasto à mão soma na campanha');
+  assert.equal(typeof (await ok('GET', '/marketing/resultados')).linhas.find((x) => x.utm === 'novembro').leads, 'number');
+  const mensal = await ok('GET', '/marketing/mensal');
+  assert.equal(mensal.linhas.length, 12);
+  const atual = mensal.linhas.find((x) => x.mes === mesAtual);
+  const esperado = (await ok('GET', `/marketing/gastos?competencia=${mesAtual}`)).reduce((a, g) => a + g.valor, 0);
+  assert.equal(atual.investimento, esperado, 'mês = gastos lançados + Meta do mês (campanha com meses do Meta não é rateada)');
+  assert.ok(mensal.totais.investimento >= esperado);
+  assert.equal((await chamar('DELETE', `/marketing/gastos/${gs.find((g) => g.origem === 'meta').id}`)).status, 400, 'gasto do Meta só muda sincronizando');
+  await ok('DELETE', `/marketing/gastos/${g1.id}`);
+  // sincronizar de novo não duplica os meses do Meta
+  await ok('POST', '/marketing/sincronizar-meta');
+  assert.equal((await ok('GET', '/marketing/gastos')).filter((g) => g.origem === 'meta').length, 2);
   await ok('PUT', '/integracoes/meta_ads', { valores: { META_ADS_TOKEN: 'token-errado-123456' } });
   assert.equal((await chamar('POST', '/marketing/sincronizar-meta')).status, 503);
 });
