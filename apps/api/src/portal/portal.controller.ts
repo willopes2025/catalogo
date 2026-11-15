@@ -151,7 +151,8 @@ export class PortalController {
         recebidoEm: l.distribuidoEm,
         aceitarAte: l.distribuicao === 'aguardando' && l.distribuidoEm ? new Date(l.distribuidoEm.getTime() + (prazos.get(l.funilId) ?? 60) * 60_000) : null,
         status: l.status,
-        interesse: aberto ? Object.entries(l.camposExtras).filter(([k]) => !/^(cidade|uf|estado)$/i.test(k)).slice(0, 6) : [],
+        // Só o que ajuda a atender: documento, renda, endereço e anotações internas da equipe não vão para a consultora.
+        interesse: aberto ? Object.entries(l.camposExtras).filter(([k, v]) => v && !/^(cidade|uf|estado)$/i.test(k) && !/cpf|cnpj|\brg\b|documento|renda|sal[aá]rio|nascimento|endere[cç]o|cep|e-?mail|score|serasa|cr[eé]dito|limite|observa|interno|anota/i.test(k)).slice(0, 6) : [],
       };
     });
   }

@@ -1643,7 +1643,9 @@ test('leads por localização: vai para a consultora mais perto, ela aceita no p
     const clientes = funis.find((f) => f.tipo === 'clientes');
     const recrut = funis.find((f) => f.tipo === 'recrutamento');
     await ok('PUT', `/crm/distribuicao/${clientes.id}`, { ativo: true, destino: 'consultoras', raioKm: 40, prazoMinutos: 30, maxTentativas: 2, maxAbertos: 5, avisarWhatsapp: false });
-    assert.ok((await ok('GET', '/crm/distribuicao')).some((x) => x.funil.id === clientes.id && x.config.raioKm === 40));
+    const cfgs = await ok('GET', '/crm/distribuicao');
+    assert.ok(cfgs.funis.some((x) => x.funil.id === clientes.id && x.config.raioKm === 40));
+    assert.equal(typeof cfgs.semCidade.total, 'number');
     // Anúncio → formulário de cliente → card no funil Clientes → consultora mais perto.
     const form = await ok('POST', '/formularios', {
       titulo: 'Quero comprar semijoias', acao: 'cliente', funilId: clientes.id,
@@ -1691,6 +1693,12 @@ test('leads por localização: vai para a consultora mais perto, ela aceita no p
     assert.equal(meu.nome, 'Cliente Perto Vila Velha');
     assert.match(meu.telefone, /991110001$/);
     assert.ok(meu.interesse.some(([k, v]) => k === 'O que procura' && v === 'Brincos'));
+    // Campo interno posto pela equipe no card não aparece para a consultora.
+    token = admin;
+    await ok('PATCH', `/crm/leads/${card.id}`, { camposExtras: { ...det.camposExtras, 'CPF da cliente': '111.444.777-35', 'Observação interna': 'cliente difícil' } });
+    await entrar(det.consultoraId);
+    const visto = (await ok('GET', '/portal/leads')).find((x) => x.id === card.id).interesse.map(([k]) => k);
+    assert.ok(visto.includes('O que procura') && !visto.some((k) => /CPF|Observa/.test(k)), 'dado interno não vai para o portal');
     await ok('POST', `/portal/leads/${card.id}/resultado`, { deuCerto: true });
     token = admin;
     det = await ok('GET', `/crm/leads/${card.id}`);

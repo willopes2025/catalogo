@@ -30,7 +30,8 @@ export class DistribuicaoController {
   async listar() {
     const funis = await this.db.select({ id: crmFunis.id, nome: crmFunis.nome, tipo: crmFunis.tipo }).from(crmFunis).where(eq(crmFunis.ativo, true));
     const cfgs = await this.db.select().from(crmDistribuicoes);
-    return funis.map((f) => ({ funil: f, config: cfgs.find((c) => c.funilId === f.id) ?? null }));
+    const fora = await this.svc.semCidade();
+    return { funis: funis.map((f) => ({ funil: f, config: cfgs.find((c) => c.funilId === f.id) ?? null })), semCidade: { total: fora.length, lista: fora.slice(0, 30) } };
   }
 
   @Put('distribuicao/:funilId')

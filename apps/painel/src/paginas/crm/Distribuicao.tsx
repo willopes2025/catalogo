@@ -11,7 +11,7 @@ const PADRAO: Config = { ativo: false, destino: 'consultoras', raioKm: 50, prazo
 
 /** CRM › Configurar › Distribuição: por funil, para quem e com que regras o lead novo é entregue. */
 export function Distribuicao() {
-  const q = useQuery({ queryKey: ['crm', 'distribuicao'], queryFn: () => api<{ funil: { id: string; nome: string; tipo: string }; config: Config | null }[]>('/crm/distribuicao') });
+  const q = useQuery({ queryKey: ['crm', 'distribuicao'], queryFn: () => api<{ funis: { funil: { id: string; nome: string; tipo: string }; config: Config | null }[]; semCidade: { total: number; lista: { id: string; nome: string; cidade: string | null; uf: string | null }[] } }>('/crm/distribuicao') });
   if (q.isLoading) return <Carregando />;
   if (q.error) return <Erro erro={q.error} />;
   return (
@@ -20,7 +20,16 @@ export function Distribuicao() {
         O lead novo do funil vai para a consultora (ou líder) ativa mais perto, pela cidade dele (do formulário, da candidatura ou do card; sem cidade, pela região do DDD).
         Ela recebe o aviso no WhatsApp e aceita no portal; só depois de aceitar vê o telefone. Sem aceite no prazo, passa para a próxima; esgotadas as tentativas, volta para a equipe com a etiqueta "Sem consultora".
       </p>
-      {q.data!.map((x) => <FunilDistribuicao key={x.funil.id} funil={x.funil} config={x.config} />)}
+      {q.data!.semCidade.total > 0 && (
+        <details className="aviso alerta">
+          <summary><b>{q.data!.semCidade.total} consultora(s) ativa(s) não recebem leads</b>: a cidade do cadastro está vazia ou não foi reconhecida. Toque para ver.</summary>
+          <div style={{ marginTop: 6, display: 'flex', flexWrap: 'wrap', gap: '4px 14px' }}>
+            {q.data!.semCidade.lista.map((p) => <Link key={p.id} to={`/rede/${p.id}`}>{p.nome}{p.cidade ? ` (${p.cidade}${p.uf ? `/${p.uf}` : ''})` : ' (sem cidade)'}</Link>)}
+            {q.data!.semCidade.total > q.data!.semCidade.lista.length && <span className="muted">e mais {q.data!.semCidade.total - q.data!.semCidade.lista.length}</span>}
+          </div>
+        </details>
+      )}
+      {q.data!.funis.map((x) => <FunilDistribuicao key={x.funil.id} funil={x.funil} config={x.config} />)}
     </div>
   );
 }

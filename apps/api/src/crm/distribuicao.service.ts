@@ -158,14 +158,19 @@ export class DistribuicaoService implements OnModuleInit, OnModuleDestroy {
     const cfgs = await this.db.select().from(crmDistribuicoes);
     let movidos = 0;
     for (const cfg of cfgs) {
-      const vencidos = await this.db
-        .select()
-        .from(crmLeads)
-        .where(and(eq(crmLeads.funilId, cfg.funilId), eq(crmLeads.status, 'aberto'), eq(crmLeads.distribuicao, 'aguardando'), lt(crmLeads.distribuidoEm, new Date(Date.now() - cfg.prazoMinutos * 60_000))));
-      for (const l of vencidos) {
-        const [quem] = l.consultoraId ? await this.db.select({ nome: pessoas.nome }).from(pessoas).where(eq(pessoas.id, l.consultoraId)) : [];
+      const limite = new Date(Date.now() - cfg.prazoMinutos * 60_000);
+      const vencidos = await this.db.select({ id: crmLeads.id, consultoraId: crmLeads.consultoraId }).from(crmLeads).where(and(eq(crmLeads.funilId, cfg.funilId), eq(crmLeads.status, 'aberto'), eq(crmLeads.distribuicao, 'aguardando'), lt(crmLeads.distribuidoEm, limite)));
+      for (const v of vencidos) {
+        // Tira dela numa tacada só: se ela aceitou neste meio-tempo, a linha não bate e o aceite vale.
+        const [l] = await this.db
+          .update(crmLeads)
+          .set({ consultoraId: null, distribuicao: 'devolvido', atualizadoEm: new Date() })
+          .where(and(eq(crmLeads.id, v.id), eq(crmLeads.distribuicao, 'aguardando'), lt(crmLeads.distribuidoEm, limite)))
+          .returning();
+        if (!l) continue;
+        const [quem] = v.consultoraId ? await this.db.select({ nome: pessoas.nome }).from(pessoas).where(eq(pessoas.id, v.consultoraId)) : [];
         await this.crm.evento(l.id, 'sistema', `${quem?.nome ?? 'A consultora'} não aceitou em ${cfg.prazoMinutos} min.`);
-        await this.proxima(l, cfg);
+        await this.proxima(l, cfg).catch((e) => this.log.warn(`Lead ${l.numero}: ${(e as Error).message}`));
         movidos++;
       }
     }
@@ -181,7 +186,15 @@ export class DistribuicaoService implements OnModuleInit, OnModuleDestroy {
       await this.crm.adicionarEtiqueta(l.id, 'Sem consultora');
       return null;
     }
-    return this.distribuir(l.id);
+    const r = await this.distribuir(l.id);
+    if (!r) await this.crm.adicionarEtiqueta(l.id, 'Sem consultora');
+    return r;
+  }
+
+  /** Consultoras ativas que nunca recebem porque a cidade do cadastro está vazia ou não foi reconhecida. */
+  async semCidade() {
+    const r = await this.db.select({ id: pessoas.id, nome: pessoas.nome, cidade: pessoas.cidade, uf: pessoas.uf }).from(pessoas).where(and(eq(pessoas.tipo, 'representante'), eq(pessoas.status, 'ativo')));
+    return r.filter((p) => localizar({ cidade: p.cidade, uf: p.uf })?.origem !== 'cidade');
   }
 
   /** A equipe tira o lead da consultora. */
