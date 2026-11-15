@@ -1412,6 +1412,43 @@ test('RH e ponto: cadastro, login pelo CPF, batida com foto e GPS, ajustes, espe
     assert.match(txt, /^01\|1\|/);
     assert.match(txt, /\|I\|[^|]*\|Esqueceu de bater/, 'inclusões com motivo no AEJ');
     assert.match(txt, /\|D\|000\|O\|\|Bateu por engano/, 'desconsideração com motivo');
+
+    // Certificado A1 da empresa: o AFD sai num .zip com a assinatura .p7s, conferida pelo OpenSSL.
+    const forge = createRequire(import.meta.url)('node-forge');
+    const pfx = (cnpj, validade = '2030-01-01') => {
+      const k = forge.pki.rsa.generateKeyPair(1024);
+      const c = forge.pki.createCertificate();
+      c.publicKey = k.publicKey; c.serialNumber = '0a0b';
+      c.validity.notBefore = new Date('2026-01-01'); c.validity.notAfter = new Date(validade);
+      const n = [{ shortName: 'CN', value: `EMPRESA TESTE:${cnpj}` }];
+      c.setSubject(n); c.setIssuer(n); c.sign(k.privateKey, forge.md.sha256.create());
+      return Buffer.from(forge.asn1.toDer(forge.pkcs12.toPkcs12Asn1(k.privateKey, [c], 'senha-cert', { algorithm: '3des' })).getBytes(), 'binary').toString('base64');
+    };
+    const cnpjEmp = emp.cnpj.replace(/\D/g, '');
+    assert.equal((await chamar('POST', `/rh/certificados/${emp.id}`, { base64: pfx(cnpjEmp), senha: 'errada' })).status, 400, 'senha errada');
+    assert.match((await chamar('POST', `/rh/certificados/${emp.id}`, { base64: pfx('99888777000166'), senha: 'senha-cert' })).dados.mensagem, /outra empresa/);
+    assert.match((await chamar('POST', `/rh/certificados/${emp.id}`, { base64: pfx(cnpjEmp, '2026-02-01'), senha: 'senha-cert' })).dados.mensagem, /venceu/);
+    const cert = await ok('POST', `/rh/certificados/${emp.id}`, { base64: pfx(cnpjEmp), senha: 'senha-cert' });
+    assert.equal(cert.cnpj, cnpjEmp);
+    const lista = await ok('GET', '/rh/certificados');
+    assert.equal(lista.find((x) => x.empresaId === emp.id).situacao, 'ok');
+    assert.ok(!JSON.stringify(lista).includes('senha-cert') && !JSON.stringify(lista).includes('pfx'), 'nem arquivo nem senha voltam');
+    const zip = await fetch(`${API}/rh/afd?empresaId=${emp.id}&de=${menos(80)}&ate=${hoje}`, { headers: { authorization: `Bearer ${token}` } });
+    assert.equal(zip.headers.get('content-type'), 'application/zip');
+    const { unzipSync } = createRequire(import.meta.url)('fflate');
+    const arqs = unzipSync(new Uint8Array(await zip.arrayBuffer()));
+    const nomeAfd = Object.keys(arqs).find((n) => !n.endsWith('.p7s'));
+    assert.ok(arqs[`${nomeAfd}.p7s`], 'assinatura com o mesmo nome + .p7s');
+    const { mkdtempSync, writeFileSync } = await import('node:fs');
+    const { execFileSync } = await import('node:child_process');
+    const dir = mkdtempSync('/tmp/afd-');
+    writeFileSync(`${dir}/a.txt`, arqs[nomeAfd]);
+    writeFileSync(`${dir}/a.p7s`, arqs[`${nomeAfd}.p7s`]);
+    execFileSync('openssl', ['cms', '-verify', '-binary', '-inform', 'DER', '-in', `${dir}/a.p7s`, '-content', `${dir}/a.txt`, '-noverify', '-out', '/dev/null'], { stdio: 'pipe' });
+    const prevAfd = await ok('POST', '/rh/contabilidade/previa', { competencia: mesPassado, itens: ['afd'] });
+    assert.ok(prevAfd.arquivos.some((a) => a.nome.endsWith('.p7s')), 'pacote da contabilidade leva a assinatura');
+    await ok('DELETE', `/rh/certificados/${emp.id}`);
+    assert.equal((await fetch(`${API}/rh/afd?empresaId=${emp.id}&de=${menos(80)}&ate=${hoje}`, { headers: { authorization: `Bearer ${token}` } })).headers.get('content-type'), 'text/plain; charset=ISO-8859-1');
   }
   const previa = await ok('POST', '/rh/contabilidade/previa', { competencia: mesPassado, itens: ['ponto_resumo', 'ponto_diario', 'ocorrencias', 'movimentacoes', 'vendas', 'comissoes', 'documentos'] });
   const nomes = previa.arquivos.map((a) => a.nome);

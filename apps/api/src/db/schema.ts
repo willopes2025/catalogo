@@ -1552,3 +1552,18 @@ export const jueriHistoricoItens = pgTable(
   },
   (t) => ({ porHist: index('jueri_hist_itens_idx').on(t.historicoId), porProduto: index('jueri_hist_itens_prod_idx').on(t.produtoId) }),
 );
+
+/** Certificado A1 (e-CNPJ) de cada empresa para assinar o AFD e o AEJ. Arquivo e senha guardados cifrados. */
+export const rhCertificados = pgTable('rh_certificados', {
+  empresaId: uuid('empresa_id').primaryKey().references(() => empresas.id),
+  pfxCifrado: text('pfx_cifrado').notNull(),
+  senhaCifrada: text('senha_cifrada').notNull(),
+  titular: text('titular').notNull(),
+  cnpj: text('cnpj'),
+  emissor: text('emissor').notNull(),
+  serie: text('serie').notNull(),
+  validoAte: timestamp('valido_ate', { withTimezone: true }).notNull(),
+  icpBrasil: boolean('icp_brasil').notNull(),
+  usuarioId: uuid('usuario_id').references(() => usuarios.id),
+  atualizadoEm: atualizadoEm(),
+});

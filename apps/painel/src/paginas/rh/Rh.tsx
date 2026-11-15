@@ -262,6 +262,8 @@ function Configurar() {
         {editar && <div className="l4"><button className="botao" disabled={m.isPending} onClick={() => m.mutate({ rota: '/rh/config', metodo: 'PUT', corpo: r })}>Salvar regras</button></div>}
       </div>
 
+      <Certificados />
+
       <div className="cartao">
         <div className="flex entre"><h3>Escalas (horários)</h3>{editar && !escala && <button className="botao claro pequeno" onClick={() => setEscala({ nome: '', dias: [...DIAS_PADRAO] })}>+ Nova escala</button>}</div>
         {escala ? (
@@ -336,6 +338,69 @@ function Configurar() {
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+/** Certificado A1 (e-CNPJ) de cada empresa: assina o AFD e o AEJ com .p7s (Portaria 671). */
+function Certificados() {
+  const qc = useQueryClient();
+  const editar = pode('rh', 'editar');
+  const q = useQuery({ queryKey: ['rh', 'certificados'], queryFn: () => api<any[]>('/rh/certificados') });
+  const [enviando, setEnviando] = useState<{ empresaId: string; base64: string; arquivo: string; senha: string } | null>(null);
+  const salvar = useMutation({
+    mutationFn: () => api(`/rh/certificados/${enviando!.empresaId}`, { corpo: { base64: enviando!.base64, senha: enviando!.senha } }),
+    onSuccess: () => { setEnviando(null); qc.invalidateQueries({ queryKey: ['rh', 'certificados'] }); },
+  });
+  const remover = useMutation({ mutationFn: (id: string) => api(`/rh/certificados/${id}`, { metodo: 'DELETE' }), onSuccess: () => qc.invalidateQueries({ queryKey: ['rh', 'certificados'] }) });
+  const ler = (empresaId: string, f?: File) => {
+    if (!f) return;
+    const r = new FileReader();
+    r.onload = () => setEnviando({ empresaId, base64: String(r.result), arquivo: f.name, senha: '' });
+    r.readAsDataURL(f);
+  };
+  const SIT: Record<string, [string, string]> = { ok: ['Válido', 'ok'], vencendo: ['Vence em menos de 30 dias', 'alerta'], vencido: ['Vencido', 'erro'], sem: ['Sem certificado', 'alerta'] };
+  return (
+    <div className="cartao">
+      <h3>Certificado digital (assinatura do AFD e do AEJ)</h3>
+      <p className="muted" style={{ fontSize: 13 }}>
+        A Portaria 671 pede que o AFD e o AEJ sejam assinados com o certificado ICP-Brasil da empresa (e-CNPJ A1, arquivo .pfx). Com ele aqui, os arquivos saem num .zip com a assinatura .p7s e vão assim para a contabilidade.
+        O arquivo e a senha ficam guardados cifrados e nunca voltam para a tela.
+      </p>
+      {q.error ? <Erro erro={q.error} /> : (
+        <table className="tabela" style={{ marginTop: 8 }}>
+          <tbody>
+            {q.data?.map((c) => (
+              <tr key={c.empresaId}>
+                <td><b>{c.empresa}</b>{c.titular && <div className="muted" style={{ fontSize: 12 }}>{c.titular} · {c.emissor}{!c.icpBrasil && ' · não parece ICP-Brasil'}</div>}</td>
+                <td><span className={`etiqueta ${SIT[c.situacao][1]}`}>{SIT[c.situacao][0]}</span>{c.validoAte && <div className="muted" style={{ fontSize: 12 }}>até {new Date(c.validoAte).toLocaleDateString('pt-BR')}</div>}</td>
+                <td style={{ textAlign: 'right' }}>
+                  {editar && (
+                    <div className="flex" style={{ gap: 6, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+                      <label className="botao claro pequeno" style={{ cursor: 'pointer' }}>
+                        {c.titular ? 'Trocar' : 'Enviar .pfx'}
+                        <input type="file" accept=".pfx,.p12,application/x-pkcs12" hidden onChange={(e) => ler(c.empresaId, e.target.files?.[0])} />
+                      </label>
+                      {c.titular && <button className="botao claro pequeno" disabled={remover.isPending} onClick={() => window.confirm(`Remover o certificado de ${c.empresa}? Os arquivos do ponto voltam a sair sem assinatura.`) && remover.mutate(c.empresaId)}>Remover</button>}
+                    </div>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      {enviando && (
+        <div className="form" style={{ marginTop: 10 }}>
+          <Campo rotulo={`Senha do certificado (${enviando.arquivo})`} className="l2"><input type="password" autoComplete="off" autoFocus value={enviando.senha} onChange={(e) => setEnviando({ ...enviando, senha: e.target.value })} /></Campo>
+          <div className="l2 flex" style={{ gap: 8, alignItems: 'flex-end' }}>
+            <button className="botao" disabled={!enviando.senha || salvar.isPending} onClick={() => salvar.mutate()}>{salvar.isPending ? 'Conferindo…' : 'Conferir e guardar'}</button>
+            <button className="botao claro" onClick={() => setEnviando(null)}>Cancelar</button>
+          </div>
+          {salvar.error && <div className="l4"><Erro erro={salvar.error} /></div>}
+        </div>
+      )}
+      {remover.error && <Erro erro={remover.error} />}
     </div>
   );
 }

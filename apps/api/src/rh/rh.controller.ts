@@ -1,3 +1,4 @@
+import { zipSync } from 'fflate';
 import { BadRequestException, Body, Controller, Delete, ForbiddenException, Get, Inject, NotFoundException, Param, ParseUUIDPipe, Patch, Post, Put, Query, Req, Res } from '@nestjs/common';
 import { existsSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
@@ -361,6 +362,13 @@ export class RhController {
   async afd(@Query('empresaId', ParseUUIDPipe) empresaId: string, @Query('de') de: string, @Query('ate') ate: string, @Res() res: Response) {
     validar(z.object({ de: data, ate: data }), { de, ate });
     const a = await this.rh.afd(empresaId, de, ate);
+    // Com certificado: um .zip com o arquivo e a assinatura .p7s dos mesmos bytes.
+    const assinatura = await this.rh.assinar(empresaId, a);
+    if (assinatura) {
+      res.setHeader('Content-Disposition', `attachment; filename="${a.nome.replace(/\.txt$/i, '')}.zip"`);
+      res.setHeader('Content-Type', 'application/zip');
+      return res.end(Buffer.from(zipSync({ [a.nome]: a.conteudo, [assinatura.nome]: assinatura.conteudo })));
+    }
     res.setHeader('Content-Disposition', `attachment; filename="${a.nome}"`);
     res.setHeader('Content-Type', 'text/plain; charset=ISO-8859-1');
     res.end(a.conteudo);
@@ -371,9 +379,36 @@ export class RhController {
   async aej(@Query('empresaId', ParseUUIDPipe) empresaId: string, @Query('de') de: string, @Query('ate') ate: string, @Res() res: Response) {
     validar(z.object({ de: data, ate: data }), { de, ate });
     const a = await this.rh.aej(empresaId, de, ate);
+    // Com certificado: um .zip com o arquivo e a assinatura .p7s dos mesmos bytes.
+    const assinatura = await this.rh.assinar(empresaId, a);
+    if (assinatura) {
+      res.setHeader('Content-Disposition', `attachment; filename="${a.nome.replace(/\.txt$/i, '')}.zip"`);
+      res.setHeader('Content-Type', 'application/zip');
+      return res.end(Buffer.from(zipSync({ [a.nome]: a.conteudo, [assinatura.nome]: assinatura.conteudo })));
+    }
     res.setHeader('Content-Disposition', `attachment; filename="${a.nome}"`);
     res.setHeader('Content-Type', 'text/plain; charset=ISO-8859-1');
     res.end(a.conteudo);
+  }
+
+  /** Certificado A1 (e-CNPJ) de cada empresa: assina o AFD e o AEJ (.p7s). */
+  @Get('certificados')
+  @Permissao('rh', 'ver')
+  certificados() {
+    return this.rh.certificados();
+  }
+
+  @Post('certificados/:empresaId')
+  @Permissao('rh', 'editar')
+  salvarCertificado(@Usuario() u: UsuarioLogado, @Param('empresaId', ParseUUIDPipe) empresaId: string, @Body() body: unknown) {
+    const d = validar(z.object({ base64: z.string().min(100, 'Escolha o arquivo do certificado (.pfx)'), senha: z.string().min(1, 'Informe a senha do certificado').max(200) }), body);
+    return this.rh.salvarCertificado(empresaId, Buffer.from(d.base64.replace(/^data:[^;]*;base64,/, ''), 'base64'), d.senha, u.id);
+  }
+
+  @Delete('certificados/:empresaId')
+  @Permissao('rh', 'editar')
+  removerCertificado(@Usuario() u: UsuarioLogado, @Param('empresaId', ParseUUIDPipe) empresaId: string) {
+    return this.rh.removerCertificado(empresaId, u.id);
   }
 
   // ───────── Escalas, locais, feriados, configurações ─────────

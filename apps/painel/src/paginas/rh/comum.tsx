@@ -37,7 +37,8 @@ export async function abrirArquivo(url: string, opcoes: { metodo?: string; corpo
   if (opcoes.baixarComo) {
     const a = document.createElement('a');
     a.href = link;
-    a.download = opcoes.baixarComo;
+    // AFD/AEJ assinados vêm num .zip (arquivo + .p7s).
+    a.download = /zip/.test(r.headers.get('content-type') ?? '') ? opcoes.baixarComo.replace(/\.[a-z0-9]+$/i, '') + '.zip' : opcoes.baixarComo;
     a.click();
   } else window.open(link, '_blank', 'noopener');
   setTimeout(() => URL.revokeObjectURL(link), 60_000);

@@ -158,8 +158,16 @@ export class ContabilidadeService {
     }
 
     const empresasComFunc = [...new Set(funcs.map((f) => f.empresaId))];
-    for (const empresaId of itens.includes('afd') ? empresasComFunc : []) arquivos.push({ ...(await this.rh.afd(empresaId, de, ate)), mime: 'text/plain' });
-    for (const empresaId of itens.includes('aej') ? empresasComFunc : []) arquivos.push({ ...(await this.rh.aej(empresaId, de, ate)), mime: 'text/plain' });
+    for (const [chave, gerar] of [['afd', (e: string) => this.rh.afd(e, de, ate)], ['aej', (e: string) => this.rh.aej(e, de, ate)]] as const) {
+      if (!itens.includes(chave)) continue;
+      for (const empresaId of empresasComFunc) {
+        const a = await gerar(empresaId);
+        arquivos.push({ ...a, mime: 'text/plain' });
+        // Assinatura .p7s dos mesmos bytes, quando a empresa tem certificado.
+        const s = await this.rh.assinar(empresaId, a);
+        if (s) arquivos.push({ ...s, mime: 'application/pkcs7-signature' });
+      }
+    }
     if (itens.includes('afd') || itens.includes('aej')) resumo.push('Arquivos oficiais do ponto (AFD/AEJ)');
 
     // Nomes repetidos ganham número.

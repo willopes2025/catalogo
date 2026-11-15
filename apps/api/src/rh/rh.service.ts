@@ -6,8 +6,11 @@ import type { Tx } from '../db/client';
 import { AuditoriaService } from '../comum/auditoria.service';
 import { ArquivosService } from '../arquivos/arquivos.service';
 import { ConfiguracoesService } from '../configuracoes/configuracoes.service';
+import { SegredosService } from '../segredos/segredos.service';
+import { assinarCades, lerCertificado } from './assinatura';
 import {
   empresas,
+  rhCertificados,
   rhDocumentos,
   rhEscalas,
   rhFechamentos,
@@ -94,6 +97,7 @@ export class RhService {
     private readonly auditoria: AuditoriaService,
     private readonly arquivos: ArquivosService,
     private readonly config: ConfiguracoesService,
+    private readonly segredos: SegredosService,
   ) {}
 
   regras() {
@@ -314,6 +318,53 @@ export class RhService {
     }
     await this.auditoria.registrar({ usuarioId, acao: 'fechar_ponto', entidade: 'rh_ponto', dados: { competencia, funcionarios: alvo.length } });
     return { fechados: alvo.length, pendencias };
+  }
+
+  // ───────── Certificado A1 (assinatura do AFD/AEJ) ─────────
+
+  async certificados() {
+    const linhas = await this.db
+      .select({ empresaId: empresas.id, empresa: empresas.nome, cnpjEmpresa: empresas.cnpj, titular: rhCertificados.titular, cnpj: rhCertificados.cnpj, emissor: rhCertificados.emissor, validoAte: rhCertificados.validoAte, icpBrasil: rhCertificados.icpBrasil, atualizadoEm: rhCertificados.atualizadoEm })
+      .from(empresas)
+      .leftJoin(rhCertificados, eq(rhCertificados.empresaId, empresas.id))
+      .orderBy(asc(empresas.nome));
+    const agora = Date.now();
+    return linhas.map((l) => ({ ...l, situacao: !l.titular ? 'sem' : l.validoAte!.getTime() < agora ? 'vencido' : l.validoAte!.getTime() - agora < 30 * 86_400_000 ? 'vencendo' : 'ok' }));
+  }
+
+  async salvarCertificado(empresaId: string, pfx: Buffer, senha: string, usuarioId: string) {
+    const emp = await this.empregador(empresaId);
+    if (pfx.length > 200_000) throw new BadRequestException('Arquivo grande demais para um certificado A1 (.pfx).');
+    let c: ReturnType<typeof lerCertificado>;
+    try {
+      c = lerCertificado(pfx, senha);
+    } catch (e) {
+      throw new BadRequestException((e as Error).message);
+    }
+    if (c.validoAte.getTime() < Date.now()) throw new BadRequestException(`Este certificado venceu em ${c.validoAte.toLocaleDateString('pt-BR')}.`);
+    // e-CNPJ da matriz assina pelas filiais: basta a mesma raiz (8 primeiros dígitos).
+    if (c.cnpj && c.cnpj.slice(0, 8) !== so(emp.cnpj).slice(0, 8)) throw new BadRequestException(`O certificado é do CNPJ ${c.cnpj}, de outra empresa que não ${emp.razaoSocial}.`);
+    // Confere que assina de verdade antes de guardar.
+    assinarCades(Buffer.from('teste'), c);
+    const valores = { pfxCifrado: this.segredos.cifrar(pfx.toString('base64')), senhaCifrada: this.segredos.cifrar(senha), titular: c.titular, cnpj: c.cnpj, emissor: c.emissor, serie: c.serie, validoAte: c.validoAte, icpBrasil: c.icpBrasil, usuarioId, atualizadoEm: new Date() };
+    await this.db.insert(rhCertificados).values({ empresaId, ...valores }).onConflictDoUpdate({ target: rhCertificados.empresaId, set: valores });
+    await this.auditoria.registrar({ usuarioId, acao: 'editar', entidade: 'rh_certificado', entidadeId: empresaId, dados: { titular: c.titular, validoAte: c.validoAte, emissor: c.emissor } });
+    return { titular: c.titular, cnpj: c.cnpj, emissor: c.emissor, validoAte: c.validoAte, icpBrasil: c.icpBrasil };
+  }
+
+  async removerCertificado(empresaId: string, usuarioId: string) {
+    await this.db.delete(rhCertificados).where(eq(rhCertificados.empresaId, empresaId));
+    await this.auditoria.registrar({ usuarioId, acao: 'excluir', entidade: 'rh_certificado', entidadeId: empresaId });
+    return { ok: true };
+  }
+
+  /** Assinatura .p7s de um arquivo do ponto, se a empresa tiver certificado válido. */
+  async assinar(empresaId: string, arquivo: { nome: string; conteudo: Buffer }) {
+    const [r] = await this.db.select().from(rhCertificados).where(eq(rhCertificados.empresaId, empresaId));
+    if (!r) return null;
+    if (r.validoAte.getTime() < Date.now()) throw new BadRequestException(`O certificado da empresa venceu em ${r.validoAte.toLocaleDateString('pt-BR')}. Envie o novo em RH › Configurar.`);
+    const c = lerCertificado(Buffer.from(this.segredos.decifrar(r.pfxCifrado), 'base64'), this.segredos.decifrar(r.senhaCifrada));
+    return { nome: `${arquivo.nome}.p7s`, conteudo: assinarCades(arquivo.conteudo, c) };
   }
 
   // ───────── Arquivos oficiais ─────────
