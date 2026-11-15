@@ -5,6 +5,9 @@ import { apiPortal } from './api';
 /** Rodando dentro do app da Play Store / App Store (não no navegador). */
 export const noApp = () => Capacitor.isNativePlatform();
 
+/** O app Android só recebe notificações quando foi gerado com o Firebase (marca no navegador do app). */
+const podeNotificar = () => Capacitor.getPlatform() === 'ios' || !/AritanaPush\/0/.test(navigator.userAgent);
+
 const CHAVE_TOKEN = 'aritana.portal.push';
 let ligado = false;
 
@@ -13,7 +16,7 @@ let ligado = false;
  * Tocar na notificação abre a tela certa do portal. No navegador não faz nada.
  */
 export async function ligarNotificacoes(abrir: (link: string) => void) {
-  if (!noApp() || ligado) return;
+  if (!noApp() || !podeNotificar() || ligado) return;
   ligado = true;
   try {
     await PushNotifications.addListener('registration', (t) => {

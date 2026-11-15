@@ -1,4 +1,5 @@
 import type { CapacitorConfig } from '@capacitor/cli';
+import { existsSync } from 'node:fs';
 
 /**
  * App da representante: abre o portal da representante do sistema (o mesmo do navegador).
@@ -8,6 +9,10 @@ import type { CapacitorConfig } from '@capacitor/cli';
  * APP_URL muda o endereço (ex.: homologação). O ID do app não pode mudar depois de publicado.
  */
 const url = process.env.APP_URL ?? 'https://aritana.wideic.com/portal';
+
+// Sem o google-services.json o Android fecha o app ao registrar notificações.
+// O portal lê esta marca no navegador do app e só registra quando o Firebase está no app.
+const firebase = existsSync('android/app/google-services.json'); // caminho relativo: o cap roda dentro de app-representante
 
 const config: CapacitorConfig = {
   appId: 'br.com.aritanaonline.representante',
@@ -19,8 +24,8 @@ const config: CapacitorConfig = {
     allowNavigation: [new URL(url).host],
     errorPath: 'sem-internet.html',
   },
-  android: { allowMixedContent: false },
-  ios: { contentInset: 'automatic' },
+  android: { allowMixedContent: false, appendUserAgent: `AritanaApp AritanaPush/${firebase ? 1 : 0}` },
+  ios: { contentInset: 'automatic', appendUserAgent: 'AritanaApp AritanaPush/1' },
   plugins: {
     PushNotifications: { presentationOptions: ['badge', 'sound', 'alert'] },
   },
