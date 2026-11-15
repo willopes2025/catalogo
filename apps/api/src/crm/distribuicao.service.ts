@@ -6,6 +6,7 @@ import { distanciaKm, localizar, type Ponto } from '../geo/geo';
 import { urlPublica } from '../comum/url';
 import { CanaisService } from './canais.service';
 import { CrmService } from './crm.service';
+import { PushService } from '../portal/push.service';
 
 export type Distribuicao = typeof crmDistribuicoes.$inferSelect;
 type Lead = typeof crmLeads.$inferSelect;
@@ -37,6 +38,7 @@ export class DistribuicaoService implements OnModuleInit, OnModuleDestroy {
     @Inject(DB) private readonly db: Db,
     private readonly crm: CrmService,
     private readonly canais: CanaisService,
+    private readonly push: PushService,
   ) {}
 
   onModuleInit() {
@@ -128,6 +130,7 @@ export class DistribuicaoService implements OnModuleInit, OnModuleDestroy {
       .where(eq(crmLeads.id, leadId));
     const longe = escolhida.distanciaKm >= 0 ? ` (${escolhida.distanciaKm.toLocaleString('pt-BR')} km${ponto?.origem === 'ddd' ? ', pela região do telefone' : ''})` : '';
     await this.crm.evento(leadId, 'sistema', `Distribuído para ${escolhida.nome}${escolhida.cidade ? ` de ${escolhida.cidade}` : ''}${longe}${opcoes.pessoaId ? ' pela equipe' : ''}. Prazo para aceitar: ${cfg.prazoMinutos} min.`, opcoes.usuarioId);
+    void this.push.paraPessoa(escolhida.id, { titulo: 'Cliente perto de você', texto: `Aceite em até ${cfg.prazoMinutos} min no app, senão passa para outra pessoa.`, link: '/portal/leads' });
     if (cfg.avisarWhatsapp && escolhida.telefone) await this.avisar(l, escolhida, cfg as Distribuicao, ponto).catch((e) => this.crm.evento(leadId, 'sistema', `Aviso para ${escolhida!.nome} não foi enviado: ${(e as Error).message}`));
     return escolhida;
   }

@@ -1,0 +1,98 @@
+# App da representante (Android e iPhone).
+# Roda sozinho quando a pasta app-representante muda, ou à mão em Actions › "App da representante" › Run workflow.
+#
+# Sem segredos configurados, gera um APK de teste (instala direto no Android) e confere que o iPhone compila.
+# Com os segredos (Settings › Secrets and variables › Actions), gera também o arquivo para a Play Store:
+#   ANDROID_KEYSTORE_BASE64   keystore de assinatura em base64 (guarde o original: sem ele não dá para atualizar o app)
+#   ANDROID_KEYSTORE_SENHA    senha do keystore
+#   ANDROID_CHAVE_ALIAS       alias da chave
+#   ANDROID_CHAVE_SENHA       senha da chave
+#   GOOGLE_SERVICES_JSON      conteúdo do google-services.json do Firebase (notificações no Android)
+name: App da representante
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'app-representante/**'
+      - '.github/workflows/app-representante.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    env:
+      # "sim" quando o keystore de assinatura foi cadastrado nos segredos do repositório.
+      TEM_CHAVE: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' && 'sim' || 'nao' }}
+    defaults:
+      run:
+        working-directory: app-representante
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app-representante/package-lock.json
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - run: npm ci
+      - run: npx cap sync android
+      - name: Firebase (notificações)
+        env:
+          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
+        run: |
+          if [ -n "$GOOGLE_SERVICES_JSON" ]; then printf '%s' "$GOOGLE_SERVICES_JSON" > android/app/google-services.json; echo "google-services.json aplicado"; else echo "Sem GOOGLE_SERVICES_JSON: o app funciona, mas sem notificações."; fi
+      - name: APK de teste
+        working-directory: app-representante/android
+        run: ./gradlew --no-daemon assembleDebug
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aritana-teste-apk
+          path: app-representante/android/app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 14
+      - name: Arquivo para a Play Store (assinado)
+        if: ${{ env.TEM_CHAVE == 'sim' }}
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_SENHA: ${{ secrets.ANDROID_KEYSTORE_SENHA }}
+          ANDROID_CHAVE_ALIAS: ${{ secrets.ANDROID_CHAVE_ALIAS }}
+          ANDROID_CHAVE_SENHA: ${{ secrets.ANDROID_CHAVE_SENHA }}
+        working-directory: app-representante/android
+        run: |
+          echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/aritana.keystore"
+          ./gradlew --no-daemon bundleRelease \
+            -Pandroid.injected.signing.store.file="$RUNNER_TEMP/aritana.keystore" \
+            -Pandroid.injected.signing.store.password="$ANDROID_KEYSTORE_SENHA" \
+            -Pandroid.injected.signing.key.alias="$ANDROID_CHAVE_ALIAS" \
+            -Pandroid.injected.signing.key.password="$ANDROID_CHAVE_SENHA"
+          rm -f "$RUNNER_TEMP/aritana.keystore"
+      - uses: actions/upload-artifact@v4
+        if: ${{ hashFiles('app-representante/android/app/build/outputs/bundle/release/*.aab') != '' }}
+        with:
+          name: aritana-play-store-aab
+          path: app-representante/android/app/build/outputs/bundle/release/*.aab
+          retention-days: 30
+
+  ios:
+    # Confere que o app do iPhone compila (sem assinatura). Publicar na App Store exige o Xcode
+    # com a conta de desenvolvedor da Aritana; o passo a passo está em app-representante/PUBLICAR.md.
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: app-representante
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app-representante/package-lock.json
+      - run: npm ci
+      - run: npx cap sync ios
+      - name: Compilar para o simulador
+        run: xcodebuild -project ios/App/App.xcodeproj -scheme App -configuration Debug -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO build | tail -40

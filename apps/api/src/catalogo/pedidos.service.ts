@@ -9,6 +9,7 @@ import { categorias, crmCanais, crmFunis, locaisEstoque, maletaItens, maletas, p
 import { CanaisService } from '../crm/canais.service';
 import { CrmService } from '../crm/crm.service';
 import { VendasService, type Forma } from '../vendas/vendas.service';
+import { PushService } from '../portal/push.service';
 
 export type PedidoLink = typeof pedidosLink.$inferSelect;
 type Origem = 'maleta' | 'matriz';
@@ -47,6 +48,7 @@ export class PedidosLinkService implements OnModuleInit {
     private readonly canais: CanaisService,
     private readonly vendas: VendasService,
     private readonly auditoria: AuditoriaService,
+    private readonly push: PushService,
   ) {}
 
   /** Consultora cadastrada sem endereço de catálogo (cadastro antigo ou por planilha) ganha um, para o link funcionar. */
@@ -177,6 +179,7 @@ export class PedidosLinkService implements OnModuleInit {
       .returning();
     // Card no CRM (funil de clientes) e aviso para a consultora; falha aqui não perde o pedido.
     await this.cardNoCrm(pedido, rep).catch((e) => this.log.warn(`Pedido ${pedido.numero}: card não criado (${(e as Error).message})`));
+    void this.push.paraPessoa(rep.id, { titulo: `Pedido nº ${pedido.numero} pelo seu catálogo`, texto: `${pedido.clienteNome.split(' ')[0]} pediu ${pedido.itens.reduce((a, i) => a + i.quantidade, 0)} peça(s) · ${reais(pedido.total)}`, link: '/portal/leads' });
     await this.avisarConsultora(pedido, rep).catch((e) => this.log.warn(`Pedido ${pedido.numero}: aviso não enviado (${(e as Error).message})`));
     return { pedido, rep, mensagem: regras.mensagemFinal || null };
   }

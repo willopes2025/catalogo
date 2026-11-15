@@ -4,11 +4,25 @@
  * Uso: node test/simuladores.mjs (porta 3199)
  */
 import http from 'node:http';
+import http2 from 'node:http2';
+import crypto from 'node:crypto';
+import { writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 const recebidos = [];
 const wa = { n: 0, zapiConectado: true, webhookZapi: null };
 /** Evolution API (servidor próprio de WhatsApp por QR code): instâncias por nome. */
 const evo = new Map();
+// Notificações recebidas pelos simuladores do Firebase e da Apple
+const pushes = [];
+const fcmChaves = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
+const apnsChaves = crypto.generateKeyPairSync('ec', { namedCurve: 'prime256v1' });
+// O e2e lê as chaves privadas de teste daqui, para colar na tela de integrações.
+writeFileSync(join(tmpdir(), 'aritana-push-teste.json'), JSON.stringify({
+  firebase: { type: 'service_account', project_id: 'aritana-teste', client_email: 'push@aritana-teste.iam.gserviceaccount.com', private_key: fcmChaves.privateKey.export({ type: 'pkcs8', format: 'pem' }), token_uri: 'http://localhost:3199/fcm/token' },
+  apns: apnsChaves.privateKey.export({ type: 'pkcs8', format: 'pem' }),
+}));
 // Google: eventos criados na agenda simulada
 const googleEventos = new Map();
 let googleSeq = 0;
@@ -115,6 +129,26 @@ http
       return responder(res, 200, { ok: !!i });
     }
     if (url.pathname === '/__evo/apagar') { evo.delete(url.searchParams.get('i')); return responder(res, 200, { ok: true }); }
+    // ───── Firebase (FCM v1): token da conta de serviço e envio ─────
+    if (url.pathname === '/fcm/token' && req.method === 'POST') {
+      const f = new URLSearchParams(txt);
+      const partes = (f.get('assertion') ?? '').split('.');
+      if (f.get('grant_type') !== 'urn:ietf:params:oauth:grant-type:jwt-bearer' || partes.length !== 3) return responder(res, 400, { error: 'invalid_grant' });
+      // Confere a assinatura RS256 com a chave pública de teste (o sistema tem que assinar certo).
+      const ok = crypto.createVerify('RSA-SHA256').update(`${partes[0]}.${partes[1]}`).verify(fcmChaves.publicKey, Buffer.from(partes[2], 'base64url'));
+      if (!ok) return responder(res, 400, { error: 'invalid_grant', error_description: 'Invalid JWT Signature.' });
+      return responder(res, 200, { access_token: 'fcm-acesso', expires_in: 3600 });
+    }
+    const fcm = url.pathname.match(/^\/fcm\/v1\/projects\/([^/]+)\/messages:send$/);
+    if (fcm) {
+      if (req.headers.authorization !== 'Bearer fcm-acesso') return responder(res, 401, { error: { status: 'UNAUTHENTICATED' } });
+      const token = corpo?.message?.token;
+      if (String(token).startsWith('morto')) return responder(res, 404, { error: { status: 'NOT_FOUND', message: 'Requested entity was not found.' } });
+      pushes.push({ via: 'fcm', projeto: fcm[1], token, titulo: corpo.message.notification.title, texto: corpo.message.notification.body, link: corpo.message.data?.link });
+      return responder(res, 200, { name: `projects/${fcm[1]}/messages/1` });
+    }
+    if (url.pathname === '/__pushes') return responder(res, 200, pushes);
+
     // ───── Google (OAuth + Agenda + Meet) ─────
     if (url.pathname === '/google/token' && req.method === 'POST') {
       const f = new URLSearchParams(txt);
@@ -300,3 +334,23 @@ http
     responder(res, 404, { mensagem: 'rota do simulador não existe' });
   })
   .listen(3199, () => console.log('simuladores na porta 3199'));
+
+// Apple (APNs): HTTP/2 sem TLS na porta 3198, conferindo o JWT ES256 como a Apple faz.
+http2
+  .createServer((req, res) => {
+    let txt = '';
+    req.on('data', (c) => (txt += c));
+    req.on('end', () => {
+      const tok = String(req.headers.authorization ?? '').replace(/^bearer /, '');
+      const [h, c, a] = tok.split('.');
+      const valido = h && c && a && crypto.createVerify('SHA256').update(`${h}.${c}`).verify({ key: apnsChaves.publicKey, dsaEncoding: 'ieee-p1363' }, Buffer.from(a, 'base64url'));
+      if (!valido) { res.writeHead(403); return res.end(JSON.stringify({ reason: 'InvalidProviderToken' })); }
+      const token = req.url.replace('/3/device/', '');
+      if (token.startsWith('morto')) { res.writeHead(410); return res.end(JSON.stringify({ reason: 'Unregistered' })); }
+      const j = JSON.parse(txt || '{}');
+      pushes.push({ via: 'apns', token, topic: req.headers['apns-topic'], titulo: j.aps?.alert?.title, texto: j.aps?.alert?.body, link: j.link });
+      res.writeHead(200);
+      res.end();
+    });
+  })
+  .listen(3198);

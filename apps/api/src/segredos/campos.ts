@@ -78,6 +78,19 @@ export const INTEGRACOES: Integracao[] = [
     ],
   },
   {
+    chave: 'push',
+    nome: 'Notificações do app da representante',
+    descricao: 'Avisa no celular da representante (app da Play Store e da App Store): cliente perto, pedido pelo catálogo e compromisso marcado.',
+    ondeConseguir: 'Android: no Firebase da Aritana, Configurações do projeto › Contas de serviço › Gerar nova chave privada (arquivo .json); cole o conteúdo inteiro. iPhone: no Apple Developer da Aritana, Keys › criar chave com "Apple Push Notifications service (APNs)", baixe o .p8 e copie o Key ID e o Team ID.',
+    campos: [
+      { nome: 'FIREBASE_CONTA_SERVICO', rotulo: 'Firebase: conta de serviço (JSON inteiro)', secreto: true },
+      { nome: 'APNS_CHAVE_P8', rotulo: 'Apple: chave .p8 (conteúdo inteiro)', secreto: true },
+      { nome: 'APNS_KEY_ID', rotulo: 'Apple: Key ID' },
+      { nome: 'APNS_TEAM_ID', rotulo: 'Apple: Team ID' },
+      { nome: 'APNS_AMBIENTE', rotulo: 'Apple: ambiente', opcoes: [['producao', 'Produção (App Store e TestFlight)'], ['sandbox', 'Testes (app instalado pelo Xcode)']] },
+    ],
+  },
+  {
     chave: 'assertiva',
     nome: 'Assertiva (consulta de CPF)',
     descricao: 'Preenche o cadastro da representante pelo CPF.',

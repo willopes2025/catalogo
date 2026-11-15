@@ -176,6 +176,13 @@
       "when": 1794774203601,
       "tag": "0024_pedidos_link",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1794775641588,
+      "tag": "0025_portal_dispositivos",
+      "breakpoints": true
     }
   ]
 }

@@ -62,7 +62,7 @@ export class IntegracoesController {
   async salvar(@Usuario() u: UsuarioLogado, @Param('chave') chave: string, @Body() body: unknown) {
     const integ = INTEGRACOES.find((i) => i.chave === chave);
     if (!integ) throw new NotFoundException('Integração desconhecida.');
-    const { valores } = validar(z.object({ valores: z.record(z.string(), z.string().max(2000).nullable()) }), body);
+    const { valores } = validar(z.object({ valores: z.record(z.string(), z.string().max(8000, 'Valor grande demais').nullable()) }), body);
     const mudou: string[] = [];
     for (const [nome, valor] of Object.entries(valores)) {
       if (!NOMES_PERMITIDOS.has(nome) || !integ.campos.some((c) => c.nome === nome)) throw new BadRequestException(`Campo desconhecido: ${nome}`);

@@ -2007,6 +2007,64 @@ test('venda pelo link: afiliada vende do estoque da matriz com comissão; consul
   }
 });
 
+test('app da representante: registra o celular e recebe notificações pelo Firebase (Android) e pela Apple (iPhone)', async () => {
+  const admin = token;
+  const { readFileSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const chaves = JSON.parse(readFileSync(`${tmpdir()}/aritana-push-teste.json`, 'utf8'));
+  const pg = createRequire(import.meta.url)('pg');
+  const banco = new pg.Client({ connectionString: process.env.DATABASE_URL ?? 'postgres://aritana:aritana@localhost:5432/aritana_teste' });
+  await banco.connect();
+  try {
+    // Como alguém cola na tela: o JSON numa linha e a chave .p8 sem as quebras de linha.
+    await ok('PUT', '/integracoes/push', { valores: { FIREBASE_CONTA_SERVICO: JSON.stringify(chaves.firebase), APNS_CHAVE_P8: chaves.apns.replace(/\n/g, ' '), APNS_KEY_ID: 'ABC123DEFG', APNS_TEAM_ID: 'TEAM123456' } });
+    const rep = await ok('POST', '/pessoas', { tipo: 'representante', nome: 'Representante App Celular', telefone1: '27991239876', cidade: 'Vitória', uf: 'ES' });
+    const link = await ok('POST', `/portal/gerar-link/${rep.id}`);
+    token = (await ok('POST', `/portal/link/${link.token}`)).token;
+    const and = 'fcm_token_android_' + 'a'.repeat(40);
+    const ios = 'a1b2c3d4'.repeat(8);
+    assert.equal((await chamar('POST', '/portal/dispositivos', { token: 'curto', plataforma: 'android' })).status, 400);
+    assert.equal((await chamar('POST', '/portal/dispositivos', { token: 'x'.repeat(30) + '<script>', plataforma: 'android' })).status, 400);
+    await ok('POST', '/portal/dispositivos', { token: and, plataforma: 'android' });
+    await ok('POST', '/portal/dispositivos', { token: ios, plataforma: 'ios' });
+    await ok('POST', '/portal/dispositivos', { token: 'morto_android_' + 'b'.repeat(30), plataforma: 'android' });
+    await ok('POST', '/portal/dispositivos', { token: 'morto' + 'c'.repeat(59), plataforma: 'ios' });
+    await ok('POST', '/portal/dispositivos', { token: and, plataforma: 'android' }); // repetir não duplica
+    assert.equal((await banco.query('select count(*)::int as n from portal_dispositivos where pessoa_id = $1', [rep.id])).rows[0].n, 4);
+    token = admin;
+    // Compromisso marcado para ela: chega nos dois celulares.
+    await ok('POST', '/agenda', { tipo: 'acerto_video', inicio: new Date(Date.now() + 3 * 86400e3).toISOString(), duracaoMin: 30, online: true, link: 'https://meet.google.com/aaa-bbbb-ccc', pessoaId: rep.id, avisar: false, forcar: true });
+    let recebidas = [];
+    for (let i = 0; i < 40 && recebidas.length < 2; i++) {
+      await new Promise((r) => setTimeout(r, 100));
+      recebidas = (await (await fetch('http://localhost:3199/__pushes')).json()).filter((p) => p.token === and || p.token === ios);
+    }
+    const viaAndroid = recebidas.find((p) => p.via === 'fcm');
+    const viaIphone = recebidas.find((p) => p.via === 'apns');
+    assert.equal(viaAndroid?.titulo, 'Compromisso marcado', 'Android pelo Firebase (assinatura RS256 conferida pelo simulador)');
+    assert.equal(viaAndroid.projeto, 'aritana-teste');
+    assert.equal(viaIphone?.titulo, 'Compromisso marcado', 'iPhone pela Apple (JWT ES256 conferido pelo simulador)');
+    assert.equal(viaIphone.topic, 'br.com.aritanaonline.representante');
+    assert.equal(viaIphone.link, '/portal');
+    // Celulares com o app desinstalado saem da lista sozinhos.
+    for (let i = 0; i < 30; i++) {
+      if ((await banco.query('select count(*)::int as n from portal_dispositivos where pessoa_id = $1', [rep.id])).rows[0].n === 2) break;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    assert.equal((await banco.query('select count(*)::int as n from portal_dispositivos where pessoa_id = $1', [rep.id])).rows[0].n, 2);
+    // Saiu do app: aquele celular para de receber.
+    const link2 = await ok('POST', `/portal/gerar-link/${rep.id}`);
+    token = (await ok('POST', `/portal/link/${link2.token}`)).token;
+    await ok('POST', '/portal/dispositivos/sair', { token: ios });
+    assert.equal((await banco.query('select count(*)::int as n from portal_dispositivos where pessoa_id = $1', [rep.id])).rows[0].n, 1);
+    token = admin;
+    assert.ok(!JSON.stringify(await ok('GET', '/integracoes/status')).includes('PRIVATE KEY'), 'chaves nunca voltam para a tela');
+  } finally {
+    token = admin;
+    await banco.end();
+  }
+});
+
 test('implantação: apagar dados de teste exige APAGAR e mantém o que é configuração', async () => {
   assert.equal((await chamar('POST', '/implantacao/apagar-dados-de-teste', { confirmacao: 'apagar' })).status, 400);
   const bloq = await chamar('POST', '/implantacao/apagar-dados-de-teste', { confirmacao: 'APAGAR', manterProdutos: true });

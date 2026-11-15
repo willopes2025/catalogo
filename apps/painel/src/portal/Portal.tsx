@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, NavLink, Navigate, Route, Routes, useNavigate, useParams } from 'react-router-dom';
 import { data, reais } from '../formato';
 import { apiPortal, salvarSessaoPortal, sessaoPortal } from './api';
+import { desligarNotificacoes, ligarNotificacoes, noApp } from './app';
 import './portal.css';
 
 const msgErro = (e: unknown) => (e instanceof Error ? e.message : 'Algo deu errado. Tente de novo.');
@@ -103,6 +104,9 @@ function EntrarPorLink() {
 // ───── Área logada ─────
 
 function Area() {
+  const navegar = useNavigate();
+  // No app do celular: pede para notificar e registra o aparelho (no navegador não faz nada).
+  useEffect(() => { void ligarNotificacoes((link) => navegar(link)); }, [navegar]);
   // Contatos esperando o aceite: aparece no menu e faz a lista se atualizar sozinha.
   const leads = useQuery({ queryKey: ['p-leads'], queryFn: () => apiPortal<LeadPortal[]>('/leads'), refetchInterval: 60_000 });
   const pedidosNovos = useQuery({ queryKey: ['p-pedidos'], queryFn: () => apiPortal<PedidoPortal[]>('/pedidos-link'), refetchInterval: 60_000 });
@@ -202,7 +206,7 @@ function Inicio() {
         </div>
       )}
       <Instalar />
-      <button className="p-link p-centro" onClick={() => { salvarSessaoPortal(null); window.location.href = '/portal/entrar'; }}>Sair</button>
+      <button className="p-link p-centro" onClick={async () => { await desligarNotificacoes(); salvarSessaoPortal(null); window.location.href = '/portal/entrar'; }}>Sair</button>
     </>
   );
 }
@@ -216,7 +220,7 @@ function Instalar() {
     window.addEventListener('beforeinstallprompt', f);
     return () => window.removeEventListener('beforeinstallprompt', f);
   }, []);
-  if (instalado) return null;
+  if (instalado || noApp()) return null;
   const ios = /iphone|ipad/i.test(navigator.userAgent);
   if (!evento && !ios) return null;
   return (

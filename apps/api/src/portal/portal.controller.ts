@@ -17,6 +17,7 @@ import { PontosService } from '../pontos/pontos.service';
 import { DistribuicaoService } from '../crm/distribuicao.service';
 import { AgendaService } from '../agenda/agenda.service';
 import { PedidosLinkService } from '../catalogo/pedidos.service';
+import { PushService } from './push.service';
 import { acertos, categorias, crmContatos, crmFunis, crmLeads, documentos, locaisEstoque, maletas, niveis, pedidosPecas, pessoas, portalAcessos, premios, produtos, resgates, saldos, titulos } from '../db/schema';
 
 const sha256 = (t: string) => createHash('sha256').update(t).digest('hex');
@@ -42,6 +43,7 @@ export class PortalController {
     private readonly distribuicao: DistribuicaoService,
     private readonly agenda: AgendaService,
     private readonly pedidosLink: PedidosLinkService,
+    private readonly push: PushService,
   ) {}
 
   private sessao(p: { id: string; nome: string }) {
@@ -123,6 +125,27 @@ export class PortalController {
     await this.db.insert(portalAcessos).values({ pessoaId, tipo: 'link', hash: sha256(token), expiraEm: new Date(Date.now() + 7 * 86_400_000), criadoPor: u.id });
     await this.auditoria.registrar({ usuarioId: u.id, acao: 'gerar_link_portal', entidade: 'pessoa', entidadeId: pessoaId });
     return { token, caminho: `/portal/entrar/${token}`, telefone: p.telefone1, nome: p.nome };
+  }
+
+  // ───── App do celular: notificações ─────
+
+  /** O app avisa o token de notificação deste celular (Firebase no Android, Apple no iPhone). */
+  @RotaPortal()
+  @Post('dispositivos')
+  async registrarDispositivo(@Representante() r: RepresentanteLogada, @Body() body: unknown) {
+    const d = validar(z.object({ token: z.string().min(20).max(4096).regex(/^[A-Za-z0-9:_\-]+$/, 'Token inválido'), plataforma: z.enum(['android', 'ios']) }), body);
+    await this.push.registrar(r.rep, d.token, d.plataforma);
+    return { ok: true };
+  }
+
+  /** Ao sair do app, este celular para de receber as notificações dela. */
+  @RotaPortal()
+  @Post('dispositivos/sair')
+  async sairDispositivo(@Representante() r: RepresentanteLogada, @Body() body: unknown) {
+    const d = validar(z.object({ token: z.string().min(20).max(4096) }), body);
+    await this.push.remover(d.token);
+    void r;
+    return { ok: true };
   }
 
   // ───── Pedidos das clientes pelo catálogo dela ─────

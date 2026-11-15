@@ -1694,3 +1694,17 @@ export const pedidosLink = pgTable(
   },
   (t) => ({ porPessoa: index('pedidos_link_pessoa_idx').on(t.pessoaId, t.status), porData: index('pedidos_link_data_idx').on(t.criadoEm) }),
 );
+
+/** Celulares da representante com o app instalado (token de notificação do Firebase/Android ou da Apple/iOS). */
+export const portalDispositivos = pgTable(
+  'portal_dispositivos',
+  {
+    id: id(),
+    pessoaId: uuid('pessoa_id').notNull().references(() => pessoas.id, { onDelete: 'cascade' }),
+    token: text('token').notNull(),
+    plataforma: text('plataforma').notNull(), // android | ios
+    criadoEm: criadoEm(),
+    ultimoUsoEm: timestamp('ultimo_uso_em', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({ uq: uniqueIndex('portal_dispositivos_token_uq').on(t.token), porPessoa: index('portal_dispositivos_pessoa_idx').on(t.pessoaId) }),
+);

@@ -14,6 +14,7 @@ import { IntegracoesController } from './integracoes/integracoes.controller';
 import { DocumentoPublicoController, DocumentosController } from './documentos/documentos.controller';
 import { DocumentosService } from './documentos/documentos.service';
 import { CatalogoController } from './catalogo/catalogo.controller';
+import { PrivacidadeController } from './catalogo/privacidade.controller';
 import { EmpresasController } from './empresas/empresas.controller';
 import { VendasController } from './vendas/vendas.controller';
 import { VendasService } from './vendas/vendas.service';
@@ -63,6 +64,7 @@ import { AutomacaoService } from './crm/automacao.service';
 import { DistribuicaoService } from './crm/distribuicao.service';
 import { AgendaService } from './agenda/agenda.service';
 import { PedidosLinkService } from './catalogo/pedidos.service';
+import { PushService } from './portal/push.service';
 import { GoogleService } from './agenda/google.service';
 import { AgendaController } from './agenda/agenda.controller';
 import { DistribuicaoController } from './crm/distribuicao.controller';
@@ -98,6 +100,7 @@ if (!segredo || (process.env.NODE_ENV === 'production' && segredo.length < 32)) 
     DocumentosController,
     DocumentoPublicoController,
     CatalogoController,
+    PrivacidadeController,
     EmpresasController,
     VendasController,
     WebhooksController,
@@ -127,6 +130,7 @@ if (!segredo || (process.env.NODE_ENV === 'production' && segredo.length < 32)) 
     GoogleService,
     AgendaService,
     PedidosLinkService,
+    PushService,
     ArquivosService,
     PontosService,
     AuditoriaService,

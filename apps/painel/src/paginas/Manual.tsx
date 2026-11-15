@@ -166,6 +166,21 @@ const SECOES: Secao[] = [
     ],
   },
   {
+    id: 'app',
+    titulo: 'App da representante (Android e iPhone)',
+    passos: [
+      { t: 'O que é', d: 'O mesmo portal da representante, instalado como app. Ela entra com o mesmo acesso e vê maleta, clientes, pedidos, agenda e comissões. Tudo que muda no sistema aparece no app sem precisar atualizar a loja.' },
+      { t: 'Notificações', d: 'No app, ela recebe aviso no celular quando chega cliente perto dela, quando entra pedido pelo catálogo e quando um compromisso é marcado. Tocando no aviso, abre a tela certa.' },
+      { t: 'Ligar as notificações', d: 'Em Configurações › Integrações › Notificações no app: para Android, cole a conta de serviço do Firebase; para iPhone, a chave .p8 da Apple com o Key ID e o Team ID.' },
+      { t: 'Publicar', d: 'O passo a passo para colocar na Play Store e na App Store está no arquivo app-representante/PUBLICAR.md do projeto.' },
+    ],
+    dicas: [
+      'Sem as chaves das notificações, o app funciona normalmente, só não avisa no celular.',
+      'Quando a representante sai do app (botão Sair), o celular para de receber os avisos dela.',
+      'A política de privacidade que as lojas pedem fica em /privacidade no endereço do sistema.',
+    ],
+  },
+  {
     id: 'agenda',
     titulo: 'Agenda e Google Meet',
     passos: [

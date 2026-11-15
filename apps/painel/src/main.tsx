@@ -13,6 +13,7 @@ import { Inicio } from './paginas/Inicio';
 import { MeuPonto, Comprovante } from './paginas/rh/MeuPonto';
 import { Rh } from './paginas/rh/Rh';
 import { Agenda } from './paginas/Agenda';
+import { Privacidade } from './paginas/Privacidade';
 import { FichaFuncionario } from './paginas/rh/FichaFuncionario';
 import { Representantes, FichaRepresentante } from './paginas/Representantes';
 import { Produtos, FichaProduto } from './paginas/Produtos';
@@ -65,6 +66,7 @@ ReactDOM.createRoot(document.getElementById('raiz')!).render(
           <Route path="/pedido/:token" element={<LinkPedido />} />
           <Route path="/assinar/:token" element={<Assinar />} />
           <Route path="/catalogo/:slug" element={<Catalogo />} />
+          <Route path="/privacidade" element={<Privacidade />} />
           <Route path="/portal/*" element={<Portal />} />
           <Route path="/cadastro" element={<Cadastro />} />
           <Route path="/f/:slug" element={<FormularioPublico />} />
