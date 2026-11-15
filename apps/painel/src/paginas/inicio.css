@@ -1,0 +1,115 @@
+/* Início: entrada animada, números que contam, barras que crescem, presença ao vivo. */
+
+@keyframes ini-subir { from { opacity: 0; transform: translateY(14px) scale(0.985); } to { opacity: 1; transform: none; } }
+@keyframes ini-crescer-y { from { transform: scaleY(0); } to { transform: scaleY(1); } }
+@keyframes ini-crescer-x { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+@keyframes ini-pulso { 0% { box-shadow: 0 0 0 0 rgba(62, 107, 71, 0.55); } 70% { box-shadow: 0 0 0 7px rgba(62, 107, 71, 0); } 100% { box-shadow: 0 0 0 0 rgba(62, 107, 71, 0); } }
+@keyframes ini-brilho { from { background-position: -200% 0; } to { background-position: 200% 0; } }
+@keyframes ini-entrar-lado { from { opacity: 0; transform: translateX(-10px); } to { opacity: 1; transform: none; } }
+
+.ini-anim { opacity: 0; animation: ini-subir 0.55s cubic-bezier(0.2, 0.8, 0.2, 1) forwards; animation-delay: calc(var(--i, 0) * 70ms); }
+
+.ini-saudacao { display: flex; justify-content: space-between; align-items: flex-end; gap: 16px; flex-wrap: wrap; margin-bottom: 18px; }
+.ini-saudacao .eb { font-size: 12px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--dourado-t); }
+.ini-saudacao h1 { font-size: 30px; margin-top: 4px; }
+.ini-saudacao h1 span { background: linear-gradient(90deg, var(--marrom) 0%, var(--dourado) 40%, var(--areia) 50%, var(--dourado) 60%, var(--marrom) 100%); background-size: 200% 100%; -webkit-background-clip: text; background-clip: text; color: transparent; animation: ini-brilho 3.2s ease-in-out 0.3s 1 both; }
+
+.ini-grade { display: grid; gap: 14px; margin-bottom: 14px; }
+.ini-grade.k4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.ini-grade.dois { grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); }
+.ini-grade.meio { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+@media (max-width: 1200px) { .ini-grade.k4 { grid-template-columns: repeat(2, minmax(0, 1fr)); } .ini-grade.dois, .ini-grade.meio { grid-template-columns: 1fr; } }
+@media (max-width: 640px) { .ini-grade.k4 { grid-template-columns: 1fr; } }
+
+.ini-kpi { position: relative; overflow: hidden; transition: transform 0.18s ease, box-shadow 0.18s ease; }
+.ini-kpi:hover { transform: translateY(-2px); box-shadow: 0 8px 22px rgba(92, 74, 61, 0.12); }
+.ini-kpi .rotulo { font-size: 13px; color: var(--suave); }
+.ini-kpi .valor { font-size: 28px; font-weight: 700; margin-top: 2px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.ini-kpi .detalhe { font-size: 12.5px; color: var(--suave); margin-top: 2px; }
+.ini-kpi.escuro { background: var(--marrom); border-color: var(--marrom); }
+.ini-kpi.escuro .rotulo, .ini-kpi.escuro .detalhe { color: #e2d6c4; }
+.ini-kpi.escuro .valor { color: #faf6ef; }
+.ini-kpi.escuro .detalhe a { color: var(--areia); }
+.ini-kpi.atencao .valor { color: var(--erro); }
+.ini-kpi::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 3px; background: var(--cor, var(--dourado)); transform-origin: left; animation: ini-crescer-x 0.9s cubic-bezier(0.2, 0.8, 0.2, 1) both; animation-delay: calc(var(--i, 0) * 70ms + 250ms); }
+
+.ini-cartao h2 { font-size: 18px; display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 12px; }
+.ini-cartao h2 small { font-size: 13px; font-weight: 400; color: var(--suave); }
+
+/* Vendas: legenda e gráfico de 30 dias */
+.ini-legenda { display: flex; gap: 14px; flex-wrap: wrap; font-size: 13px; color: var(--suave); margin-bottom: 8px; }
+.ini-legenda i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 5px; vertical-align: -1px; }
+.ini-barras { display: flex; align-items: flex-end; gap: 3px; height: 200px; padding-top: 6px; border-bottom: 1px solid var(--linha); }
+.ini-barras .col { flex: 1; display: flex; flex-direction: column-reverse; height: 100%; justify-content: flex-start; position: relative; min-width: 0; }
+.ini-barras .col span { display: block; width: 100%; transform-origin: bottom; animation: ini-crescer-y 0.7s cubic-bezier(0.2, 0.8, 0.2, 1) both; animation-delay: calc(var(--d, 0) * 18ms + 300ms); }
+.ini-barras .col span:last-child { border-radius: 3px 3px 0 0; }
+.ini-barras .col:hover { background: rgba(137, 111, 75, 0.08); border-radius: 3px; }
+.ini-barras .col .dica { display: none; position: absolute; bottom: calc(100% + 4px); left: 50%; transform: translateX(-50%); background: var(--tinta); color: #faf6ef; font-size: 12px; padding: 6px 8px; border-radius: 6px; white-space: nowrap; z-index: 2; pointer-events: none; }
+.ini-barras .col:hover .dica { display: block; }
+.ini-eixo { display: flex; justify-content: space-between; font-size: 11px; color: var(--suave); margin-top: 4px; }
+
+.ini-split { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-bottom: 14px; }
+@media (max-width: 760px) { .ini-split { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.ini-split > div { border-left: 3px solid var(--cor); padding: 2px 0 2px 10px; }
+.ini-split .r { font-size: 12.5px; color: var(--suave); }
+.ini-split .v { font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.ini-split .m { font-size: 12px; color: var(--suave); }
+
+/* Rankings */
+.ini-rank { display: grid; gap: 8px; }
+.ini-rank .lin { display: grid; grid-template-columns: 22px minmax(0, 1fr) auto; gap: 8px; align-items: center; font-size: 14px; }
+.ini-rank .pos { font-weight: 700; color: var(--dourado-t); text-align: center; }
+.ini-rank .nome { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ini-rank .trilho { grid-column: 2 / 4; height: 6px; background: var(--creme-2); border-radius: 4px; overflow: hidden; margin: 4px 0 2px; }
+.ini-rank .trilho span { display: block; height: 100%; background: linear-gradient(90deg, var(--dourado), var(--areia)); border-radius: 4px; transform-origin: left; animation: ini-crescer-x 0.9s cubic-bezier(0.2, 0.8, 0.2, 1) both; animation-delay: calc(var(--d, 0) * 90ms + 400ms); }
+
+/* Pendências */
+.ini-pend { display: grid; gap: 6px; }
+.ini-pend a { display: flex; align-items: center; gap: 10px; padding: 9px 10px; border-radius: 8px; color: var(--tinta); border: 1px solid transparent; transition: background 0.15s, border-color 0.15s, transform 0.15s; opacity: 0; animation: ini-entrar-lado 0.4s ease forwards; animation-delay: calc(var(--d, 0) * 60ms + 300ms); }
+.ini-pend a:hover { text-decoration: none; background: var(--creme); border-color: var(--linha); transform: translateX(2px); }
+.ini-pend .n { min-width: 34px; height: 26px; padding: 0 8px; border-radius: 13px; display: inline-flex; align-items: center; justify-content: center; font-weight: 700; font-size: 14px; font-variant-numeric: tabular-nums; }
+.ini-pend .erro .n { background: var(--erro-fundo); color: var(--erro); }
+.ini-pend .alerta .n { background: var(--alerta-fundo); color: var(--alerta); }
+.ini-pend .info .n { background: var(--creme-2); color: var(--marrom); }
+.ini-pend .seta { margin-left: auto; color: var(--suave); }
+.ini-tudo-ok { text-align: center; padding: 18px 8px; color: var(--ok); }
+.ini-tudo-ok b { display: block; font-size: 30px; }
+
+.ini-tarefa { display: flex; gap: 10px; align-items: baseline; padding: 6px 0; border-top: 1px dashed var(--linha); font-size: 14px; }
+.ini-tarefa:first-child { border-top: none; }
+.ini-tarefa .q { margin-left: auto; white-space: nowrap; font-size: 12.5px; color: var(--suave); }
+.ini-tarefa.atrasada .q { color: var(--erro); font-weight: 600; }
+
+/* Equipe e presença */
+.ini-equipe { display: grid; gap: 4px; }
+.ini-pessoa { display: grid; grid-template-columns: 36px minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 6px 4px; border-radius: 8px; opacity: 0; animation: ini-entrar-lado 0.4s ease forwards; animation-delay: calc(var(--d, 0) * 50ms + 300ms); }
+.ini-pessoa:hover { background: var(--creme); }
+.ini-pessoa.clicavel { cursor: pointer; }
+.ini-pessoa.sel { background: var(--creme-2); }
+.ini-av { position: relative; width: 34px; height: 34px; border-radius: 50%; background: var(--areia); color: var(--marrom-3); display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 13px; }
+.ini-av .st { position: absolute; right: -1px; bottom: -1px; width: 11px; height: 11px; border-radius: 50%; border: 2px solid var(--papel); background: #b9ad9c; }
+.ini-av .st.on { background: var(--ok); animation: ini-pulso 2s infinite; }
+.ini-pessoa .nm { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 14px; }
+.ini-pessoa .sub { font-size: 12px; color: var(--suave); }
+.ini-pessoa .tempo { font-size: 12.5px; text-align: right; color: var(--suave); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.ini-pessoa .tempo b { color: var(--ok); display: block; font-size: 13.5px; }
+
+/* Linha do tempo de alterações */
+.ini-filtro { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
+.ini-filtro button { border: 1px solid var(--linha); background: var(--papel); border-radius: 16px; padding: 4px 10px; font: inherit; font-size: 13px; cursor: pointer; color: var(--suave); }
+.ini-filtro button.ativo { background: var(--marrom); border-color: var(--marrom); color: #faf6ef; }
+.ini-filtro button .c { opacity: 0.75; margin-left: 4px; font-size: 12px; }
+.ini-tempo { position: relative; padding-left: 18px; }
+.ini-tempo::before { content: ''; position: absolute; left: 5px; top: 6px; bottom: 6px; width: 2px; background: var(--linha); transform-origin: top; animation: ini-crescer-y 0.8s ease both 0.3s; }
+.ini-ev { position: relative; padding: 5px 0 7px; font-size: 14px; opacity: 0; animation: ini-subir 0.4s ease forwards; animation-delay: calc(var(--d, 0) * 35ms + 250ms); }
+.ini-ev::before { content: ''; position: absolute; left: -17px; top: 11px; width: 10px; height: 10px; border-radius: 50%; background: var(--papel); border: 2px solid var(--dourado); }
+.ini-ev.venda::before { border-color: var(--ok); background: var(--ok-fundo); }
+.ini-ev.cancel::before { border-color: var(--erro); background: var(--erro-fundo); }
+.ini-ev .q { color: var(--suave); font-size: 12px; }
+.ini-ev .extra { color: var(--suave); font-size: 12.5px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .ini-anim, .ini-pend a, .ini-pessoa, .ini-ev { animation: none !important; opacity: 1 !important; }
+  .ini-kpi::after, .ini-barras .col span, .ini-rank .trilho span, .ini-tempo::before, .ini-saudacao h1 span { animation: none !important; }
+  .ini-av .st.on { animation: none; }
+}

@@ -10,7 +10,7 @@ import {
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { JwtService } from '@nestjs/jwt';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import type { Acao, ChaveModulo } from '@aritana/regras';
 import { DB, type Db } from './db.module';
 import { grupos, pessoas, usuarios } from '../db/schema';
@@ -73,6 +73,13 @@ interface Atual {
 const cache = new Map<string, Atual>();
 export const invalidarSessoes = () => cache.clear();
 
+/** Presença: grava no banco no máximo uma vez por minuto por usuário. */
+const presencaGravadaEm = new Map<string, number>();
+const MINUTO = 60_000;
+/** Depois de 30 min sem falar com o servidor, a próxima chamada abre uma sessão nova. */
+export const SESSAO_PARADA_MS = 30 * MINUTO;
+export const esquecerPresenca = (id: string) => presencaGravadaEm.delete(id);
+
 /** Rotas liberadas enquanto a senha provisória não é trocada. */
 const LIVRES_COM_SENHA_PROVISORIA = ['/api/auth/eu', '/api/auth/trocar-senha'];
 
@@ -95,6 +102,21 @@ export class AuthGuard implements CanActivate {
     const v = { ...r, lidoEm: Date.now() };
     cache.set(id, v);
     return v;
+  }
+
+  private marcarPresenca(id: string) {
+    const agora = Date.now();
+    if (agora - (presencaGravadaEm.get(id) ?? 0) < MINUTO) return;
+    presencaGravadaEm.set(id, agora);
+    const parada = new Date(agora - SESSAO_PARADA_MS);
+    this.db
+      .update(usuarios)
+      .set({
+        sessaoInicioEm: sql`case when ${usuarios.ultimaAtividadeEm} is null or ${usuarios.ultimaAtividadeEm} < ${parada} or ${usuarios.sessaoInicioEm} is null then now() else ${usuarios.sessaoInicioEm} end`,
+        ultimaAtividadeEm: sql`now()`,
+      })
+      .where(eq(usuarios.id, id))
+      .catch(() => presencaGravadaEm.delete(id));
   }
 
   async canActivate(ctx: ExecutionContext): Promise<boolean> {
@@ -124,8 +146,8 @@ export class AuthGuard implements CanActivate {
     const a = await this.atual(doToken.id);
     if (!a || !a.ativo) throw new UnauthorizedException('Seu acesso foi desativado. Fale com a gerência.');
     req.usuario = { id: doToken.id, email: doToken.email, nome: a.nome, grupo: a.grupo, permissoes: a.permissoes } satisfies UsuarioLogado;
-
     const caminho = String(req.originalUrl ?? req.url ?? '').split('?')[0];
+    if (caminho !== '/api/auth/sair') this.marcarPresenca(doToken.id);
     if (a.senhaProvisoria && !LIVRES_COM_SENHA_PROVISORIA.includes(caminho)) {
       throw new ForbiddenException({ mensagem: 'Troque a senha provisória antes de continuar.', trocarSenha: true });
     }

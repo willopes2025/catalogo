@@ -75,6 +75,9 @@ export const usuarios = pgTable('usuarios', {
   empresas: jsonb('empresas').$type<string[]>().notNull().default([]),
   ativo: boolean('ativo').notNull().default(true),
   ultimoAcesso: timestamp('ultimo_acesso', { withTimezone: true }),
+  /** Presença: última vez que o painel falou com o servidor e quando começou a sessão atual (nova após 30 min parado). */
+  ultimaAtividadeEm: timestamp('ultima_atividade_em', { withTimezone: true }),
+  sessaoInicioEm: timestamp('sessao_inicio_em', { withTimezone: true }),
   /** Senha criada por outra pessoa: precisa ser trocada no primeiro acesso. */
   senhaProvisoria: boolean('senha_provisoria').notNull().default(false),
   /** Vendedora de loja: comissão própria (pontos-base) e meta mensal em centavos. */
@@ -962,7 +965,7 @@ export const auditoria = pgTable(
     dados: jsonb('dados'),
     criadoEm: criadoEm(),
   },
-  (t) => ({ porEntidade: index('auditoria_entidade_idx').on(t.entidade, t.entidadeId) }),
+  (t) => ({ porEntidade: index('auditoria_entidade_idx').on(t.entidade, t.entidadeId), porData: index('auditoria_data_idx').on(t.criadoEm), porUsuario: index('auditoria_usuario_idx').on(t.usuarioId, t.criadoEm) }),
 );
 
 // ───────────────────────── CRM (funis, leads, WhatsApp) ─────────────────────────

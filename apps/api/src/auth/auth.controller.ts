@@ -6,7 +6,7 @@ import bcrypt from 'bcryptjs';
 import { eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { DB, type Db } from '../comum/db.module';
-import { Publico, Usuario, invalidarSessoes, type UsuarioLogado } from '../comum/auth';
+import { Publico, Usuario, esquecerPresenca, invalidarSessoes, type UsuarioLogado } from '../comum/auth';
 import { validar } from '../comum/validacao';
 import { grupos, usuarios } from '../db/schema';
 import { AuditoriaService } from '../comum/auditoria.service';
@@ -40,7 +40,9 @@ export class AuthController {
       throw new UnauthorizedException('E-mail ou senha incorretos.');
     }
     falhasPorEmail.limpar(email);
-    await this.db.update(usuarios).set({ ultimoAcesso: new Date() }).where(eq(usuarios.id, u.u.id));
+    // Login abre sessão nova para a presença.
+    await this.db.update(usuarios).set({ ultimoAcesso: new Date(), sessaoInicioEm: new Date(), ultimaAtividadeEm: new Date() }).where(eq(usuarios.id, u.u.id));
+    esquecerPresenca(u.u.id);
     await this.auditoria.registrar({ usuarioId: u.u.id, acao: 'login', entidade: 'usuario', entidadeId: u.u.id });
     const usuario: UsuarioLogado = { id: u.u.id, nome: u.u.nome, email: u.u.email, grupo: u.g.nome, permissoes: u.g.permissoes };
     return { token: this.jwt.sign(usuario), usuario, trocarSenha: u.u.senhaProvisoria };
@@ -50,6 +52,14 @@ export class AuthController {
   async eu(@Usuario() u: UsuarioLogado) {
     const [r] = await this.db.select({ senhaProvisoria: usuarios.senhaProvisoria }).from(usuarios).where(eq(usuarios.id, u.id));
     return { ...u, trocarSenha: !!r?.senhaProvisoria };
+  }
+
+  /** Saiu pelo botão: deixa de aparecer como conectado na hora. */
+  @Post('sair')
+  async sair(@Usuario() u: UsuarioLogado) {
+    await this.db.update(usuarios).set({ ultimaAtividadeEm: null, sessaoInicioEm: null }).where(eq(usuarios.id, u.id));
+    esquecerPresenca(u.id);
+    return { ok: true };
   }
 
   @Post('trocar-senha')

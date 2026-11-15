@@ -41,7 +41,8 @@ export function Layout() {
           <NavLink to="/manual" style={{ color: 'var(--areia)', display: 'block', marginBottom: 6 }}>Manual de uso</NavLink>
           <NavLink to="/minha-senha" style={{ color: 'var(--areia)', display: 'block', marginBottom: 6 }}>Trocar senha</NavLink>
           <button
-            onClick={() => {
+            onClick={async () => {
+              await api('/auth/sair', { corpo: {} }).catch(() => undefined);
               salvarSessao(null);
               navegar('/entrar');
             }}
