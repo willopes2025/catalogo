@@ -1,0 +1,110 @@
+/* ───── CRM: quadro, chat e card ───── */
+.crm-barra { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 12px; }
+.crm-barra input, .crm-barra select { width: auto; flex: 0 1 auto; padding: 8px 10px; border: 1px solid var(--linha); border-radius: 8px; background: var(--papel); font: inherit; }
+.crm-chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.crm-chip { border: 1px solid var(--linha); background: var(--papel); border-radius: 18px; padding: 6px 12px; font: inherit; font-size: 14px; cursor: pointer; color: var(--suave); }
+.crm-chip.ativo { background: var(--marrom); border-color: var(--marrom); color: #faf6ef; font-weight: 600; }
+
+.kanban { display: flex; gap: 12px; overflow-x: auto; padding-bottom: 12px; align-items: flex-start; min-height: calc(100vh - 230px); }
+.kanban-col { flex: 0 0 280px; background: var(--creme-2); border-radius: var(--raio); display: flex; flex-direction: column; max-height: calc(100vh - 220px); border-top: 4px solid var(--cor, var(--dourado)); transition: background 0.15s; }
+.kanban-col.alvo { background: #e7dcc8; outline: 2px dashed var(--dourado); }
+.kanban-cab { padding: 10px 12px 8px; }
+.kanban-cab b { font-size: 14px; }
+.kanban-cab .muted { font-size: 12px; }
+.kanban-lista { overflow-y: auto; padding: 0 8px 10px; display: flex; flex-direction: column; gap: 8px; }
+.kcard { background: var(--papel); border: 1px solid var(--linha); border-radius: 9px; padding: 10px 11px; cursor: grab; box-shadow: 0 1px 2px rgba(60, 40, 20, 0.06); transition: transform 0.12s, box-shadow 0.12s; animation: entrar 0.25s ease both; }
+.kcard:hover { transform: translateY(-1px); box-shadow: 0 4px 10px rgba(60, 40, 20, 0.1); }
+.kcard.arrastando { opacity: 0.4; }
+.kcard .titulo { font-weight: 600; font-size: 14px; line-height: 1.25; }
+.kcard .linha2 { display: flex; justify-content: space-between; align-items: center; gap: 6px; margin-top: 6px; font-size: 12px; color: var(--suave); }
+.kcard .tags { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 6px; }
+.tag { font-size: 11px; background: #efe5d3; color: var(--marrom); border-radius: 10px; padding: 1px 8px; }
+.bolha-n { background: #c0392b; color: #fff; border-radius: 10px; font-size: 11px; font-weight: 700; padding: 1px 7px; }
+.avatar { width: 24px; height: 24px; border-radius: 50%; background: var(--dourado); color: #fff; display: inline-flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; flex: none; }
+.avatar.g { width: 38px; height: 38px; font-size: 15px; }
+@keyframes entrar { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+
+/* Caixa de conversas */
+.inbox { display: grid; grid-template-columns: 330px 1fr 300px; gap: 0; height: calc(100vh - 215px); min-height: 520px; border: 1px solid var(--linha); border-radius: var(--raio); overflow: hidden; background: var(--papel); }
+.inbox-lista { border-right: 1px solid var(--linha); display: flex; flex-direction: column; min-height: 0; }
+.inbox-abas { display: flex; border-bottom: 1px solid var(--linha); }
+.inbox-abas button { flex: 1; background: none; border: none; border-bottom: 3px solid transparent; padding: 10px 4px; font: inherit; font-size: 13px; color: var(--suave); cursor: pointer; }
+.inbox-abas button.ativa { color: var(--tinta); font-weight: 700; border-bottom-color: var(--dourado); }
+.inbox-itens { overflow-y: auto; flex: 1; }
+.conv { display: flex; gap: 10px; padding: 11px 12px; border-bottom: 1px solid #f0e8da; cursor: pointer; align-items: flex-start; }
+.conv:hover { background: #faf4ea; }
+.conv.ativa { background: #f1e7d6; }
+.conv .nome { font-weight: 600; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.conv .previa { font-size: 13px; color: var(--suave); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.conv .meta { font-size: 11px; color: var(--suave); text-align: right; white-space: nowrap; display: flex; flex-direction: column; gap: 4px; align-items: flex-end; }
+.espera { color: var(--alerta); font-weight: 700; }
+.espera.longa { color: var(--erro); }
+
+.chat { display: flex; flex-direction: column; min-height: 0; height: 100%; background: #f6efe3; }
+.chat-topo { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 10px 14px; background: var(--papel); border-bottom: 1px solid var(--linha); flex-wrap: wrap; }
+.chat-msgs { flex: 1; overflow-y: auto; padding: 16px 18px; display: flex; flex-direction: column; gap: 6px; }
+.msg { max-width: 72%; padding: 7px 10px 5px; border-radius: 10px; font-size: 14px; line-height: 1.35; white-space: pre-wrap; word-wrap: break-word; box-shadow: 0 1px 1px rgba(0, 0, 0, 0.05); animation: entrar 0.2s ease both; }
+.msg.entrada { align-self: flex-start; background: #fff; border-top-left-radius: 3px; }
+.msg.saida { align-self: flex-end; background: #e8dcc5; border-top-right-radius: 3px; }
+.msg.interna { align-self: center; background: #fff4c7; border: 1px dashed #d8b84d; max-width: 85%; }
+.msg.falhou { background: #f6dfda; }
+.msg .rodape-msg { font-size: 11px; color: #7a6f63; text-align: right; margin-top: 3px; display: flex; gap: 6px; justify-content: flex-end; }
+.msg img, .msg video { max-width: 260px; max-height: 300px; border-radius: 6px; display: block; margin-bottom: 4px; cursor: zoom-in; }
+.msg audio { width: 240px; }
+.dia { align-self: center; font-size: 12px; color: var(--suave); background: #ece2d0; border-radius: 10px; padding: 2px 10px; margin: 6px 0; }
+.chat-faixa { padding: 10px 14px; background: var(--alerta-fundo); color: var(--alerta); display: flex; justify-content: space-between; align-items: center; gap: 10px; font-size: 14px; }
+.chat-faixa.fila { background: #e9e1f3; color: #4b3a6b; }
+.composer { border-top: 1px solid var(--linha); background: var(--papel); padding: 8px 10px; display: flex; flex-direction: column; gap: 6px; }
+.composer.interna { background: #fffbe9; }
+.composer textarea { width: 100%; resize: none; border: 1px solid var(--linha); border-radius: 8px; padding: 8px 10px; font: inherit; min-height: 44px; max-height: 160px; background: #fff; }
+.composer .acoes { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.sugestoes { border: 1px solid var(--linha); border-radius: 8px; background: #fff; max-height: 180px; overflow-y: auto; }
+.sugestoes button { display: block; width: 100%; text-align: left; border: none; background: none; padding: 7px 10px; font: inherit; font-size: 13px; cursor: pointer; }
+.sugestoes button:hover { background: var(--creme-2); }
+.inbox-lado { border-left: 1px solid var(--linha); overflow-y: auto; padding: 14px; display: flex; flex-direction: column; gap: 12px; }
+
+/* Card do lead */
+.lead-topo { display: flex; justify-content: space-between; gap: 14px; align-items: flex-start; flex-wrap: wrap; margin-bottom: 12px; }
+.lead-topo h1 { margin: 0; font-size: 24px; }
+.pipeline { display: flex; gap: 3px; margin: 8px 0 16px; overflow-x: auto; }
+.pipeline button { flex: 1; min-width: 92px; border: none; padding: 8px 6px; font: inherit; font-size: 12px; font-weight: 600; color: var(--suave); background: var(--creme-2); cursor: pointer; clip-path: polygon(0 0, calc(100% - 10px) 0, 100% 50%, calc(100% - 10px) 100%, 0 100%, 10px 50%); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pipeline button:first-child { clip-path: polygon(0 0, calc(100% - 10px) 0, 100% 50%, calc(100% - 10px) 100%, 0 100%); border-radius: 6px 0 0 6px; }
+.pipeline button.feito { background: color-mix(in srgb, var(--cor) 35%, #fff); color: var(--tinta); }
+.pipeline button.atual { background: var(--cor); color: #fff; }
+.lead-grade { display: grid; grid-template-columns: 340px 1fr; gap: 14px; align-items: start; }
+.lead-grade .chat { height: calc(100vh - 330px); min-height: 460px; border: 1px solid var(--linha); border-radius: var(--raio); overflow: hidden; }
+.bloco { background: var(--papel); border: 1px solid var(--linha); border-radius: var(--raio); padding: 12px 14px; }
+.bloco h3 { margin: 0 0 8px; font-size: 13px; text-transform: uppercase; letter-spacing: 0.8px; color: var(--dourado-t); }
+.par { display: grid; grid-template-columns: 120px 1fr; gap: 6px; align-items: center; font-size: 14px; padding: 3px 0; }
+.par > span:first-child { color: var(--suave); font-size: 13px; }
+.par input, .par select { width: 100%; padding: 5px 8px; border: 1px solid transparent; border-radius: 6px; background: transparent; font: inherit; }
+.par input:hover, .par select:hover { border-color: var(--linha); }
+.par input:focus, .par select:focus { border-color: var(--dourado); background: #fff; outline: none; }
+.evento { display: flex; gap: 10px; padding: 8px 0; border-bottom: 1px dashed var(--linha); font-size: 14px; }
+.evento .ic { width: 26px; height: 26px; border-radius: 50%; background: var(--creme-2); display: inline-flex; align-items: center; justify-content: center; flex: none; font-size: 13px; }
+.evento.nota .ic { background: #fff4c7; }
+.evento.ligacao .ic { background: #e3eadf; }
+
+/* Softphone */
+.softphone { position: fixed; right: 18px; bottom: 18px; z-index: 50; width: 270px; background: var(--marrom-3); color: #faf6ef; border-radius: 14px; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25); overflow: hidden; animation: entrar 0.25s ease both; }
+.softphone .cab { display: flex; justify-content: space-between; align-items: center; padding: 9px 12px; background: var(--marrom); font-size: 13px; cursor: pointer; }
+.softphone .corpo { padding: 12px; display: flex; flex-direction: column; gap: 8px; }
+.softphone input { width: 100%; padding: 8px; border-radius: 8px; border: none; font: inherit; font-size: 18px; text-align: center; letter-spacing: 1px; }
+.softphone .teclado { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.softphone .teclado button { padding: 8px; border-radius: 8px; border: none; background: rgba(255, 255, 255, 0.12); color: #fff; font: inherit; font-size: 16px; cursor: pointer; }
+.softphone .ligar { background: #3e8e55; color: #fff; border: none; border-radius: 22px; padding: 9px; font: inherit; font-weight: 700; cursor: pointer; }
+.softphone .desligar { background: #c0392b; }
+.ponto { width: 8px; height: 8px; border-radius: 50%; display: inline-block; background: #999; margin-right: 6px; }
+.ponto.on { background: #4cd964; box-shadow: 0 0 0 3px rgba(76, 217, 100, 0.25); }
+
+@media (max-width: 1100px) {
+  .inbox { grid-template-columns: 280px 1fr; }
+  .inbox-lado { display: none; }
+  .lead-grade { grid-template-columns: 1fr; }
+}
+
+.modal-fundo { position: fixed; inset: 0; background: rgba(43, 35, 29, 0.45); z-index: 60; display: flex; align-items: flex-start; justify-content: center; padding: 8vh 16px; animation: aparecer 0.15s ease both; overflow-y: auto; }
+.modal { width: 100%; animation: entrar 0.2s ease both; }
+@keyframes aparecer { from { opacity: 0; } to { opacity: 1; } }
+
+.crm-barra input[type=search], .crm-barra input:not([type]) { min-width: 220px; }

@@ -38,7 +38,8 @@ import { Auditoria } from './paginas/Auditoria';
 import { Manual } from './paginas/Manual';
 import { ImprimirEtiquetas } from './paginas/ImprimirEtiquetas';
 import { Portal } from './portal/Portal';
-import { Crm } from './paginas/Crm';
+import { CrmPagina } from './paginas/crm/CrmPagina';
+import { LeadCard } from './paginas/crm/LeadCard';
 import { Pontos } from './paginas/Pontos';
 import { Formularios } from './paginas/Formularios';
 import { FormularioPublico } from './paginas/FormularioPublico';
@@ -100,7 +101,8 @@ ReactDOM.createRoot(document.getElementById('raiz')!).render(
             <Route path="suporte" element={<Suporte />} />
             <Route path="minha-senha" element={<MinhaSenha />} />
             <Route path="garantia" element={<Garantia />} />
-            <Route path="crm" element={<Crm />} />
+            <Route path="crm" element={<CrmPagina />} />
+            <Route path="crm/lead/:id" element={<LeadCard />} />
             <Route path="pontos" element={<Pontos />} />
             <Route path="formularios" element={<Formularios />} />
             <Route path="marketing" element={<Marketing />} />

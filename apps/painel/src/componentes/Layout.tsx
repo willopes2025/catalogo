@@ -2,6 +2,7 @@ import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import { MODULOS } from '@aritana/regras';
 import { useQuery } from '@tanstack/react-query';
 import { api, atualizarUsuario, lerSessao, pode, salvarSessao } from '../api';
+import { Softphone } from './Softphone';
 
 /** Rotas já construídas nesta etapa; as demais abrem a página "em construção". */
 const ROTAS: Record<string, string> = { inicio: '/', rede: '/rede', cadastros: '/cadastros', produtos: '/produtos', estoque: '/estoque', maletas: '/maletas', vendas: '/vendas', lojas: '/lojas', financeiro: '/financeiro', fiscal: '/fiscal', relatorios: '/relatorios', configuracoes: '/configuracoes', suporte: '/suporte', garantia: '/garantia', comissoes: '/comissoes', crm: '/crm', pontos: '/pontos', formularios: '/formularios', marketing: '/marketing' };
@@ -11,6 +12,9 @@ export function Layout() {
   // Relê as permissões do servidor (a gerência pode ter mudado o grupo desde o login).
   useQuery({ queryKey: ['eu'], queryFn: async () => { const u = await api<any>('/auth/eu'); atualizarUsuario({ id: u.id, nome: u.nome, email: u.email, grupo: u.grupo, permissoes: u.permissoes }); return u; }, staleTime: 60_000 });
   const sessao = lerSessao();
+  // Fila do CRM e conversas não lidas no menu.
+  const crm = useQuery({ queryKey: ['crm', 'contadores'], queryFn: () => api<{ fila: number; naoLidas: number }>('/crm/contadores'), refetchInterval: 15_000, enabled: pode('crm', 'ver') });
+  const avisoCrm = (crm.data?.fila ?? 0) + (crm.data?.naoLidas ?? 0);
   return (
     <div className="app">
       <aside className="lateral">
@@ -26,6 +30,7 @@ export function Layout() {
             ) : (
               <NavLink key={m.chave} to={ROTAS[m.chave] ?? `/${m.chave}`} end={m.chave === 'inicio'} className={({ isActive }) => (isActive ? 'ativo' : '')}>
                 {m.nome}
+                {m.chave === 'crm' && avisoCrm > 0 && <span className="bolha-menu" title="Na fila e não lidas">{avisoCrm}</span>}
               </NavLink>
             ),
           )}
@@ -48,6 +53,7 @@ export function Layout() {
       <main className="conteudo">
         <Outlet />
       </main>
+      <Softphone />
     </div>
   );
 }

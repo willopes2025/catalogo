@@ -188,6 +188,8 @@ export class CanaisService {
       .where(and(eq(crmConversas.id, conversaId), sql`(${crmConversas.atendenteId} is null or ${crmConversas.status} <> 'atendimento' or ${crmConversas.atendenteId} = ${usuarioId})`))
       .returning();
     if (!r) throw new BadRequestException('Outra pessoa já pegou esta conversa.');
+    // Quem pega a conversa vira responsável pelos cards abertos que ainda não têm dono.
+    await this.db.execute(sql`update crm_leads set responsavel_id = ${usuarioId} where contato_id = ${cv.contatoId} and status = 'aberto' and responsavel_id is null`);
     await this.notaNosLeads(cv.contatoId, 'Conversa pega para atendimento.', usuarioId);
     return r;
   }
