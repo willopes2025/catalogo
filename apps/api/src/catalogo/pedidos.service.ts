@@ -26,7 +26,10 @@ export interface PecaVitrine {
 }
 
 const reais = (c: number) => (c / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
-/** Pedidos que ainda seguram as peças (não podem ser vendidas de novo pelo link). */
+/**
+ * Pedidos ainda em aberto. Seguram as peças no catálogo: o confirmado sempre; o novo (sem confirmação)
+ * só por 3 dias, para um pedido esquecido ou falso não travar o catálogo.
+ */
 const RESERVAM = ['novo', 'confirmado'];
 
 /**
@@ -100,7 +103,7 @@ export class PedidosLinkService implements OnModuleInit {
     const r = await this.db.execute<{ produto_id: string; qtd: number }>(sql`
       select (i->>'produtoId')::uuid as produto_id, sum((i->>'quantidade')::int)::int as qtd
       from pedidos_link p, jsonb_array_elements(p.itens) i
-      where p.status in ('novo', 'confirmado') and p.origem = ${origem} ${origem === 'maleta' ? sql`and p.pessoa_id = ${pessoaId}` : sql``}
+      where (p.status = 'confirmado' or (p.status = 'novo' and p.criado_em > now() - interval '3 days')) and p.origem = ${origem} ${origem === 'maleta' ? sql`and p.pessoa_id = ${pessoaId}` : sql``}
       group by 1`);
     return new Map(r.rows.map((x) => [x.produto_id, x.qtd]));
   }
@@ -316,18 +319,33 @@ export class PedidosLinkService implements OnModuleInit {
     if (p.origem !== 'matriz') throw new BadRequestException('Pedido da maleta é entregue pela própria consultora.');
     if (!RESERVAM.includes(p.status)) throw new BadRequestException('Este pedido já foi encerrado.');
     const local = await this.localMatriz();
-    if (!local) throw new BadRequestException('Nenhum depósito ativo para tirar as peças. Configure em Configurações › Venda pelo link.');
+    if (!local) throw new BadRequestException('Nenhum depósito ativo para tirar as peças. Configure em Vendas › Pedidos pelo link › Regras.');
     const ps = await this.db.select({ id: produtos.id, codigoBarras: produtos.codigoBarras, preco: produtos.preco }).from(produtos).where(inArray(produtos.id, p.itens.map((i) => i.produtoId)));
     const porId = new Map(ps.map((x) => [x.id, x]));
-    // Vale o preço que a cliente viu no pedido: se a etiqueta subiu depois, a diferença entra como desconto.
+    // Vale o preço que a cliente viu no pedido: se a etiqueta subiu depois, a diferença entra como desconto;
+    // se baixou, ela paga o preço novo (menor).
+    let esperado = 0;
     const itens = p.itens.map((i) => {
       const x = porId.get(i.produtoId);
       if (!x?.codigoBarras) throw new BadRequestException(`"${i.descricao}" está sem código de barras.`);
       const desconto = Math.max(0, x.preco * i.quantidade - i.preco * i.quantidade);
+      esperado += x.preco * i.quantidade - desconto;
       return { codigoBarras: x.codigoBarras, quantidade: i.quantidade, desconto };
     });
-    const venda = await this.vendas.registrar({ localId: local.id, tipo: 'avulsa', itens, pagamentos, observacao: `Pedido pelo link nº ${p.numero}` }, usuarioId, true);
-    const [n] = await this.db.update(pedidosLink).set({ status: 'entregue', vendaId: venda.id, confirmadoEm: p.confirmadoEm ?? new Date(), entregueEm: new Date(), atualizadoEm: new Date() }).where(eq(pedidosLink.id, id)).returning();
+    // Um pagamento só, com o total do pedido, mas o preço baixou: ajusta para o valor certo.
+    const pagos = pagamentos.length === 1 && pagamentos[0].valor > esperado && pagamentos[0].forma !== 'dinheiro' ? [{ ...pagamentos[0], valor: esperado }] : pagamentos;
+    // Trava o pedido antes de vender: dois cliques em "Faturar" não viram duas vendas.
+    const [trava] = await this.db.update(pedidosLink).set({ status: 'entregue', atualizadoEm: new Date() }).where(and(eq(pedidosLink.id, id), inArray(pedidosLink.status, RESERVAM))).returning({ id: pedidosLink.id });
+    if (!trava) throw new BadRequestException('Este pedido já foi faturado ou cancelado.');
+    let venda: Awaited<ReturnType<VendasService['registrar']>>;
+    try {
+      venda = await this.vendas.registrar({ localId: local.id, tipo: 'avulsa', itens, pagamentos: pagos, observacao: `Pedido pelo link nº ${p.numero}` }, usuarioId, true);
+    } catch (e) {
+      // Sem estoque, pagamento faltando…: o pedido volta a ficar em aberto.
+      await this.db.update(pedidosLink).set({ status: p.status, atualizadoEm: new Date() }).where(eq(pedidosLink.id, id));
+      throw e;
+    }
+    const [n] = await this.db.update(pedidosLink).set({ vendaId: venda.id, confirmadoEm: p.confirmadoEm ?? new Date(), entregueEm: new Date(), atualizadoEm: new Date() }).where(eq(pedidosLink.id, id)).returning();
     if (n.leadId) {
       await this.crm.evento(n.leadId, 'sistema', `Pedido nº ${n.numero} faturado (venda nº ${venda.numero}).`, usuarioId);
       await this.moverParaComprou(n.leadId);

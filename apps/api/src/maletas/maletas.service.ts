@@ -395,6 +395,12 @@ export class MaletasService {
 
       if (lim.limite !== sit.limite) await tx.update(pessoas).set({ limiteCredito: lim.limite, atualizadoEm: new Date() }).where(eq(pessoas.id, m.representanteId));
       if (fechou) await tx.update(maletas).set({ status: 'acertada', acertadaEm: new Date(), conferida: true }).where(eq(maletas.id, id));
+      // Acerto parcial: o que a representante tinha marcado na pré-baixa já foi acertado; zera para não contar de novo
+      // (no catálogo e no próximo acerto).
+      else {
+        await tx.update(maletaItens).set({ prebaixaVendida: null, prebaixaDevolvida: null }).where(eq(maletaItens.maletaId, id));
+        await tx.update(maletas).set({ prebaixaEm: null }).where(eq(maletas.id, id));
+      }
 
       await this.auditoria.registrar({ usuarioId, acao: fechou ? 'acerto' : 'acerto_parcial', entidade: 'maleta', entidadeId: id, dados: { acertoId: acerto.id, total: resultado.totalAPagar, limite: [sit.limite, lim.limite] } }, tx);
       return { acerto, resultado, parcelas, limiteNovo: lim.limite, motivoLimite: lim.motivo, fechou };

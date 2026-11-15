@@ -1533,8 +1533,11 @@ test('limite olha a maleta inteira depois de acerto parcial; indicadores batem e
   const m = await ok('POST', '/maletas', { representanteId: p.id, origemId: ctx.deposito.id, dataRetirada: dia(10), itens: [{ codigoBarras: a.codigoBarras, quantidade: 2 }, { codigoBarras: b.codigoBarras, quantidade: 2 }], liberarExcecao: true });
   const base = { forma: 'avista', modalidade: 'presencial', parcelas: 1, formaPagamento: 'pix', pagoAgora: true };
   // 1º acerto (parcial): vendeu as duas peças mais caras. 2º acerto fecha devolvendo o resto.
+  await ok('POST', `/maletas/${m.id}/prebaixa`, { itens: [{ produtoId: a.id, vendida: 2, devolvida: 0 }] });
   const r1 = await ok('POST', `/maletas/${m.id}/acerto`, { ...base, parcial: true, itens: [{ produtoId: a.id, vendida: 2, devolvida: 0, perdida: 0 }] });
   assert.equal(r1.fechou, false);
+  const depoisParcial = await ok('GET', `/maletas/${m.id}`);
+  assert.ok(depoisParcial.itens.every((i) => i.prebaixaVendida == null), 'acerto parcial zera a pré-baixa (já foi acertada)');
   assert.equal(r1.limiteNovo, 100000, 'parcial não mexe no limite');
   const r2 = await ok('POST', `/maletas/${m.id}/acerto`, { ...base, parcial: false, itens: [{ produtoId: b.id, vendida: 0, devolvida: 2, perdida: 0 }] });
   assert.equal(r2.fechou, true);
@@ -1937,10 +1940,14 @@ test('venda pelo link: afiliada vende do estoque da matriz com comissão; consul
     assert.ok((await ok('GET', `/crm/leads/${ped.leadId}`)).etiquetas.includes('Pedido pelo link'));
     const comAntes = await ok('GET', `/comissoes?mes=${mes}`);
     const lojaAntes = comAntes.linhas.filter((l) => l.tipo === 'loja').reduce((a, l) => a + l.base, 0);
-    const fat = await ok('POST', `/pedidos-link/${ped.id}/faturar`, { pagamentos: [{ forma: 'pix', valor: prod.preco * 2 }] });
+    // Dois cliques ao mesmo tempo em "Faturar": uma venda só.
+    const corpoFat = { pagamentos: [{ forma: 'pix', valor: prod.preco * 2 }] };
+    const [f1, f2] = await Promise.all([chamar('POST', `/pedidos-link/${ped.id}/faturar`, corpoFat), chamar('POST', `/pedidos-link/${ped.id}/faturar`, corpoFat)]);
+    assert.deepEqual([f1.status, f2.status].sort(), [201, 400], 'um fatura, o outro é recusado');
+    const fat = f1.status === 201 ? f1.dados : f2.dados;
     assert.equal(fat.status, 'entregue');
     assert.ok(fat.venda.numero);
-    assert.equal((await chamar('POST', `/pedidos-link/${ped.id}/faturar`, { pagamentos: [{ forma: 'pix', valor: prod.preco * 2 }] })).status, 400, 'não fatura duas vezes');
+    assert.equal((await ok('GET', '/vendas?aba=concluidas')).itens.filter((v) => v.observacao === `Pedido pelo link nº ${ped.numero}` || v.id === fat.venda.id).length, 1);
     const com = await ok('GET', `/comissoes?mes=${mes}`);
     const linha = com.linhas.find((l) => l.tipo === 'link' && l.pessoaId === af.id);
     assert.equal(linha.base, prod.preco * 2);
@@ -1948,6 +1955,15 @@ test('venda pelo link: afiliada vende do estoque da matriz com comissão; consul
     assert.equal(com.linhas.filter((l) => l.tipo === 'loja').reduce((a, l) => a + l.base, 0), lojaAntes, 'venda do link não vira comissão de loja de quem faturou');
     token = '';
     assert.equal((await ok('GET', `/publico/catalogo/${af.slug}`)).pecas.find((x) => x.id === prod.id).disponivel, antes - 2, 'faturado: saiu do estoque');
+    // Pedido novo esquecido há mais de 3 dias para de segurar as peças.
+    const pg = createRequire(import.meta.url)('pg');
+    const banco = new pg.Client({ connectionString: process.env.DATABASE_URL ?? 'postgres://aritana:aritana@localhost:5432/aritana_teste' });
+    await banco.connect();
+    const velho = await pedir(af.slug, { itens: [{ produtoId: prod.id, quantidade: 1 }] });
+    assert.equal((await ok('GET', `/publico/catalogo/${af.slug}`)).pecas.find((x) => x.id === prod.id).disponivel, antes - 3);
+    await banco.query(`update pedidos_link set criado_em = now() - interval '4 days' where numero = $1`, [velho.dados.numero]);
+    assert.equal((await ok('GET', `/publico/catalogo/${af.slug}`)).pecas.find((x) => x.id === prod.id).disponivel, antes - 2, 'pedido novo com mais de 3 dias não segura mais');
+    await banco.end();
     // Pedido cancelado libera a reserva.
     const r2 = await pedir(af.slug, { itens: [{ produtoId: prod.id, quantidade: 1 }] });
     token = admin;
