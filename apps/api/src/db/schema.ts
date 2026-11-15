@@ -1493,3 +1493,20 @@ export const rhEnvios = pgTable('rh_envios', {
   usuarioId: uuid('usuario_id').references(() => usuarios.id),
   criadoEm: criadoEm(),
 });
+
+/**
+ * Metas do mês da empresa. tipo: faturamento | rede | lojas | eventos | local (com localId) | novas_revendedoras | consultoras_ativas.
+ * Valores em centavos (contagens para novas_revendedoras e consultoras_ativas).
+ */
+export const metas = pgTable(
+  'metas',
+  {
+    id: id(),
+    competencia: text('competencia').notNull(),
+    tipo: text('tipo').notNull(),
+    localId: uuid('local_id').references(() => locaisEstoque.id),
+    valor: integer('valor').notNull(),
+    atualizadoEm: atualizadoEm(),
+  },
+  (t) => ({ porMes: index('metas_mes_idx').on(t.competencia) }),
+);

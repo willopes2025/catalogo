@@ -22,6 +22,7 @@ import { WebhooksController } from './integracoes/webhooks.controller';
 import { FiscalController } from './fiscal/fiscal.controller';
 import { FiscalService } from './fiscal/fiscal.service';
 import { IndicadoresController } from './relatorios/indicadores.controller';
+import { MetasController } from './relatorios/metas.controller';
 import { RelatoriosController } from './relatorios/relatorios.controller';
 import { SuporteController } from './suporte/suporte.controller';
 import { ImportacaoController } from './importacao/importacao.controller';
@@ -95,7 +96,7 @@ if (!segredo || (process.env.NODE_ENV === 'production' && segredo.length < 32)) 
     VendasController,
     WebhooksController,
     FiscalController,
-    RelatoriosController, IndicadoresController, RhController, PontoController,
+    RelatoriosController, IndicadoresController, MetasController, RhController, PontoController,
     SuporteController,
     ImportacaoController,
     GarantiaController,

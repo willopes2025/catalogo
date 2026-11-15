@@ -9,8 +9,9 @@ import { Rede } from './indicadores/Rede';
 import { Produtos } from './indicadores/Produtos';
 import { Financeiro } from './indicadores/Financeiro';
 import { CrmInd } from './indicadores/CrmInd';
+import { Metas } from './indicadores/Metas';
 
-type Aba = 'geral' | 'rede' | 'produtos' | 'financeiro' | 'crm' | 'tabelas';
+type Aba = 'geral' | 'metas' | 'rede' | 'produtos' | 'financeiro' | 'crm' | 'tabelas';
 type Tabelas = 'desempenho' | 'maletas' | 'produtos' | 'vendas' | 'financeiro';
 
 /** Indicadores para decisão (visão do negócio, rede, produtos, financeiro, CRM) e as tabelas completas para exportar. */
@@ -21,9 +22,9 @@ export function Relatorios() {
   const [atalho, setAtalho] = useState(params.get('periodo') ?? 'mes');
   const [de, setDe] = useState(ps.find((p) => p[0] === atalho)?.[2] ?? ps[0][2]);
   const [ate, setAte] = useState(ps.find((p) => p[0] === atalho)?.[3] ?? hoje());
-  const comPeriodo = aba !== 'financeiro';
+  const comPeriodo = aba !== 'financeiro' && aba !== 'metas';
   const valido = /^\d{4}-\d{2}-\d{2}$/.test(de) && /^\d{4}-\d{2}-\d{2}$/.test(ate) && de <= ate;
-  const abas: [Aba, string][] = [['geral', 'Visão do negócio'], ['rede', 'Rede'], ['produtos', 'Produtos'], ['financeiro', 'Financeiro'], ...(pode('crm', 'ver') ? ([['crm', 'CRM']] as [Aba, string][]) : []), ['tabelas', 'Tabelas para Excel']];
+  const abas: [Aba, string][] = [['geral', 'Visão do negócio'], ['metas', 'Metas'], ['rede', 'Rede'], ['produtos', 'Produtos'], ['financeiro', 'Financeiro'], ...(pode('crm', 'ver') ? ([['crm', 'CRM']] as [Aba, string][]) : []), ['tabelas', 'Tabelas para Excel']];
   return (
     <>
       <Topo
@@ -49,6 +50,7 @@ export function Relatorios() {
           {aba === 'rede' && <Rede de={de} ate={ate} />}
           {aba === 'produtos' && <Produtos de={de} ate={ate} />}
           {aba === 'financeiro' && <Financeiro />}
+          {aba === 'metas' && <Metas />}
           {aba === 'crm' && <CrmInd de={de} ate={ate} />}
           {aba === 'tabelas' && <TabelasCompletas de={de} ate={ate} />}
         </>

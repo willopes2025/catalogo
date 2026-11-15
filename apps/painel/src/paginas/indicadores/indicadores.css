@@ -67,3 +67,12 @@ a.ind-alerta:hover { text-decoration: none; background: var(--creme); }
 @media print { .lateral, .ind-periodo, .abas, .botao, .softphone { display: none !important; } .app { display: block; } .ini-anim, .ind-alerta { opacity: 1 !important; animation: none !important; } }
 .ind-rolagem .tabela td { white-space: nowrap; }
 .ind-rolagem .tabela td a { white-space: nowrap; }
+
+/* Metas do mês: realizado (cheio), projeção (listrado) e a marca da meta */
+.ind-meta { display: flex; flex-direction: column; gap: 8px; }
+.ind-meta .trilho { position: relative; height: 14px; border-radius: 7px; background: var(--fundo, #f3efe9); overflow: visible; }
+.ind-meta .trilho span { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 7px; max-width: 100%; transform-origin: left; animation: ind-meta-cresce .9s cubic-bezier(.2,.8,.2,1) both; }
+.ind-meta .trilho .proj { background: repeating-linear-gradient(135deg, rgba(0,0,0,.10) 0 6px, rgba(0,0,0,.04) 6px 12px); }
+.ind-meta .trilho i { position: absolute; top: -4px; bottom: -4px; width: 2px; background: var(--texto, #222); border-radius: 1px; }
+@keyframes ind-meta-cresce { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+@media (prefers-reduced-motion: reduce) { .ind-meta .trilho span { animation: none; } }

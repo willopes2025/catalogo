@@ -5,6 +5,7 @@ import { api, lerSessao, pode } from '../api';
 import { reais, dataHora, pct } from '../formato';
 import { Carregando, Erro } from '../componentes/ui';
 import { usarImplantacao } from './Implantacao';
+import { BarraMeta, type MetasResp } from './indicadores/Metas';
 import './inicio.css';
 
 interface Atividade { id: string; criadoEm: string; acao: string; entidade: string; entidadeId: string | null; dados: Record<string, any> | null; usuarioId: string | null; usuario: string | null }
@@ -153,6 +154,8 @@ export function Inicio() {
           <Kpi i={i++} rotulo="Representantes ativas" valor={<Conta valor={d.rede.ativas} />} detalhe={`${d.rede.novasMes} novas no mês · ${d.rede.semMaleta} sem maleta`} cor="var(--ok)" />
         </div>
       )}
+
+      {pode('relatorios', 'ver') && <MetasDoMes i={i++} />}
 
       <div className="ini-grade dois">
         {d.vendas ? <PainelVendas v={d.vendas} mes={d.mes} i={i++} /> : <div />}
@@ -417,6 +420,19 @@ function AvisoImplantacao() {
     <div className="aviso alerta flex entre ini-anim" style={{ marginBottom: 16, flexWrap: 'wrap', '--i': 1 } as CSSProperties}>
       <span><b>Implantação: {q.data.feitos} de {q.data.total} itens prontos.</b> Faltam {faltam} item(ns), como acessos das integrações, CNPJs e confirmações do contador e do jurídico.</span>
       <Link className="botao claro pequeno" to="/configuracoes?aba=implantacao">Ver o que falta</Link>
+    </div>
+  );
+}
+
+/** As metas do mês com o ritmo de hoje (só aparece quando há metas definidas). */
+function MetasDoMes({ i }: { i: number }) {
+  const q = useQuery({ queryKey: ['metas', 'inicio'], queryFn: () => api<MetasResp>('/metas'), refetchInterval: 300_000 });
+  const linhas = q.data?.linhas ?? [];
+  if (!linhas.length) return null;
+  return (
+    <div className="cartao ini-cartao ini-anim" style={{ '--i': i, marginBottom: 14 } as CSSProperties}>
+      <h2>Metas do mês <small><Link to="/relatorios?aba=metas">{q.data!.restantes ? `faltam ${q.data!.restantes} dia(s)` : 'mês encerrado'} · ver tudo</Link></small></h2>
+      <div className="ind-grade k2" style={{ marginBottom: 0 }}>{linhas.slice(0, 4).map((l, k) => <BarraMeta key={l.id} l={l} i={k} />)}</div>
     </div>
   );
 }

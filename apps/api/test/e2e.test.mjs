@@ -1462,6 +1462,32 @@ test('limite olha a maleta inteira depois de acerto parcial; indicadores batem e
   assert.equal(typeof ini.financeiro.vencido, 'number');
 });
 
+test('metas do mês: define, recusa repetida, acompanha venda nova e mostra o ritmo', async () => {
+  const comp = new Date(Date.now() - 3 * 3600_000).toISOString().slice(0, 7);
+  const loja = (await ok('GET', '/estoque/locais')).find((l) => l.tipo === 'loja');
+  assert.equal((await chamar('PUT', '/metas', { competencia: comp, metas: [{ tipo: 'lojas', valor: 100 }, { tipo: 'lojas', valor: 200 }] })).status, 400, 'meta repetida');
+  assert.equal((await chamar('PUT', '/metas', { competencia: comp, metas: [{ tipo: 'local', valor: 100 }] })).status, 400, 'local sem loja');
+  assert.equal((await chamar('PUT', '/metas', { competencia: '2026-13', metas: [] })).status, 400);
+  const r = await ok('PUT', '/metas', { competencia: comp, metas: [{ tipo: 'faturamento', valor: 10_000_000 }, { tipo: 'local', localId: loja.id, valor: 5_000_000 }, { tipo: 'novas_revendedoras', valor: 3 }] });
+  assert.equal(r.linhas.length, 3);
+  const antes = r.linhas.find((l) => l.tipo === 'local');
+  assert.equal(antes.nome, loja.nome);
+  assert.ok(['no_ritmo', 'perto', 'abaixo', 'batida', 'nao_batida'].includes(antes.situacao));
+  assert.equal(r.linhas.find((l) => l.tipo === 'novas_revendedoras').dinheiro, false);
+  // uma venda nova na loja entra no realizado da loja e do faturamento
+  const p = (await ok('GET', '/produtos')).itens.find((x) => x.preco > 0);
+  await ok('POST', '/estoque/entradas', { destinoId: loja.id, itens: [{ codigoBarras: p.codigoBarras, quantidade: 1 }] });
+  await ok('POST', '/vendas', { localId: loja.id, tipo: 'avulsa', itens: [{ codigoBarras: p.codigoBarras, quantidade: 1 }], pagamentos: [{ forma: 'pix', valor: p.preco }] });
+  const d = await ok('GET', `/metas?competencia=${comp}`);
+  const depois = d.linhas.find((l) => l.tipo === 'local');
+  assert.equal(depois.realizado - antes.realizado, p.preco);
+  assert.equal(d.linhas.find((l) => l.tipo === 'faturamento').realizado - r.linhas.find((l) => l.tipo === 'faturamento').realizado, p.preco);
+  assert.equal(depois.falta, Math.max(0, 5_000_000 - depois.realizado));
+  // mês sem metas devolve lista vazia; gravar vazio apaga as do mês
+  assert.equal((await ok('GET', '/metas?competencia=2020-01')).linhas.length, 0);
+  assert.equal((await ok('PUT', '/metas', { competencia: '2020-01', metas: [] })).linhas.length, 0);
+});
+
 test('implantação: apagar dados de teste exige APAGAR e mantém o que é configuração', async () => {
   assert.equal((await chamar('POST', '/implantacao/apagar-dados-de-teste', { confirmacao: 'apagar' })).status, 400);
   const bloq = await chamar('POST', '/implantacao/apagar-dados-de-teste', { confirmacao: 'APAGAR', manterProdutos: true });
