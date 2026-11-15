@@ -4,9 +4,9 @@ import { useNavigate } from 'react-router-dom';
 import { api, pode } from '../../api';
 import { reais } from '../../formato';
 import { Campo, Carregando, Erro } from '../../componentes/ui';
-import { ha, iniciais, telefoneBonito, usarAtendentes, usarFunis, useRelogio, type Etapa, type Funil as TFunil } from './comum';
+import { ha, iniciais, telefoneBonito, usarAtendentes, usarCampos, usarFunis, useRelogio, valorLegivel, type Etapa, type Funil as TFunil } from './comum';
 
-interface Card { id: string; numero: number; titulo: string; valor: number; funilId: string; etapaId: string; status: string; etiquetas: string[]; responsavelId: string | null; responsavel: string | null; contato: string; telefone: string; entrouNaEtapaEm: string; naoLidas: number; tarefas: number; tarefaVencida: boolean }
+interface Card { id: string; numero: number; titulo: string; valor: number; funilId: string; etapaId: string; status: string; etiquetas: string[]; responsavelId: string | null; responsavel: string | null; contato: string; telefone: string; entrouNaEtapaEm: string; naoLidas: number; tarefas: number; tarefaVencida: boolean; camposExtras?: Record<string, string>; contatoExtras?: Record<string, string> }
 
 const CHAVE_FUNIL = 'aritana.crm.funil';
 
@@ -16,6 +16,7 @@ export function Funil() {
   const navegar = useNavigate();
   useRelogio(60);
   const funis = usarFunis();
+  const camposDefs = usarCampos();
   const atendentes = usarAtendentes();
   const [funilId, setFunilId] = useState(() => {
     try {
@@ -32,6 +33,8 @@ export function Funil() {
   const [perda, setPerda] = useState<{ card: Card; etapa: Etapa } | null>(null);
   const [aprovar, setAprovar] = useState<Card | null>(null);
   const funil: TFunil | undefined = funis.data?.find((f) => f.id === funilId) ?? funis.data?.[0];
+  /** Campos marcados para aparecer no quadro deste funil. */
+  const noQuadro = (camposDefs.data ?? []).filter((c) => c.noQuadro && (c.entidade === 'contato' || !c.funilId || c.funilId === funil?.id));
   useEffect(() => {
     if (funil) {
       try {
@@ -140,6 +143,10 @@ export function Funil() {
                       {c.naoLidas > 0 && <span className="bolha-n" title="Mensagens não lidas">{c.naoLidas}</span>}
                     </div>
                     <div className="muted" style={{ fontSize: 12 }}>{c.contato !== c.titulo ? `${c.contato} · ` : ''}{telefoneBonito(c.telefone)}</div>
+                    {noQuadro.length > 0 && (() => {
+                      const vals = noQuadro.map((d) => [d.nome, valorLegivel(d, (d.entidade === 'lead' ? c.camposExtras : c.contatoExtras)?.[d.nome])] as const).filter(([, v]) => v);
+                      return vals.length > 0 && <div className="kcampos">{vals.map(([n, v]) => <span key={n}>{n}: <b>{v}</b></span>)}</div>;
+                    })()}
                     {c.etiquetas.length > 0 && <div className="tags">{c.etiquetas.slice(0, 4).map((t) => <span key={t} className="tag">{t}</span>)}</div>}
                     <div className="linha2">
                       <span>{c.valor ? <b style={{ color: 'var(--tinta)' }}>{reais(c.valor)}</b> : null} {c.tarefas > 0 && <span title="Tarefas abertas" style={{ color: c.tarefaVencida ? 'var(--erro)' : undefined }}>☑ {c.tarefas}</span>}</span>

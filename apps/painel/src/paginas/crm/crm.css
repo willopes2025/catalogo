@@ -77,9 +77,9 @@
 .bloco h3 { margin: 0 0 8px; font-size: 13px; text-transform: uppercase; letter-spacing: 0.8px; color: var(--dourado-t); }
 .par { display: grid; grid-template-columns: 120px 1fr; gap: 6px; align-items: center; font-size: 14px; padding: 3px 0; }
 .par > span:first-child { color: var(--suave); font-size: 13px; }
-.par input, .par select { width: 100%; padding: 5px 8px; border: 1px solid transparent; border-radius: 6px; background: transparent; font: inherit; }
-.par input:hover, .par select:hover { border-color: var(--linha); }
-.par input:focus, .par select:focus { border-color: var(--dourado); background: #fff; outline: none; }
+.par input, .par select, .par textarea { width: 100%; padding: 5px 8px; border: 1px solid transparent; border-radius: 6px; background: transparent; font: inherit; resize: vertical; }
+.par input:hover, .par select:hover, .par textarea:hover { border-color: var(--linha); }
+.par input:focus, .par select:focus, .par textarea:focus { border-color: var(--dourado); background: #fff; outline: none; }
 .evento { display: flex; gap: 10px; padding: 8px 0; border-bottom: 1px dashed var(--linha); font-size: 14px; }
 .evento .ic { width: 26px; height: 26px; border-radius: 50%; background: var(--creme-2); display: inline-flex; align-items: center; justify-content: center; flex: none; font-size: 13px; }
 .evento.nota .ic { background: #fff4c7; }
@@ -108,3 +108,21 @@
 @keyframes aparecer { from { opacity: 0; } to { opacity: 1; } }
 
 .crm-barra input[type=search], .crm-barra input:not([type]) { min-width: 220px; }
+
+/* Campos personalizados */
+.multipla { position: relative; min-width: 0; }
+.multipla summary { cursor: pointer; list-style: none; padding: 5px 8px; border: 1px solid transparent; border-radius: 6px; background: var(--papel); font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.multipla summary::-webkit-details-marker { display: none; }
+.multipla[open] > div { position: absolute; right: 0; z-index: 5; margin-top: 4px; background: var(--papel); border: 1px solid var(--linha); border-radius: 8px; padding: 8px 10px; box-shadow: 0 8px 20px rgba(0,0,0,.1); display: grid; gap: 4px; min-width: 180px; max-height: 240px; overflow: auto; }
+.novo-campo { display: grid; gap: 8px; margin-top: 8px; padding: 10px; border: 1px dashed var(--dourado); border-radius: 8px; background: var(--creme); }
+.novo-campo .lin { display: flex; gap: 6px; align-items: center; }
+.novo-campo input:not([type=checkbox]), .novo-campo select { flex: 1; min-width: 0; padding: 6px 8px; border: 1px solid var(--linha); border-radius: 6px; font: inherit; font-size: 14px; background: var(--papel); }
+.novo-campo .check { font-size: 13px; }
+.mais-campo { margin-top: 6px; background: none; border: none; color: var(--dourado-t); font: inherit; font-size: 13px; cursor: pointer; padding: 2px 0; }
+.mais-campo:hover { text-decoration: underline; }
+.kcampos { display: grid; gap: 1px; margin-top: 4px; font-size: 12px; color: var(--suave); }
+.kcampos b { color: var(--tinta); font-weight: 600; }
+.par .sem-def { display: flex; gap: 4px; align-items: center; min-width: 0; }
+.multipla summary:hover, .multipla[open] summary { border-color: var(--linha); }
+.multipla .check { display: flex; align-items: center; gap: 8px; justify-content: flex-start; font-size: 14px; }
+.multipla .check input[type=checkbox] { width: auto; padding: 0; margin: 0; }

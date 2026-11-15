@@ -6,7 +6,7 @@ import { centavosParaTexto, paraCentavos, reais } from '../../formato';
 import { Abas, Carregando, Erro } from '../../componentes/ui';
 import { Chat } from './Chat';
 import { Aprovar, Motivo } from './Funil';
-import { ha, ligar, telefoneBonito, usarAtendentes, usarCampos, usarCanais, usarFunis, ValorCampo, type Etapa } from './comum';
+import { ha, ligar, NovoCampo, telefoneBonito, usarAtendentes, usarCampos, usarCanais, usarFunis, ValorCampo, type Etapa } from './comum';
 import './crm.css';
 
 const ICONES: Record<string, string> = { nota: '📝', etapa: '➜', campo: '✎', tarefa: '☑', gatilho: '⚡', sistema: '•', ligacao: '📞' };
@@ -33,6 +33,8 @@ export function LeadCard() {
   const [tarefa, setTarefa] = useState({ titulo: '', venceEm: '', responsavelId: '' });
   const [canalNovo, setCanalNovo] = useState('');
   const editar = pode('crm', 'editar');
+  const gestor = pode('crm', 'excluir');
+  const [novoCampo, setNovoCampo] = useState<{ entidade: 'lead' | 'contato'; nome?: string } | null>(null);
   const l = q.data;
   useEffect(() => {
     if (l) {
@@ -127,7 +129,15 @@ export function LeadCard() {
             {camposLead.map((c) => (
               <div key={c.id} className="par"><span>{c.nome}</span><ValorCampo def={c} valor={l.camposExtras?.[c.nome] ?? ''} desativado={!editar} mudar={(v) => patch.mutate({ camposExtras: { ...l.camposExtras, [c.nome]: v } })} /></div>
             ))}
-            {extrasLeadSemDef.map((k) => <div key={k} className="par"><span>{k}</span><span>{l.camposExtras[k]}</span></div>)}
+            {extrasLeadSemDef.map((k) => (
+              <ExtraSemCampo key={k} nome={k} valor={l.camposExtras[k]} editar={editar} gestor={gestor}
+                mudar={(v) => patch.mutate({ camposExtras: { ...l.camposExtras, [k]: v } })}
+                tirar={() => { const { [k]: _, ...resto } = l.camposExtras; patch.mutate({ camposExtras: resto }); }}
+                fixar={() => setNovoCampo({ entidade: 'lead', nome: k })} />
+            ))}
+            {novoCampo?.entidade === 'lead' ? (
+              <NovoCampo key={novoCampo.nome ?? 'novo'} entidade="lead" funilId={l.funilId} nomeInicial={novoCampo.nome} cancelar={() => setNovoCampo(null)} aoCriar={() => setNovoCampo(null)} />
+            ) : gestor && <button className="mais-campo" onClick={() => setNovoCampo({ entidade: 'lead' })}>+ Adicionar campo ao card</button>}
             <div style={{ marginTop: 8 }}>
               <div className="tags" style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
                 {l.etiquetas.map((t: string) => (
@@ -159,7 +169,15 @@ export function LeadCard() {
             {camposContato.map((c) => (
               <div key={c.id} className="par"><span>{c.nome}</span><ValorCampo def={c} valor={l.contato.camposExtras?.[c.nome] ?? ''} desativado={!editar} mudar={(v) => patchContato.mutate({ camposExtras: { ...l.contato.camposExtras, [c.nome]: v } })} /></div>
             ))}
-            {extrasContatoSemDef.map((k) => <div key={k} className="par"><span>{k}</span><span>{l.contato.camposExtras[k]}</span></div>)}
+            {extrasContatoSemDef.map((k) => (
+              <ExtraSemCampo key={k} nome={k} valor={l.contato.camposExtras[k]} editar={editar} gestor={gestor}
+                mudar={(v) => patchContato.mutate({ camposExtras: { ...l.contato.camposExtras, [k]: v } })}
+                tirar={() => { const { [k]: _, ...resto } = l.contato.camposExtras; patchContato.mutate({ camposExtras: resto }); }}
+                fixar={() => setNovoCampo({ entidade: 'contato', nome: k })} />
+            ))}
+            {novoCampo?.entidade === 'contato' ? (
+              <NovoCampo key={novoCampo.nome ?? 'novo'} entidade="contato" nomeInicial={novoCampo.nome} cancelar={() => setNovoCampo(null)} aoCriar={() => setNovoCampo(null)} />
+            ) : gestor && <button className="mais-campo" onClick={() => setNovoCampo({ entidade: 'contato' })}>+ Adicionar campo ao contato</button>}
             <label className="check" style={{ fontSize: 13, marginTop: 6 }}><input type="checkbox" checked={l.contato.descadastrado} disabled={!editar} onChange={(e) => patchContato.mutate({ descadastrado: e.target.checked })} /> Não quer receber disparos</label>
             {l.pessoa && <Link className="botao claro pequeno" style={{ marginTop: 8, width: '100%' }} to={l.pessoa.tipo === 'representante' ? `/rede/${l.pessoa.id}` : `/cadastros/${l.pessoa.id}`}>Abrir ficha de {l.pessoa.tipo === 'representante' ? 'revendedora' : l.pessoa.tipo}</Link>}
           </div>
@@ -268,6 +286,22 @@ export function LeadCard() {
       </div>
       {perda && <Motivo titulo={`Mover para ${perda.nome}`} fechar={() => setPerda(null)} confirmar={(m) => { patch.mutate({ etapaId: perda.id, motivoPerda: m }); setPerda(null); }} />}
       {aprovar && <Aprovar leadId={l.id} nome={l.titulo} fechar={() => { setAprovar(false); atualizar(); }} />}
+    </div>
+  );
+}
+
+/** Informação que veio de fora (importação, formulário) sem campo cadastrado: dá para editar, apagar ou transformar em campo. */
+function ExtraSemCampo({ nome, valor, editar, gestor, mudar, tirar, fixar }: { nome: string; valor: string; editar: boolean; gestor: boolean; mudar: (v: string) => void; tirar: () => void; fixar: () => void }) {
+  const [v, setV] = useState(valor ?? '');
+  useEffect(() => setV(valor ?? ''), [valor]);
+  return (
+    <div className="par">
+      <span title="Informação sem campo cadastrado">{nome}</span>
+      <span className="sem-def">
+        <input value={v} disabled={!editar} onChange={(e) => setV(e.target.value)} onBlur={() => v !== valor && mudar(v)} onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()} />
+        {gestor && <button className="botao claro pequeno" title="Cadastrar como campo (aparece em todos os cards)" onClick={fixar}>fixar</button>}
+        {editar && <button className="botao claro pequeno" title="Apagar esta informação" onClick={() => window.confirm(`Apagar "${nome}" deste cadastro?`) && tirar()}>×</button>}
+      </span>
     </div>
   );
 }

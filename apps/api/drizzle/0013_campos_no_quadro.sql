@@ -1,0 +1,1 @@
+ALTER TABLE "crm_campos" ADD COLUMN "no_quadro" boolean DEFAULT false NOT NULL;

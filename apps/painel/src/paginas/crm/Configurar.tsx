@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, pode } from '../../api';
 import { Abas, Campo, Carregando, Erro } from '../../componentes/ui';
-import { usarAtendentes, usarCampos, usarCanais, usarFunis, type Canal, type Template } from './comum';
+import { NovoCampo, TIPOS_CAMPO, usarAtendentes, usarCampos, usarCanais, usarFunis, variavelDoCampo, type CampoDef, type Canal, type Template } from './comum';
 
 type Sub = 'numeros' | 'funis' | 'campos' | 'templates' | 'respostas' | 'ramais';
 const sel = { padding: 7, borderRadius: 8, border: '1px solid var(--linha)', font: 'inherit' } as const;
@@ -225,51 +225,75 @@ function Campos() {
   const qc = useQueryClient();
   const campos = usarCampos();
   const funis = usarFunis();
-  const [f, setF] = useState({ entidade: 'contato', nome: '', tipo: 'texto', opcoes: '', funilId: '' });
+  const [criando, setCriando] = useState<'contato' | 'lead' | null>(null);
   const m = useMutation({ mutationFn: ({ rota, metodo, corpo }: { rota: string; metodo?: string; corpo?: unknown }) => api(rota, { metodo, corpo: corpo ?? {} }), onSuccess: () => qc.invalidateQueries({ queryKey: ['crm', 'campos'] }) });
   const gestor = pode('crm', 'excluir');
   if (campos.isLoading) return <Carregando />;
-  const TIPOS: Record<string, string> = { texto: 'Texto', numero: 'Número', data: 'Data', lista: 'Lista de opções', telefone: 'Telefone', email: 'E-mail', url: 'Link', sim_nao: 'Sim/Não' };
+  const mover = (lista: CampoDef[], i: number, d: -1 | 1) => {
+    const ids = lista.map((c) => c.id);
+    [ids[i], ids[i + d]] = [ids[i + d]!, ids[i]!];
+    m.mutate({ rota: '/crm/campos/ordem', corpo: { ids } });
+  };
   return (
     <div className="coluna" style={{ gap: 12 }}>
-      <p className="muted" style={{ margin: 0 }}><b>Contato</b> é a pessoa (vale em todos os cards dela). <b>Card</b> é o negócio dentro do funil (pode valer só para um funil).</p>
+      <p className="muted" style={{ margin: 0 }}>
+        <b>Contato</b> é a pessoa (vale em todos os cards dela). <b>Card</b> é o negócio dentro do funil (pode valer só para um funil). Também dá para criar campos direto no card do lead, em “+ Adicionar campo”.
+        Nas mensagens e templates, use o valor do campo com a variável mostrada abaixo, por exemplo <code>{'{{campo_cidade}}'}</code>.
+      </p>
       {m.error && <Erro erro={m.error} />}
-      {(['contato', 'lead'] as const).map((ent) => (
-        <div key={ent} className="cartao">
-          <div className="secao" style={{ marginTop: 0 }}>{ent === 'contato' ? 'Campos do contato' : 'Campos do card'}</div>
-          <table className="tabela">
-            <thead><tr><th>Campo</th><th>Tipo</th>{ent === 'lead' && <th>Funil</th>}<th></th></tr></thead>
-            <tbody>
-              {campos.data?.filter((c) => c.entidade === ent).map((c) => (
-                <tr key={c.id}>
-                  <td><input defaultValue={c.nome} disabled={!gestor} onBlur={(e) => e.target.value.trim() && e.target.value !== c.nome && m.mutate({ rota: `/crm/campos/${c.id}`, metodo: 'PATCH', corpo: { nome: e.target.value.trim() } })} style={sel} /></td>
-                  <td>{TIPOS[c.tipo]}{c.opcoes.length ? `: ${c.opcoes.join(', ')}` : ''}</td>
-                  {ent === 'lead' && <td>{funis.data?.find((x) => x.id === c.funilId)?.nome ?? 'Todos'}</td>}
-                  <td>{gestor && <button className="botao perigo pequeno" onClick={() => window.confirm(`Apagar o campo "${c.nome}"? Os valores já preenchidos continuam guardados.`) && m.mutate({ rota: `/crm/campos/${c.id}`, metodo: 'DELETE' })}>Apagar</button>}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      ))}
-      {gestor && (
-        <div className="cartao form">
-          <div className="secao" style={{ gridColumn: '1 / -1', marginTop: 0 }}>Novo campo</div>
-          <Campo rotulo="De quem"><select value={f.entidade} onChange={(e) => setF({ ...f, entidade: e.target.value })}><option value="contato">Contato (pessoa)</option><option value="lead">Card (negócio)</option></select></Campo>
-          <Campo rotulo="Nome"><input value={f.nome} onChange={(e) => setF({ ...f, nome: e.target.value })} /></Campo>
-          <Campo rotulo="Tipo"><select value={f.tipo} onChange={(e) => setF({ ...f, tipo: e.target.value })}>{Object.entries(TIPOS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select></Campo>
-          {f.entidade === 'lead' ? <Campo rotulo="Só no funil"><select value={f.funilId} onChange={(e) => setF({ ...f, funilId: e.target.value })}><option value="">Todos</option>{funis.data?.map((x) => <option key={x.id} value={x.id}>{x.nome}</option>)}</select></Campo> : <div />}
-          {f.tipo === 'lista' && <Campo rotulo="Opções (separadas por vírgula)" className="l4"><input value={f.opcoes} onChange={(e) => setF({ ...f, opcoes: e.target.value })} /></Campo>}
-          <div className="l4"><button className="botao" disabled={!f.nome.trim()} onClick={() => { m.mutate({ rota: '/crm/campos', corpo: { entidade: f.entidade, nome: f.nome.trim(), tipo: f.tipo, opcoes: f.opcoes.split(',').map((x) => x.trim()).filter(Boolean), funilId: f.funilId || null } }); setF({ ...f, nome: '', opcoes: '' }); }}>Criar campo</button></div>
-        </div>
-      )}
+      {(['contato', 'lead'] as const).map((ent) => {
+        const lista = campos.data?.filter((c) => c.entidade === ent) ?? [];
+        return (
+          <div key={ent} className="cartao">
+            <div className="secao" style={{ marginTop: 0 }}>{ent === 'contato' ? 'Campos do contato' : 'Campos do card'}</div>
+            {lista.length === 0 ? <p className="muted">Nenhum campo ainda.</p> : (
+              <table className="tabela">
+                <thead><tr><th style={{ width: 60 }}>Ordem</th><th>Campo</th><th>Tipo</th>{ent === 'lead' && <th>Funil</th>}<th>No quadro</th><th>Variável</th><th></th></tr></thead>
+                <tbody>
+                  {lista.map((c, i) => (
+                    <tr key={c.id}>
+                      <td>
+                        {gestor && (
+                          <span className="flex" style={{ gap: 2 }}>
+                            <button className="botao claro pequeno" disabled={i === 0 || m.isPending} onClick={() => mover(lista, i, -1)} title="Subir">↑</button>
+                            <button className="botao claro pequeno" disabled={i === lista.length - 1 || m.isPending} onClick={() => mover(lista, i, 1)} title="Descer">↓</button>
+                          </span>
+                        )}
+                      </td>
+                      <td><input defaultValue={c.nome} disabled={!gestor} onBlur={(e) => e.target.value.trim() && e.target.value !== c.nome && m.mutate({ rota: `/crm/campos/${c.id}`, metodo: 'PATCH', corpo: { nome: e.target.value.trim() } })} style={sel} /></td>
+                      <td>
+                        {TIPOS_CAMPO[c.tipo] ?? c.tipo}
+                        {(c.tipo === 'lista' || c.tipo === 'multipla') && (
+                          <input defaultValue={c.opcoes.join(', ')} disabled={!gestor} title="Opções separadas por vírgula" onBlur={(e) => { const op = e.target.value.split(',').map((x) => x.trim()).filter(Boolean); if (op.join(',') !== c.opcoes.join(',')) m.mutate({ rota: `/crm/campos/${c.id}`, metodo: 'PATCH', corpo: { opcoes: op } }); }} style={{ ...sel, display: 'block', marginTop: 4, width: '100%' }} />
+                        )}
+                      </td>
+                      {ent === 'lead' && (
+                        <td>
+                          <select value={c.funilId ?? ''} disabled={!gestor} onChange={(e) => m.mutate({ rota: `/crm/campos/${c.id}`, metodo: 'PATCH', corpo: { funilId: e.target.value || null } })} style={sel}>
+                            <option value="">Todos</option>
+                            {funis.data?.map((x) => <option key={x.id} value={x.id}>{x.nome}</option>)}
+                          </select>
+                        </td>
+                      )}
+                      <td><input type="checkbox" checked={!!c.noQuadro} disabled={!gestor} onChange={(e) => m.mutate({ rota: `/crm/campos/${c.id}`, metodo: 'PATCH', corpo: { noQuadro: e.target.checked } })} /></td>
+                      <td><code style={{ fontSize: 12 }}>{`{{${variavelDoCampo(c.nome)}}}`}</code></td>
+                      <td>{gestor && <button className="botao perigo pequeno" onClick={() => window.confirm(`Apagar o campo "${c.nome}"? Os valores já preenchidos continuam guardados no cadastro.`) && m.mutate({ rota: `/crm/campos/${c.id}`, metodo: 'DELETE' })}>Apagar</button>}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+            {gestor && (criando === ent ? <NovoCampo entidade={ent} cancelar={() => setCriando(null)} aoCriar={() => setCriando(null)} /> : <button className="mais-campo" onClick={() => setCriando(ent)}>+ Novo campo {ent === 'contato' ? 'do contato' : 'do card'}</button>)}
+          </div>
+        );
+      })}
     </div>
   );
 }
 
 // ───────────── Templates ─────────────
 
-const FONTES = [['primeiro_nome', 'Primeiro nome'], ['nome', 'Nome completo'], ['telefone', 'Telefone'], ['etapa', 'Etapa do card'], ['funil', 'Funil']];
+const FONTES_FIXAS = [['primeiro_nome', 'Primeiro nome'], ['nome', 'Nome completo'], ['telefone', 'Telefone'], ['etapa', 'Etapa do card'], ['funil', 'Funil']];
 
 function Templates() {
   const qc = useQueryClient();
@@ -278,6 +302,8 @@ function Templates() {
   const [f, setF] = useState({ nome: '', texto: '' });
   const m = useMutation({ mutationFn: ({ rota, metodo, corpo }: { rota: string; metodo?: string; corpo?: unknown }) => api(rota, { metodo, corpo: corpo ?? {} }), onSuccess: () => qc.invalidateQueries({ queryKey: ['crm', 'templates'] }) });
   const gestor = pode('crm', 'excluir');
+  const campos = usarCampos();
+  const FONTES = [...FONTES_FIXAS, ...(campos.data ?? []).map((c) => [variavelDoCampo(c.nome), `Campo: ${c.nome}`])];
   if (q.isLoading) return <Carregando />;
   const meta = q.data?.filter((t) => t.tipo === 'meta') ?? [];
   const livres = q.data?.filter((t) => t.tipo === 'livre') ?? [];
@@ -307,7 +333,7 @@ function Templates() {
       </div>
       <div className="cartao">
         <div className="secao" style={{ marginTop: 0 }}>Modelos livres</div>
-        <p className="muted" style={{ fontSize: 13 }}>Para o QR code e para o oficial dentro das 24h. Use {'{{primeiro_nome}}'}, {'{{nome}}'}, {'{{etapa}}'}.</p>
+        <p className="muted" style={{ fontSize: 13 }}>Para o QR code e para o oficial dentro das 24h. Use {'{{primeiro_nome}}'}, {'{{nome}}'}, {'{{etapa}}'} e os campos personalizados, como {'{{campo_cidade}}'} (lista completa em Campos personalizados).</p>
         {livres.map((t) => (
           <div key={t.id} className="flex entre" style={{ padding: '8px 0', borderBottom: '1px dashed var(--linha)', gap: 10 }}>
             <div><b>{t.nome}</b><div style={{ whiteSpace: 'pre-wrap', fontSize: 14 }}>{t.texto}</div></div>

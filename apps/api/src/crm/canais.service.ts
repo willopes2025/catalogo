@@ -6,7 +6,7 @@ import { SegredosService } from '../segredos/segredos.service';
 import { ArquivosService } from '../arquivos/arquivos.service';
 import { crmCanais, crmContatos, crmConversas, crmDisparoDestinos, crmMensagens, crmTemplates } from '../db/schema';
 import { CrmService } from './crm.service';
-import { PEDIU_SAIR, preencherTexto, primeiroNome } from './telefone';
+import { PEDIU_SAIR, preencherTexto, primeiroNome, variaveisDosCampos } from './telefone';
 import { ConexaoOficial } from './whatsapp/oficial';
 import { ConexaoZapi } from './whatsapp/zapi';
 import { ErroCanal, type Conexao, type MensagemEntrada, type MensagemSaida, type StatusEntrada } from './whatsapp/tipos';
@@ -233,7 +233,7 @@ export class CanaisService {
     if (!canal.ativo) throw new BadRequestException('Este número de WhatsApp está desativado.');
     const [contato] = await this.db.select().from(crmContatos).where(eq(crmContatos.id, cv.contatoId));
     const dados = e.leadId ? await this.crm.dadosDoLead(e.leadId) : null;
-    const vars: Record<string, string> = { nome: contato.nome, primeiro_nome: primeiroNome(contato.nome), telefone: contato.telefone, etapa: dados?.etapa ?? '', funil: dados?.funil ?? '' };
+    const vars: Record<string, string> = { ...variaveisDosCampos(contato.camposExtras, dados?.extrasLead), nome: contato.nome, primeiro_nome: primeiroNome(contato.nome), telefone: contato.telefone, etapa: dados?.etapa ?? '', funil: dados?.funil ?? '' };
 
     let saida: MensagemSaida;
     let textoGuardado = e.texto ?? null;
@@ -245,7 +245,7 @@ export class CanaisService {
       if (t.tipo === 'meta') {
         if (canal.tipo !== 'oficial' || t.canalId !== canal.id) throw new BadRequestException('Este template é de outro número oficial.');
         if (t.status !== 'APPROVED') throw new BadRequestException('Template ainda não aprovado pela Meta.');
-        const parametros = t.variaveis.map((v) => (v in vars ? vars[v] : v));
+        const parametros = t.variaveis.map((v) => (v in vars ? vars[v] : v.startsWith('campo_') ? '' : v));
         textoGuardado = t.texto.replace(/\{\{(\d+)\}\}/g, (_, n: string) => parametros[Number(n) - 1] ?? '');
         saida = { para: contato.telefone, tipo: 'template', template: { nome: t.nome, idioma: t.idioma, parametros } };
       } else {

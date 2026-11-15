@@ -4,7 +4,7 @@ import { Link } from 'react-router-dom';
 import { api, pode } from '../../api';
 import { Carregando, Erro } from '../../componentes/ui';
 import { Chat } from './Chat';
-import { ha, iniciais, telefoneBonito, usarCanais, usarContadores, usarFunis, useRelogio } from './comum';
+import { ha, iniciais, telefoneBonito, usarCampos, usarCanais, usarContadores, usarFunis, useRelogio, ValorCampo } from './comum';
 
 interface Conversa { id: string; status: string; naoLidas: number; ultimaMensagem: string | null; ultimaMensagemEm: string | null; filaDesde: string | null; atendente: string | null; canal: string; canalTipo: string; contatoId: string; contato: string; telefone: string; lead: { id: string; titulo: string; etapa: string; funil: string } | null }
 type Aba = 'fila' | 'minhas' | 'atendimento' | 'resolvidas';
@@ -97,6 +97,9 @@ function Lado({ conversa }: { conversa?: Conversa }) {
   const funis = usarFunis();
   const lead = useQuery({ queryKey: ['crm', 'lead', conversa?.lead?.id], queryFn: () => api<any>(`/crm/leads/${conversa!.lead!.id}`), enabled: !!conversa?.lead?.id });
   const mover = useMutation({ mutationFn: (etapaId: string) => api(`/crm/leads/${conversa!.lead!.id}`, { metodo: 'PATCH', corpo: { etapaId } }), onSuccess: () => qc.invalidateQueries({ queryKey: ['crm'] }) });
+  const campos = usarCampos();
+  const salvarLead = useMutation({ mutationFn: (camposExtras: Record<string, string>) => api(`/crm/leads/${conversa!.lead!.id}`, { metodo: 'PATCH', corpo: { camposExtras } }), onSuccess: () => qc.invalidateQueries({ queryKey: ['crm', 'lead'] }) });
+  const salvarContato = useMutation({ mutationFn: (camposExtras: Record<string, string>) => api(`/crm/contatos/${conversa!.contatoId}`, { metodo: 'PATCH', corpo: { camposExtras } }), onSuccess: () => qc.invalidateQueries({ queryKey: ['crm', 'lead'] }) });
   if (!conversa) return null;
   if (!conversa.lead) return <div className="bloco"><h3>Sem card</h3><p className="muted">Este contato ainda não está em nenhum funil. Crie um card pelo quadro do funil.</p></div>;
   const l = lead.data;
@@ -117,6 +120,26 @@ function Lado({ conversa }: { conversa?: Conversa }) {
       </div>
       {l && (
         <>
+          {(() => {
+            const defs = (campos.data ?? []).filter((c) => c.entidade === 'contato' || !c.funilId || c.funilId === l.funilId);
+            if (!defs.length) return null;
+            const editar = pode('crm', 'editar');
+            return (
+              <div className="bloco">
+                <h3>Dados</h3>
+                {defs.map((c) => {
+                  const fonte = c.entidade === 'lead' ? l.camposExtras ?? {} : l.contato?.camposExtras ?? {};
+                  return (
+                    <div key={c.id} className="par">
+                      <span>{c.nome}</span>
+                      <ValorCampo def={c} valor={fonte[c.nome] ?? ''} desativado={!editar} mudar={(v) => (c.entidade === 'lead' ? salvarLead : salvarContato).mutate({ ...fonte, [c.nome]: v })} />
+                    </div>
+                  );
+                })}
+                {(salvarLead.error || salvarContato.error) && <Erro erro={salvarLead.error ?? salvarContato.error} />}
+              </div>
+            );
+          })()}
           {l.etiquetas?.length > 0 && <div className="bloco"><h3>Etiquetas</h3><div className="tags" style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>{l.etiquetas.map((t: string) => <span key={t} className="tag">{t}</span>)}</div></div>}
           {Object.keys(l.origem ?? {}).length > 0 && (
             <div className="bloco">

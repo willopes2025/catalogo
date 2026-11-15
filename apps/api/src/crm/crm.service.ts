@@ -188,8 +188,8 @@ export class CrmService {
 
   /** Dados para preencher {{nome}}, {{primeiro_nome}}, {{etapa}}… numa mensagem. */
   async dadosDoLead(leadId: string) {
-    const r = await this.db.execute<{ nome: string; telefone: string; etapa: string; funil: string; titulo: string }>(sql`
-      select c.nome, c.telefone, e.nome as etapa, f.nome as funil, l.titulo
+    const r = await this.db.execute<{ nome: string; telefone: string; etapa: string; funil: string; titulo: string; extrasLead: Record<string, string>; extrasContato: Record<string, string> }>(sql`
+      select c.nome, c.telefone, e.nome as etapa, f.nome as funil, l.titulo, l.campos_extras as "extrasLead", c.campos_extras as "extrasContato"
       from crm_leads l join crm_contatos c on c.id = l.contato_id join crm_etapas e on e.id = l.etapa_id join crm_funis f on f.id = l.funil_id
       where l.id = ${leadId}`);
     return r.rows[0] ?? null;

@@ -1261,12 +1261,14 @@ export const crmCampos = pgTable('crm_campos', {
   /** contato | lead */
   entidade: text('entidade').notNull(),
   nome: text('nome').notNull(),
-  /** texto | numero | data | lista | telefone | email | url | sim_nao */
+  /** texto | textao | numero | moeda | data | lista | multipla | telefone | email | url | sim_nao */
   tipo: text('tipo').notNull().default('texto'),
   opcoes: jsonb('opcoes').$type<string[]>().notNull().default([]),
   /** Só para cards deste funil (vazio = todos). */
   funilId: uuid('funil_id').references(() => crmFunis.id, { onDelete: 'cascade' }),
   ordem: integer('ordem').notNull().default(0),
+  /** Aparece no cartãozinho do quadro (kanban). */
+  noQuadro: boolean('no_quadro').notNull().default(false),
   criadoEm: criadoEm(),
 });
 

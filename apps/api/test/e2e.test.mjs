@@ -1151,6 +1151,19 @@ test('CRM: funis, números de WhatsApp, fila de atendimento, chat, conversa inte
   await ok('PATCH', `/crm/campos/${campo.id}`, { nome: 'Peça de interesse' });
   assert.equal((await ok('GET', `/crm/leads/${novo.id}`)).camposExtras['Peça de interesse'], 'Brinco argola', 'renomear leva o valor junto');
   await ok('PATCH', `/crm/contatos/${lj.contatoId}`, { camposExtras: { Aniversário: '1990-05-10' } });
+  // Campo novo criado pelo card: nome repetido é recusado, ordem muda, aparece no quadro e a busca acha pelo valor.
+  assert.equal((await chamar('POST', '/crm/campos', { entidade: 'lead', nome: 'peça de INTERESSE' })).status, 400, 'nome repetido');
+  assert.equal((await chamar('POST', '/crm/campos', { entidade: 'lead', nome: 'Tamanhos', tipo: 'multipla' })).status, 400, 'lista sem opções');
+  const tam = await ok('POST', '/crm/campos', { entidade: 'lead', nome: 'Tamanhos', tipo: 'multipla', opcoes: ['14', '16', '18'], noQuadro: true });
+  assert.equal(tam.noQuadro, true);
+  await ok('POST', '/crm/campos/ordem', { ids: [tam.id, campo.id] });
+  const defs = (await ok('GET', '/crm/campos')).filter((c) => c.entidade === 'lead');
+  assert.ok(defs.findIndex((c) => c.id === tam.id) < defs.findIndex((c) => c.id === campo.id), 'ordem nova');
+  await ok('PATCH', `/crm/campos/${tam.id}`, { noQuadro: false, opcoes: ['14', '16', '18', '20'] });
+  await ok('PATCH', `/crm/leads/${novo.id}`, { camposExtras: { 'Peça de interesse': 'Brinco argola', Tamanhos: '16; 18' } });
+  const achados = await ok('GET', `/crm/leads?funilId=${cli.id}&busca=argola`);
+  assert.ok(achados.some((x) => x.id === novo.id && x.camposExtras.Tamanhos === '16; 18'), 'busca pelo valor do campo e lista traz os campos');
+  assert.equal(achados.find((x) => x.id === novo.id).contatoExtras['Aniversário'], '1990-05-10');
 
   // Descadastro: respondeu SAIR pelo QR code.
   const hookQr = qr.webhook.replace('http://localhost:3100', '');

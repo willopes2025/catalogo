@@ -20,7 +20,7 @@ export function variantesTelefone(t: string): string[] {
 
 /** Troca {{nome}}, {{primeiro_nome}}, {{telefone}}, {{etapa}} e {{funil}} pelos dados do lead. */
 export function preencherTexto(texto: string, dados: Record<string, string | null | undefined>) {
-  return texto.replace(/\{\{\s*([a-z_]+)\s*\}\}/gi, (m, k: string) => dados[k.toLowerCase()] ?? m);
+  return texto.replace(/\{\{\s*([a-z0-9_]+)\s*\}\}/gi, (m, k: string) => dados[k.toLowerCase()] ?? (k.toLowerCase().startsWith('campo_') ? '' : m));
 }
 
 export function primeiroNome(nome: string | null | undefined) {
@@ -30,3 +30,15 @@ export function primeiroNome(nome: string | null | undefined) {
 
 /** Pedido de descadastro de disparos. */
 export const PEDIU_SAIR = /^\s*(sair|parar|pare|stop|cancelar|descadastrar|não quero mais|nao quero mais)\s*[.!]*\s*$/i;
+
+/** Nome do campo personalizado → variável de mensagem: "Cidade de entrega" vira campo_cidade_de_entrega. */
+export function variavelDoCampo(nome: string) {
+  return 'campo_' + nome.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
+}
+
+/** Valores dos campos personalizados como variáveis ({{campo_cidade}}); moeda vai formatada. */
+export function variaveisDosCampos(...extras: (Record<string, string> | null | undefined)[]) {
+  const r: Record<string, string> = {};
+  for (const e of extras) for (const [k, v] of Object.entries(e ?? {})) if (v != null && v !== '') r[variavelDoCampo(k)] = String(v);
+  return r;
+}

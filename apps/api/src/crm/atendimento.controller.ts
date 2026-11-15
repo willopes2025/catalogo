@@ -41,7 +41,8 @@ const arr = (xs: string[], tipo = 'uuid') => sql`array[${sql.join(xs.map((x) => 
 const gestor = (u: UsuarioLogado) => temPermissao(u.permissoes, 'crm', 'excluir');
 const uuid = z.string().uuid();
 const etiquetas = z.array(z.string().trim().min(1).max(40)).max(30);
-const campos = z.record(z.string().max(60), z.string().max(1000));
+export const TIPOS_CAMPO = ['texto', 'textao', 'numero', 'moeda', 'data', 'lista', 'multipla', 'telefone', 'email', 'url', 'sim_nao'] as const;
+const campos = z.record(z.string().max(60), z.string().max(4000));
 const acao = z
   .object({ tipo: z.enum(['esperar', 'enviar_template', 'enviar_mensagem', 'mover_etapa', 'atribuir', 'adicionar_etiqueta', 'criar_tarefa']) })
   .catchall(z.unknown())
@@ -179,7 +180,7 @@ export class AtendimentoController {
     if (busca?.trim()) {
       const b = `%${busca.trim()}%`;
       const dig = busca.replace(/\D/g, '');
-      f.push(sql`(${crmLeads.titulo} ilike ${b} or ${crmContatos.nome} ilike ${b}${dig.length >= 4 ? sql` or ${crmContatos.telefone} like ${'%' + dig + '%'}` : sql``})`);
+      f.push(sql`(${crmLeads.titulo} ilike ${b} or ${crmContatos.nome} ilike ${b} or ${crmLeads.camposExtras}::text ilike ${b} or ${crmContatos.camposExtras}::text ilike ${b}${dig.length >= 4 ? sql` or ${crmContatos.telefone} like ${'%' + dig + '%'}` : sql``})`);
     }
     return this.db
       .select({
@@ -196,6 +197,8 @@ export class AtendimentoController {
         contatoId: crmLeads.contatoId,
         contato: crmContatos.nome,
         telefone: crmContatos.telefone,
+        camposExtras: crmLeads.camposExtras,
+        contatoExtras: crmContatos.camposExtras,
         entrouNaEtapaEm: crmLeads.entrouNaEtapaEm,
         ultimaInteracaoEm: crmLeads.ultimaInteracaoEm,
         criadoEm: crmLeads.criadoEm,
@@ -603,13 +606,16 @@ export class AtendimentoController {
       z.object({
         entidade: z.enum(['contato', 'lead']),
         nome: z.string().trim().min(1).max(60),
-        tipo: z.enum(['texto', 'numero', 'data', 'lista', 'telefone', 'email', 'url', 'sim_nao']).default('texto'),
+        tipo: z.enum(TIPOS_CAMPO).default('texto'),
         opcoes: z.array(z.string().trim().min(1).max(60)).max(50).default([]),
         funilId: uuid.nullable().optional(),
+        noQuadro: z.boolean().default(false),
       }),
       body,
     );
-    if (d.tipo === 'lista' && !d.opcoes.length) throw new BadRequestException('Informe as opções da lista.');
+    if ((d.tipo === 'lista' || d.tipo === 'multipla') && !d.opcoes.length) throw new BadRequestException('Informe as opções da lista.');
+    const [repetido] = await this.db.select({ id: crmCampos.id }).from(crmCampos).where(and(eq(crmCampos.entidade, d.entidade), sql`lower(${crmCampos.nome}) = lower(${d.nome})`));
+    if (repetido) throw new BadRequestException('Já existe um campo com esse nome.');
     const [{ ordem }] = await this.db.select({ ordem: sql<number>`coalesce(max(${crmCampos.ordem}),0)+1` }).from(crmCampos).where(eq(crmCampos.entidade, d.entidade));
     const [c] = await this.db.insert(crmCampos).values({ ...d, funilId: d.entidade === 'lead' ? (d.funilId ?? null) : null, ordem }).returning();
     return c;
@@ -618,9 +624,24 @@ export class AtendimentoController {
   @Patch('crm/campos/:id')
   @Permissao('crm', 'excluir')
   async editarCampo(@Param('id', ParseUUIDPipe) id: string, @Body() body: unknown) {
-    const d = validar(z.object({ nome: z.string().trim().min(1).max(60).optional(), opcoes: z.array(z.string().trim().min(1).max(60)).max(50).optional(), ordem: z.number().int().optional() }), body);
+    const d = validar(
+      z.object({
+        nome: z.string().trim().min(1).max(60).optional(),
+        opcoes: z.array(z.string().trim().min(1).max(60)).max(50).optional(),
+        ordem: z.number().int().optional(),
+        noQuadro: z.boolean().optional(),
+        funilId: uuid.nullable().optional(),
+      }),
+      body,
+    );
     const [atual] = await this.db.select().from(crmCampos).where(eq(crmCampos.id, id));
     if (!atual) throw new NotFoundException('Campo não encontrado.');
+    if (atual.entidade === 'contato') delete d.funilId;
+    if (d.opcoes && (atual.tipo === 'lista' || atual.tipo === 'multipla') && !d.opcoes.length) throw new BadRequestException('A lista precisa de pelo menos uma opção.');
+    if (d.nome && d.nome.toLowerCase() !== atual.nome.toLowerCase()) {
+      const [repetido] = await this.db.select({ id: crmCampos.id }).from(crmCampos).where(and(eq(crmCampos.entidade, atual.entidade), sql`lower(${crmCampos.nome}) = lower(${d.nome})`));
+      if (repetido) throw new BadRequestException('Já existe um campo com esse nome.');
+    }
     const [c] = await this.db.update(crmCampos).set(d).where(eq(crmCampos.id, id)).returning();
     // Renomeou: leva os valores já preenchidos para o nome novo.
     if (d.nome && d.nome !== atual.nome) {
@@ -628,6 +649,17 @@ export class AtendimentoController {
       await this.db.execute(sql.raw(`update ${tabela} set campos_extras = (campos_extras - '${atual.nome.replace(/'/g, "''")}') || jsonb_build_object('${d.nome.replace(/'/g, "''")}', campos_extras->'${atual.nome.replace(/'/g, "''")}') where campos_extras ? '${atual.nome.replace(/'/g, "''")}'`));
     }
     return c;
+  }
+
+  /** Nova ordem dos campos (lista de ids na ordem desejada). */
+  @Post('crm/campos/ordem')
+  @Permissao('crm', 'excluir')
+  async ordenarCampos(@Body() body: unknown) {
+    const { ids } = validar(z.object({ ids: z.array(uuid).min(1).max(300) }), body);
+    await this.db.transaction(async (tx) => {
+      for (const [i, id] of ids.entries()) await tx.update(crmCampos).set({ ordem: i + 1 }).where(eq(crmCampos.id, id));
+    });
+    return { ok: true };
   }
 
   @Delete('crm/campos/:id')
