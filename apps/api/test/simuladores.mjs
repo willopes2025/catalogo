@@ -6,6 +6,7 @@
 import http from 'node:http';
 
 const recebidos = [];
+const wa = { n: 0, zapiConectado: true, webhookZapi: null };
 
 /** Dados fictícios do Jueri (CPFs gerados, válidos só no dígito). */
 const jueri = {
@@ -51,7 +52,12 @@ http
   .createServer(async (req, res) => {
     let txt = '';
     for await (const c of req) txt += c;
-    const corpo = txt ? JSON.parse(txt) : null;
+    let corpo = null;
+    try {
+      corpo = txt ? JSON.parse(txt) : null;
+    } catch {
+      corpo = { bruto: txt.slice(0, 200) }; // multipart (upload de mídia)
+    }
     const url = new URL(req.url, 'http://x');
     recebidos.push({ metodo: req.method, caminho: url.pathname + url.search, headers: req.headers, corpo });
 
@@ -71,6 +77,39 @@ http
     if (url.pathname === '/jueri-img/a.png') { res.writeHead(200, { 'content-type': 'application/octet-stream' }); return res.end(Buffer.from('89504e470d0a1a0a0000000d49484452000000030000000308060000005628b5bf0000000970485973000003e8000003e801b57b526b0000000e49444154789c63f88f0418707200bb8723dd93f9e43c0000000049454e44ae426082', 'hex')); }
     if (url.pathname === '/jueri-img/b.jpg') { res.writeHead(200, { 'content-type': 'image/jpeg' }); return res.end(Buffer.from('ffd8ffdb00430006040506050406060506070706080a100a0a09090a140e0f0c1017141818171416161a1d251f1a1b231c1616202c20232627292a29191f2d302d283025282928ffdb0043010707070a080a130a0a13281a161a2828282828282828282828282828282828282828282828282828282828282828282828282828282828282828282828282828ffc00011080004000403012200021101031101ffc4001500010100000000000000000000000000000006ffc40014100100000000000000000000000000000000ffc4001501010100000000000000000000000000000005ffc40014110100000000000000000000000000000000ffda000c03010002110311003f00b8005b7fffd9', 'hex')); }
     if (url.pathname === '/jueri-img/falsa.jpg') { res.writeHead(200, { 'content-type': 'image/jpeg' }); return res.end('<html>não é foto</html>'); }
+
+    // ── WhatsApp oficial (API Cloud da Meta) ──
+    if (url.pathname.startsWith('/meta-wa/')) {
+      const r = url.pathname.replace('/meta-wa/', '');
+      if (req.headers.authorization !== 'Bearer token-meta-wa' && !r.startsWith('arquivo/')) return responder(res, 401, { error: { message: 'Invalid OAuth access token', code: 190 } });
+      if (req.method === 'POST' && r === 'PN1/messages') {
+        if (corpo?.to === '5599999999999') return responder(res, 400, { error: { message: 'Re-engagement message', code: 131047 } });
+        return responder(res, 200, { messaging_product: 'whatsapp', messages: [{ id: `wamid.${++wa.n}` }] });
+      }
+      if (req.method === 'POST' && r === 'PN1/media') return responder(res, 200, { id: 'midia-enviada-1' });
+      if (r === 'PN1') return responder(res, 200, { display_phone_number: '+55 27 3333-0000', verified_name: 'Aritana Semijoias', quality_rating: 'GREEN' });
+      if (r === 'WABA1/message_templates') return responder(res, 200, { data: [
+        { name: 'boas_vindas', language: 'pt_BR', status: 'APPROVED', category: 'MARKETING', components: [{ type: 'BODY', text: 'Olá {{1}}, bem-vinda à Aritana! Sua etapa: {{2}}.' }] },
+        { name: 'em_analise', language: 'pt_BR', status: 'PENDING', category: 'UTILITY', components: [{ type: 'BODY', text: 'Aguarde.' }] },
+      ] });
+      if (r === 'midia-recebida-1') return responder(res, 200, { url: 'http://localhost:3199/meta-wa/arquivo/1', mime_type: 'image/png' });
+      if (r === 'arquivo/1') { res.writeHead(200, { 'content-type': 'image/png' }); return res.end(Buffer.from('89504e470d0a1a0a0000000d4948445200000001000000010806000000', 'hex')); }
+      return responder(res, 404, { error: { message: 'not found' } });
+    }
+
+    // ── WhatsApp por QR code (Z-API) ──
+    if (url.pathname.startsWith('/zapi/instances/I1/token/T1/')) {
+      if (req.headers['client-token'] !== 'CT1') return responder(res, 400, { error: 'unauthorized', message: 'client-token inválido' });
+      const r = url.pathname.replace('/zapi/instances/I1/token/T1/', '');
+      if (r.startsWith('send-')) return responder(res, 200, { zaapId: `z${++wa.n}`, messageId: `ZMSG${wa.n}`, id: `ZMSG${wa.n}` });
+      if (r === 'status') return responder(res, 200, { connected: wa.zapiConectado, smartphoneConnected: true });
+      if (r === 'device') return responder(res, 200, { phone: '5527988887777' });
+      if (r === 'qr-code/image') return responder(res, 200, { value: 'data:image/png;base64,iVBORw0KGgo=' });
+      if (r === 'update-every-webhooks') { wa.webhookZapi = corpo?.value; return responder(res, 200, { value: true }); }
+      if (r === 'disconnect') { wa.zapiConectado = false; return responder(res, 200, { value: true }); }
+      return responder(res, 404, { error: 'not found' });
+    }
+    if (url.pathname === '/zapi-arquivo/foto.jpg') { res.writeHead(200, { 'content-type': 'image/jpeg' }); return res.end(Buffer.from('ffd8ffe000104a46494600010100000100010000ffd9', 'hex')); }
 
     // ── Jueri (API v1, cliente 11566) ──
     if (url.pathname === '/__jueri/lento') {

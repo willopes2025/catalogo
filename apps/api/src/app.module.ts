@@ -51,6 +51,10 @@ import { FormulariosController } from './formularios/formularios.controller';
 import { MarketingController } from './marketing/marketing.controller';
 import { PontosService } from './pontos/pontos.service';
 import { JueriController } from './jueri/jueri.controller';
+import { AtendimentoController } from './crm/atendimento.controller';
+import { CrmService } from './crm/crm.service';
+import { CanaisService } from './crm/canais.service';
+import { AutomacaoService } from './crm/automacao.service';
 import { ArquivosController } from './arquivos/arquivos.controller';
 import { ArquivosService } from './arquivos/arquivos.service';
 import { JueriService } from './jueri/jueri.service';
@@ -65,6 +69,7 @@ if (!segredo || (process.env.NODE_ENV === 'production' && segredo.length < 32)) 
   controllers: [
     SaudeController,
     JueriController,
+    AtendimentoController,
     ArquivosController,
     AuthController,
     PessoasController,
@@ -104,6 +109,9 @@ if (!segredo || (process.env.NODE_ENV === 'production' && segredo.length < 32)) 
   providers: [
     SegredosService,
     JueriService,
+    CrmService,
+    CanaisService,
+    AutomacaoService,
     ArquivosService,
     PontosService,
     AuditoriaService,

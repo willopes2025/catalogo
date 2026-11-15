@@ -12,7 +12,8 @@ import { AuditoriaService } from '../comum/auditoria.service';
 import { ConfiguracoesService } from '../configuracoes/configuracoes.service';
 import { EmailService } from '../integracoes/email.service';
 import { SegredosService } from '../segredos/segredos.service';
-import { candidaturaNotas, candidaturas, pessoas, usuarios } from '../db/schema';
+import { candidaturaNotas, candidaturas, crmLeads, pessoas, usuarios } from '../db/schema';
+import { CrmService } from './crm.service';
 
 export const ETAPAS = ['nova', 'contato', 'entrevista', 'documentos', 'aprovada', 'recusada'] as const;
 const MODELOS = ['consignado', 'revenda', 'afiliado', 'nao_sei'] as const;
@@ -45,7 +46,33 @@ export class CrmController {
     private readonly config: ConfiguracoesService,
     private readonly email: EmailService,
     private readonly segredos: SegredosService,
+    private readonly crmSvc: CrmService,
   ) {}
+
+  /** Toda candidatura vira (ou atualiza) um card no funil de recrutamento. */
+  private async cardDaCandidatura(c: typeof candidaturas.$inferSelect, responsavelId?: string | null) {
+    try {
+      const alvo = await this.crmSvc.etapaAuto('recrutamento', c.etapa);
+      if (!alvo) return;
+      const [ja] = await this.db.select({ id: crmLeads.id }).from(crmLeads).where(eq(crmLeads.candidaturaId, c.id));
+      if (ja) return;
+      const contato = await this.crmSvc.garantirContato({ telefone: c.telefone, nome: c.nome, email: c.email });
+      const extrasContato = Object.fromEntries(Object.entries({ CPF: c.cpf, Cidade: c.cidade, UF: c.uf, Instagram: c.instagram }).filter(([, v]) => v)) as Record<string, string>;
+      if (Object.keys(extrasContato).length) await this.db.execute(sql`update crm_contatos set campos_extras = ${JSON.stringify(extrasContato)}::jsonb || campos_extras where id = ${contato.id}`);
+      await this.crmSvc.criarLead({
+        funilId: alvo.funilId,
+        etapaId: alvo.etapaId,
+        contatoId: contato.id,
+        titulo: `${c.nome}${c.cidade ? ` · ${c.cidade}` : ''}`,
+        origem: c.origem,
+        candidaturaId: c.id,
+        responsavelId: responsavelId ?? null,
+        camposExtras: Object.fromEntries(Object.entries({ 'Modelo de interesse': c.modeloInteresse, 'Experiência com vendas': c.experiencia, 'Como conheceu': c.comoConheceu, 'Indicada por': c.indicadaPor }).filter(([, v]) => v)) as Record<string, string>,
+      });
+    } catch {
+      // Telefone inválido para WhatsApp etc.: a candidatura fica, só sem card.
+    }
+  }
 
   /** Formulário "Quero ser revendedora" (link para anúncios, Instagram e WhatsApp). */
   @Publico()
@@ -68,6 +95,7 @@ export class CrmController {
     }
     const [c] = await this.db.insert(candidaturas).values({ ...dados, origem: { ...(origem ?? {}) } }).returning();
     await this.auditoria.registrar({ acao: 'candidatura', entidade: 'candidatura', entidadeId: c.id, dados: { origem: origem?.utm_source ?? null } });
+    await this.cardDaCandidatura(c);
     const equipe = (await this.config.ler('avisos')).emailsEquipe;
     for (const para of equipe) {
       await this.email
@@ -138,6 +166,7 @@ export class CrmController {
     const d = validar(publicoSchema.omit({ consentimentoLgpd: true, site: true }).extend({ consentimentoLgpd: z.boolean().default(false) }), body);
     const [c] = await this.db.insert(candidaturas).values({ ...d, origem: { utm_source: 'equipe', ...(d.origem ?? {}) }, responsavelId: u.id, etapa: 'contato' }).returning();
     await this.auditoria.registrar({ usuarioId: u.id, acao: 'criar', entidade: 'candidatura', entidadeId: c.id });
+    await this.cardDaCandidatura(c, u.id);
     return c;
   }
 
@@ -164,6 +193,11 @@ export class CrmController {
     if (Object.keys(mudancas).length) await this.db.update(candidaturas).set({ ...mudancas, atualizadoEm: new Date() }).where(eq(candidaturas.id, id));
     const textos = [d.etapa && d.etapa !== atual.etapa ? `Mudou para "${d.etapa}"${d.motivoRecusa ? `: ${d.motivoRecusa}` : ''}.` : null, nota || null].filter(Boolean) as string[];
     for (const texto of textos) await this.db.insert(candidaturaNotas).values({ candidaturaId: id, usuarioId: u.id, texto });
+    if (d.etapa && d.etapa !== atual.etapa) {
+      const [card] = await this.db.select().from(crmLeads).where(eq(crmLeads.candidaturaId, id));
+      const alvo = await this.crmSvc.etapaAuto('recrutamento', d.etapa);
+      if (card && alvo && card.etapaId !== alvo.etapaId) await this.crmSvc.moverLead(card.id, alvo.etapaId, { usuarioId: u.id, motivo: d.motivoRecusa, origem: 'automatico' });
+    }
     return { ok: true };
   }
 
@@ -208,6 +242,14 @@ export class CrmController {
       await tx.update(candidaturas).set({ etapa: 'aprovada', pessoaId: p.id, atualizadoEm: new Date() }).where(eq(candidaturas.id, id));
       await tx.insert(candidaturaNotas).values({ candidaturaId: id, usuarioId: u.id, texto: `Aprovada no modelo ${d.modeloTrabalho}. Representante criada.` });
       await this.auditoria.registrar({ usuarioId: u.id, acao: 'aprovar', entidade: 'candidatura', entidadeId: id, dados: { pessoaId: p.id } }, tx);
+      // Card do recrutamento vai para "Aprovada" e passa a apontar para a revendedora.
+      const [card] = await tx.select().from(crmLeads).where(eq(crmLeads.candidaturaId, id));
+      const alvo = await this.crmSvc.etapaAuto('recrutamento', 'aprovada', tx);
+      if (card && alvo) {
+        await tx.update(crmLeads).set({ pessoaId: p.id }).where(eq(crmLeads.id, card.id));
+        await tx.execute(sql`update crm_contatos set pessoa_id = ${p.id} where id = ${card.contatoId} and pessoa_id is null`);
+        await this.crmSvc.moverLead(card.id, alvo.etapaId, { usuarioId: u.id, origem: 'automatico' }, tx);
+      }
       return { pessoaId: p.id };
     });
   }

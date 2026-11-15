@@ -1,0 +1,998 @@
+import { BadRequestException, Body, Controller, Delete, ForbiddenException, Get, Headers, HttpCode, Inject, NotFoundException, Param, ParseUUIDPipe, Patch, Post, Query, Req, Res } from '@nestjs/common';
+import { existsSync } from 'node:fs';
+import type { Request, Response } from 'express';
+import { and, asc, desc, eq, inArray, sql, type SQL } from 'drizzle-orm';
+import { z } from 'zod';
+import { DB, type Db } from '../comum/db.module';
+import { Permissao, Publico, Usuario, temPermissao, type UsuarioLogado } from '../comum/auth';
+import { opcional, validar } from '../comum/validacao';
+import { AuditoriaService } from '../comum/auditoria.service';
+import { ArquivosService } from '../arquivos/arquivos.service';
+import { SegredosService } from '../segredos/segredos.service';
+import {
+  candidaturas,
+  crmCanais,
+  crmContatos,
+  crmConversas,
+  crmDisparoDestinos,
+  crmDisparos,
+  crmEtapas,
+  crmEventos,
+  crmFila,
+  crmFunis,
+  crmGatilhos,
+  crmLeads,
+  crmMensagens,
+  crmRespostasRapidas,
+  crmCampos,
+  crmRamais,
+  configuracoes,
+  crmTarefas,
+  crmTemplates,
+  pessoas,
+  usuarios,
+} from '../db/schema';
+import { CrmService } from './crm.service';
+import { CanaisService } from './canais.service';
+import { AutomacaoService } from './automacao.service';
+
+/** Lista como array do Postgres (o sql`` do Drizzle expande arrays em vários parâmetros). */
+const arr = (xs: string[], tipo = 'uuid') => sql`array[${sql.join(xs.map((x) => sql`${x}`), sql`, `)}]::${sql.raw(tipo)}[]`;
+const gestor = (u: UsuarioLogado) => temPermissao(u.permissoes, 'crm', 'excluir');
+const uuid = z.string().uuid();
+const etiquetas = z.array(z.string().trim().min(1).max(40)).max(30);
+const campos = z.record(z.string().max(60), z.string().max(1000));
+const acao = z
+  .object({ tipo: z.enum(['esperar', 'enviar_template', 'enviar_mensagem', 'mover_etapa', 'atribuir', 'adicionar_etiqueta', 'criar_tarefa']) })
+  .catchall(z.unknown())
+  .superRefine((a, ctx) => {
+    const r = a as Record<string, unknown>;
+    const falta = (m: string) => ctx.addIssue({ code: 'custom', message: m });
+    if (a.tipo === 'esperar' && !(Number(r.minutos) >= 1)) falta('Informe quantos minutos esperar');
+    if (a.tipo === 'enviar_template' && !r.templateId) falta('Escolha o template');
+    if (a.tipo === 'enviar_mensagem' && !String(r.texto ?? '').trim()) falta('Escreva a mensagem');
+    if (a.tipo === 'mover_etapa' && !r.etapaId) falta('Escolha a etapa');
+    if (a.tipo === 'atribuir' && !(Array.isArray(r.usuarios) && r.usuarios.length)) falta('Escolha quem recebe');
+    if (a.tipo === 'adicionar_etiqueta' && !String(r.etiqueta ?? '').trim()) falta('Escreva a etiqueta');
+  });
+const gatilhoSchema = z.object({
+  nome: z.string().trim().min(2).max(120),
+  funilId: uuid.nullable().optional(),
+  evento: z.enum(['lead_criado', 'entrou_etapa', 'mensagem_recebida', 'sem_resposta', 'etiqueta_adicionada']),
+  etapaId: uuid.nullable().optional(),
+  parametro: opcional(120),
+  acoes: z.array(acao).min(1, 'Adicione ao menos uma ação').max(20),
+  ativo: z.boolean().default(true),
+});
+
+/**
+ * CRM no padrão Kommo/Widezap: funis, cards, conversas com fila de atendimento, vários números de WhatsApp,
+ * templates, respostas rápidas, gatilhos e disparos em massa.
+ * Atendente vê a fila e as próprias conversas; quem tem "excluir" no CRM é gestão: vê tudo e reatribui.
+ */
+@Controller()
+export class AtendimentoController {
+  constructor(
+    @Inject(DB) private readonly db: Db,
+    private readonly crm: CrmService,
+    private readonly canais: CanaisService,
+    private readonly automacao: AutomacaoService,
+    private readonly arquivos: ArquivosService,
+    private readonly auditoria: AuditoriaService,
+    private readonly segredos: SegredosService,
+  ) {}
+
+  // ───────────── Funis e etapas ─────────────
+
+  @Get('crm/funis')
+  @Permissao('crm', 'ver')
+  async funis(@Query('todos') todos?: string) {
+    const fs = await this.crm.funis(!todos);
+    const contagem = await this.db.execute<{ etapa_id: string; n: number; valor: number }>(sql`select etapa_id, count(*)::int as n, coalesce(sum(valor),0)::bigint as valor from crm_leads group by etapa_id`);
+    const porEtapa = new Map(contagem.rows.map((c) => [c.etapa_id, { n: c.n, valor: Number(c.valor) }]));
+    return fs.map((f) => ({ ...f, etapas: f.etapas.map((e) => ({ ...e, leads: porEtapa.get(e.id)?.n ?? 0, valor: porEtapa.get(e.id)?.valor ?? 0 })) }));
+  }
+
+  @Post('crm/funis')
+  @Permissao('crm', 'excluir')
+  async criarFunil(@Body() body: unknown) {
+    const d = validar(z.object({ nome: z.string().trim().min(2).max(80) }), body);
+    const [{ ordem }] = await this.db.select({ ordem: sql<number>`coalesce(max(${crmFunis.ordem}),0)+1` }).from(crmFunis);
+    const [f] = await this.db.insert(crmFunis).values({ nome: d.nome, ordem }).returning();
+    await this.db.insert(crmEtapas).values([
+      { funilId: f.id, nome: 'Novo', ordem: 1 },
+      { funilId: f.id, nome: 'Em andamento', ordem: 2 },
+      { funilId: f.id, nome: 'Ganho', ordem: 3, tipo: 'ganho', cor: '#4f8a5b' },
+      { funilId: f.id, nome: 'Perdido', ordem: 4, tipo: 'perdido', cor: '#b0574f' },
+    ]);
+    return f;
+  }
+
+  @Patch('crm/funis/:id')
+  @Permissao('crm', 'excluir')
+  async editarFunil(@Param('id', ParseUUIDPipe) id: string, @Body() body: unknown) {
+    const d = validar(z.object({ nome: z.string().trim().min(2).max(80).optional(), ativo: z.boolean().optional(), ordem: z.number().int().optional() }), body);
+    const [f] = await this.db.update(crmFunis).set(d).where(eq(crmFunis.id, id)).returning();
+    if (!f) throw new NotFoundException('Funil não encontrado.');
+    return f;
+  }
+
+  @Post('crm/funis/:id/etapas')
+  @Permissao('crm', 'excluir')
+  async criarEtapa(@Param('id', ParseUUIDPipe) funilId: string, @Body() body: unknown) {
+    const d = validar(z.object({ nome: z.string().trim().min(1).max(60), cor: z.string().regex(/^#[0-9a-f]{6}$/i).default('#a68a64'), tipo: z.enum(['aberta', 'ganho', 'perdido']).default('aberta') }), body);
+    const [{ ordem }] = await this.db.select({ ordem: sql<number>`coalesce(max(${crmEtapas.ordem}),0)+1` }).from(crmEtapas).where(eq(crmEtapas.funilId, funilId));
+    const [e] = await this.db.insert(crmEtapas).values({ ...d, funilId, ordem }).returning();
+    return e;
+  }
+
+  @Patch('crm/etapas/:id')
+  @Permissao('crm', 'excluir')
+  async editarEtapa(@Param('id', ParseUUIDPipe) id: string, @Body() body: unknown) {
+    const d = validar(z.object({ nome: z.string().trim().min(1).max(60).optional(), cor: z.string().regex(/^#[0-9a-f]{6}$/i).optional(), tipo: z.enum(['aberta', 'ganho', 'perdido']).optional() }), body);
+    const [e] = await this.db.update(crmEtapas).set(d).where(eq(crmEtapas.id, id)).returning();
+    if (!e) throw new NotFoundException('Etapa não encontrada.');
+    return e;
+  }
+
+  @Post('crm/funis/:id/ordem')
+  @Permissao('crm', 'excluir')
+  async ordenarEtapas(@Param('id', ParseUUIDPipe) funilId: string, @Body() body: unknown) {
+    const { ids } = validar(z.object({ ids: z.array(uuid).min(1) }), body);
+    for (const [i, id] of ids.entries()) await this.db.update(crmEtapas).set({ ordem: i + 1 }).where(and(eq(crmEtapas.id, id), eq(crmEtapas.funilId, funilId)));
+    return { ok: true };
+  }
+
+  @Delete('crm/etapas/:id')
+  @Permissao('crm', 'excluir')
+  async apagarEtapa(@Param('id', ParseUUIDPipe) id: string) {
+    const [e] = await this.db.select().from(crmEtapas).where(eq(crmEtapas.id, id));
+    if (!e) throw new NotFoundException('Etapa não encontrada.');
+    if (e.chave) throw new BadRequestException('Esta etapa é usada pelo funil automático; renomeie em vez de apagar.');
+    const [{ n }] = await this.db.select({ n: sql<number>`count(*)::int` }).from(crmLeads).where(eq(crmLeads.etapaId, id));
+    if (n) throw new BadRequestException(`Há ${n} card(s) nesta etapa. Mova-os antes de apagar.`);
+    await this.db.delete(crmEtapas).where(eq(crmEtapas.id, id));
+    return { ok: true };
+  }
+
+  // ───────────── Cards (leads) ─────────────
+
+  @Get('crm/leads')
+  @Permissao('crm', 'ver')
+  async leads(
+    @Usuario() u: UsuarioLogado,
+    @Query('funilId') funilId?: string,
+    @Query('busca') busca?: string,
+    @Query('responsavelId') responsavelId?: string,
+    @Query('etiqueta') etiqueta?: string,
+    @Query('status') status?: string,
+  ) {
+    const f: SQL[] = [];
+    if (funilId) f.push(eq(crmLeads.funilId, funilId));
+    if (responsavelId === 'eu') f.push(eq(crmLeads.responsavelId, u.id));
+    else if (responsavelId === 'ninguem') f.push(sql`${crmLeads.responsavelId} is null`);
+    else if (responsavelId) f.push(eq(crmLeads.responsavelId, responsavelId));
+    if (etiqueta) f.push(sql`${crmLeads.etiquetas} ? ${etiqueta}`);
+    // Ganhos e perdidos somem do quadro depois de 30 dias (continuam na busca).
+    if (status) f.push(eq(crmLeads.status, status));
+    else if (!busca?.trim()) f.push(sql`(${crmLeads.status} = 'aberto' or ${crmLeads.atualizadoEm} > now() - interval '30 days')`);
+    if (busca?.trim()) {
+      const b = `%${busca.trim()}%`;
+      const dig = busca.replace(/\D/g, '');
+      f.push(sql`(${crmLeads.titulo} ilike ${b} or ${crmContatos.nome} ilike ${b}${dig.length >= 4 ? sql` or ${crmContatos.telefone} like ${'%' + dig + '%'}` : sql``})`);
+    }
+    return this.db
+      .select({
+        id: crmLeads.id,
+        numero: crmLeads.numero,
+        titulo: crmLeads.titulo,
+        valor: crmLeads.valor,
+        funilId: crmLeads.funilId,
+        etapaId: crmLeads.etapaId,
+        status: crmLeads.status,
+        etiquetas: crmLeads.etiquetas,
+        responsavelId: crmLeads.responsavelId,
+        responsavel: usuarios.nome,
+        contatoId: crmLeads.contatoId,
+        contato: crmContatos.nome,
+        telefone: crmContatos.telefone,
+        entrouNaEtapaEm: crmLeads.entrouNaEtapaEm,
+        ultimaInteracaoEm: crmLeads.ultimaInteracaoEm,
+        criadoEm: crmLeads.criadoEm,
+        naoLidas: sql<number>`(select coalesce(sum(c.nao_lidas),0)::int from crm_conversas c where c.contato_id = ${crmLeads.contatoId})`,
+        tarefas: sql<number>`(select count(*)::int from crm_tarefas t where t.lead_id = ${crmLeads.id} and t.feita_em is null)`,
+        tarefaVencida: sql<boolean>`exists (select 1 from crm_tarefas t where t.lead_id = ${crmLeads.id} and t.feita_em is null and t.vence_em < now())`,
+      })
+      .from(crmLeads)
+      .innerJoin(crmContatos, eq(crmContatos.id, crmLeads.contatoId))
+      .leftJoin(usuarios, eq(usuarios.id, crmLeads.responsavelId))
+      .where(f.length ? and(...f) : undefined)
+      .orderBy(desc(crmLeads.atualizadoEm))
+      .limit(2000);
+  }
+
+  @Post('crm/leads')
+  @Permissao('crm', 'criar')
+  async criarLead(@Usuario() u: UsuarioLogado, @Body() body: unknown) {
+    const d = validar(
+      z.object({
+        funilId: uuid,
+        etapaId: uuid.nullable().optional(),
+        nome: z.string().trim().min(2).max(150),
+        telefone: z.string().trim().min(8, 'Informe o WhatsApp'),
+        email: z.string().trim().email().nullable().optional().or(z.literal('').transform(() => null)),
+        titulo: opcional(200),
+        valor: z.number().int().min(0).default(0),
+        etiquetas: etiquetas.default([]),
+        camposExtras: campos.default({}),
+        responsavelId: uuid.nullable().optional(),
+      }),
+      body,
+    );
+    const contato = await this.crm.garantirContato({ telefone: d.telefone, nome: d.nome, email: d.email });
+    const aberto = await this.crm.leadAberto(contato.id, d.funilId);
+    if (aberto) throw new BadRequestException(`Este contato já tem um card aberto neste funil (nº ${aberto.numero}).`);
+    return this.crm.criarLead({ funilId: d.funilId, etapaId: d.etapaId, contatoId: contato.id, titulo: d.titulo || d.nome, valor: d.valor, etiquetas: d.etiquetas, camposExtras: d.camposExtras, responsavelId: d.responsavelId ?? u.id, usuarioId: u.id, origem: { utm_source: 'equipe' } });
+  }
+
+  @Get('crm/leads/:id')
+  @Permissao('crm', 'ver')
+  async lead(@Param('id', ParseUUIDPipe) id: string) {
+    const [l] = await this.db.select().from(crmLeads).where(eq(crmLeads.id, id));
+    if (!l) throw new NotFoundException('Card não encontrado.');
+    const [contato] = await this.db.select().from(crmContatos).where(eq(crmContatos.id, l.contatoId));
+    const [eventos, tarefas, conversas, outros] = await Promise.all([
+      this.db
+        .select({ id: crmEventos.id, tipo: crmEventos.tipo, texto: crmEventos.texto, autor: usuarios.nome, criadoEm: crmEventos.criadoEm })
+        .from(crmEventos)
+        .leftJoin(usuarios, eq(usuarios.id, crmEventos.usuarioId))
+        .where(eq(crmEventos.leadId, id))
+        .orderBy(desc(crmEventos.criadoEm))
+        .limit(300),
+      this.db
+        .select({ id: crmTarefas.id, titulo: crmTarefas.titulo, venceEm: crmTarefas.venceEm, feitaEm: crmTarefas.feitaEm, responsavelId: crmTarefas.responsavelId, responsavel: usuarios.nome })
+        .from(crmTarefas)
+        .leftJoin(usuarios, eq(usuarios.id, crmTarefas.responsavelId))
+        .where(eq(crmTarefas.leadId, id))
+        .orderBy(asc(crmTarefas.feitaEm), asc(crmTarefas.venceEm)),
+      this.db
+        .select({ id: crmConversas.id, canalId: crmConversas.canalId, canal: crmCanais.nome, canalTipo: crmCanais.tipo, status: crmConversas.status, atendenteId: crmConversas.atendenteId, naoLidas: crmConversas.naoLidas, ultimaEntradaEm: crmConversas.ultimaEntradaEm, ultimaMensagemEm: crmConversas.ultimaMensagemEm })
+        .from(crmConversas)
+        .innerJoin(crmCanais, eq(crmCanais.id, crmConversas.canalId))
+        .where(eq(crmConversas.contatoId, l.contatoId))
+        .orderBy(desc(crmConversas.ultimaMensagemEm)),
+      this.db
+        .select({ id: crmLeads.id, numero: crmLeads.numero, titulo: crmLeads.titulo, funil: crmFunis.nome, etapa: crmEtapas.nome, status: crmLeads.status })
+        .from(crmLeads)
+        .innerJoin(crmFunis, eq(crmFunis.id, crmLeads.funilId))
+        .innerJoin(crmEtapas, eq(crmEtapas.id, crmLeads.etapaId))
+        .where(and(eq(crmLeads.contatoId, l.contatoId), sql`${crmLeads.id} <> ${id}`)),
+    ]);
+    const [candidatura] = l.candidaturaId ? await this.db.select().from(candidaturas).where(eq(candidaturas.id, l.candidaturaId)) : [];
+    const pessoaId = l.pessoaId ?? contato.pessoaId;
+    const [pessoa] = pessoaId ? await this.db.select({ id: pessoas.id, nome: pessoas.nome, tipo: pessoas.tipo, status: pessoas.status, cidade: pessoas.cidade }).from(pessoas).where(eq(pessoas.id, pessoaId)) : [];
+    return { ...l, contato, eventos, tarefas, conversas, outrosCards: outros, candidatura: candidatura ?? null, pessoa: pessoa ?? null };
+  }
+
+  @Patch('crm/leads/:id')
+  @Permissao('crm', 'editar')
+  async editarLead(@Usuario() u: UsuarioLogado, @Param('id', ParseUUIDPipe) id: string, @Body() body: unknown) {
+    const d = validar(
+      z.object({
+        titulo: z.string().trim().min(1).max(200).optional(),
+        valor: z.number().int().min(0).optional(),
+        responsavelId: uuid.nullable().optional(),
+        etiquetas: etiquetas.optional(),
+        camposExtras: campos.optional(),
+        etapaId: uuid.optional(),
+        motivoPerda: opcional(300),
+      }),
+      body,
+    );
+    const [atual] = await this.db.select().from(crmLeads).where(eq(crmLeads.id, id));
+    if (!atual) throw new NotFoundException('Card não encontrado.');
+    if (d.etapaId && d.etapaId !== atual.etapaId) {
+      const [e] = await this.db.select().from(crmEtapas).where(eq(crmEtapas.id, d.etapaId));
+      if (atual.candidaturaId && e?.chave === 'aprovada') throw new BadRequestException('Para aprovar a candidata, use "Aprovar e criar revendedora" no card.');
+      await this.crm.moverLead(id, d.etapaId, { usuarioId: u.id, motivo: d.motivoPerda });
+    }
+    const { etapaId: _e, motivoPerda: _m, ...resto } = d;
+    const mudou = Object.fromEntries(Object.entries(resto).filter(([, v]) => v !== undefined));
+    if (Object.keys(mudou).length) {
+      await this.db.update(crmLeads).set({ ...mudou, atualizadoEm: new Date() }).where(eq(crmLeads.id, id));
+      if (d.responsavelId !== undefined && d.responsavelId !== atual.responsavelId) {
+        const [r] = d.responsavelId ? await this.db.select({ nome: usuarios.nome }).from(usuarios).where(eq(usuarios.id, d.responsavelId)) : [];
+        await this.crm.evento(id, 'campo', `Responsável: ${r?.nome ?? 'ninguém'}.`, u.id);
+      }
+      if (d.valor !== undefined && d.valor !== atual.valor) await this.crm.evento(id, 'campo', `Valor: R$ ${(d.valor / 100).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}.`, u.id);
+      for (const e of (d.etiquetas ?? []).filter((x) => !atual.etiquetas.includes(x))) {
+        await this.crm.evento(id, 'campo', `Etiqueta "${e}" adicionada.`, u.id);
+        this.crm.emitir({ tipo: 'etiqueta_adicionada', leadId: id, etiqueta: e });
+      }
+    }
+    return { ok: true };
+  }
+
+  @Delete('crm/leads/:id')
+  @Permissao('crm', 'excluir')
+  async apagarLead(@Usuario() u: UsuarioLogado, @Param('id', ParseUUIDPipe) id: string) {
+    const [l] = await this.db.delete(crmLeads).where(eq(crmLeads.id, id)).returning();
+    if (!l) throw new NotFoundException('Card não encontrado.');
+    await this.auditoria.registrar({ usuarioId: u.id, acao: 'excluir', entidade: 'crm_lead', entidadeId: id, dados: { titulo: l.titulo } });
+    return { ok: true };
+  }
+
+  @Post('crm/leads/:id/notas')
+  @Permissao('crm', 'editar')
+  async nota(@Usuario() u: UsuarioLogado, @Param('id', ParseUUIDPipe) id: string, @Body() body: unknown) {
+    const { texto } = validar(z.object({ texto: z.string().trim().min(1).max(4000) }), body);
+    await this.crm.evento(id, 'nota', texto, u.id);
+    await this.db.update(crmLeads).set({ atualizadoEm: new Date() }).where(eq(crmLeads.id, id));
+    return { ok: true };
+  }
+
+  @Post('crm/leads/:id/tarefas')
+  @Permissao('crm', 'editar')
+  async criarTarefa(@Usuario() u: UsuarioLogado, @Param('id', ParseUUIDPipe) id: string, @Body() body: unknown) {
+    const d = validar(z.object({ titulo: z.string().trim().min(2).max(200), venceEm: z.string().datetime({ offset: true }).or(z.string().regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/)), responsavelId: uuid.nullable().optional() }), body);
+    const [t] = await this.db.insert(crmTarefas).values({ leadId: id, titulo: d.titulo, venceEm: new Date(d.venceEm), responsavelId: d.responsavelId ?? u.id, criadoPor: u.id }).returning();
+    await this.crm.evento(id, 'tarefa', `Tarefa: ${d.titulo}.`, u.id);
+    return t;
+  }
+
+  @Patch('crm/tarefas/:id')
+  @Permissao('crm', 'editar')
+  async tarefa(@Usuario() u: UsuarioLogado, @Param('id', ParseUUIDPipe) id: string, @Body() body: unknown) {
+    const { feita } = validar(z.object({ feita: z.boolean() }), body);
+    const [t] = await this.db.update(crmTarefas).set({ feitaEm: feita ? new Date() : null }).where(eq(crmTarefas.id, id)).returning();
+    if (!t) throw new NotFoundException('Tarefa não encontrada.');
+    if (feita) await this.crm.evento(t.leadId, 'tarefa', `Tarefa concluída: ${t.titulo}.`, u.id);
+    return t;
+  }
+
+  @Get('crm/tarefas')
+  @Permissao('crm', 'ver')
+  async tarefas(@Usuario() u: UsuarioLogado, @Query('todas') todas?: string) {
+    return (await this.automacao.tarefas(todas && gestor(u) ? null : u.id)).rows;
+  }
+
+  @Patch('crm/contatos/:id')
+  @Permissao('crm', 'editar')
+  async contato(@Param('id', ParseUUIDPipe) id: string, @Body() body: unknown) {
+    const d = validar(z.object({ nome: z.string().trim().min(1).max(150).optional(), email: z.string().trim().email().nullable().optional(), etiquetas: etiquetas.optional(), descadastrado: z.boolean().optional(), camposExtras: campos.optional() }), body);
+    const [c] = await this.db.update(crmContatos).set(d).where(eq(crmContatos.id, id)).returning();
+    if (!c) throw new NotFoundException('Contato não encontrado.');
+    return c;
+  }
+
+  // ───────────── Conversas e fila ─────────────
+
+  @Get('crm/contadores')
+  @Permissao('crm', 'ver')
+  async contadores(@Usuario() u: UsuarioLogado) {
+    const canais = (await this.canais.canaisDoUsuario(u.id, gestor(u))).map((c) => c.id);
+    const mencoes = (await this.buscarMencoes(u, true)).length;
+    if (!canais.length) return { fila: 0, minhas: 0, naoLidas: 0, tarefasVencidas: 0, mencoes };
+    const r = await this.db.execute<{ fila: number; minhas: number; nao_lidas: number; tarefas: number }>(sql`
+      select
+        (select count(*)::int from crm_conversas where status = 'fila' and canal_id = any(${arr(canais)})) as fila,
+        (select count(*)::int from crm_conversas where status = 'atendimento' and atendente_id = ${u.id}) as minhas,
+        (select coalesce(sum(nao_lidas),0)::int from crm_conversas where status = 'atendimento' and atendente_id = ${u.id}) as nao_lidas,
+        (select count(*)::int from crm_tarefas where feita_em is null and vence_em < now() and responsavel_id = ${u.id}) as tarefas`);
+    const x = r.rows[0];
+    return { fila: x.fila, minhas: x.minhas, naoLidas: x.nao_lidas, tarefasVencidas: x.tarefas, mencoes };
+  }
+
+  @Get('crm/conversas')
+  @Permissao('crm', 'ver')
+  async conversas(@Usuario() u: UsuarioLogado, @Query('aba') aba = 'fila', @Query('canalId') canalId?: string, @Query('busca') busca?: string) {
+    const g = gestor(u);
+    const meus = (await this.canais.canaisDoUsuario(u.id, g)).map((c) => c.id);
+    if (!meus.length) return [];
+    const f: SQL[] = [inArray(crmConversas.canalId, canalId && meus.includes(canalId) ? [canalId] : meus)];
+    if (aba === 'fila') f.push(eq(crmConversas.status, 'fila'));
+    else if (aba === 'minhas') f.push(eq(crmConversas.status, 'atendimento'), eq(crmConversas.atendenteId, u.id));
+    else if (aba === 'atendimento') {
+      // Todas em atendimento: só a gestão vê as dos outros.
+      f.push(eq(crmConversas.status, 'atendimento'));
+      if (!g) f.push(eq(crmConversas.atendenteId, u.id));
+    } else if (aba === 'resolvidas') {
+      f.push(eq(crmConversas.status, 'resolvida'));
+      if (!g) f.push(sql`(${crmConversas.atendenteId} = ${u.id} or ${crmConversas.atendenteId} is null)`);
+    }
+    if (busca?.trim()) {
+      const dig = busca.replace(/\D/g, '');
+      f.push(sql`(${crmContatos.nome} ilike ${'%' + busca.trim() + '%'}${dig.length >= 4 ? sql` or ${crmContatos.telefone} like ${'%' + dig + '%'}` : sql``})`);
+    }
+    return this.db
+      .select({
+        id: crmConversas.id,
+        status: crmConversas.status,
+        naoLidas: crmConversas.naoLidas,
+        ultimaMensagem: crmConversas.ultimaMensagem,
+        ultimaMensagemEm: crmConversas.ultimaMensagemEm,
+        ultimaEntradaEm: crmConversas.ultimaEntradaEm,
+        filaDesde: crmConversas.filaDesde,
+        atendenteId: crmConversas.atendenteId,
+        atendente: usuarios.nome,
+        canalId: crmConversas.canalId,
+        canal: crmCanais.nome,
+        canalTipo: crmCanais.tipo,
+        contatoId: crmContatos.id,
+        contato: crmContatos.nome,
+        telefone: crmContatos.telefone,
+        lead: sql<{ id: string; titulo: string; etapa: string; funil: string } | null>`(
+          select json_build_object('id', l.id, 'titulo', l.titulo, 'etapa', e.nome, 'funil', f.nome)
+          from crm_leads l join crm_etapas e on e.id = l.etapa_id join crm_funis f on f.id = l.funil_id
+          where l.contato_id = ${crmContatos.id} order by (l.status = 'aberto') desc, l.atualizado_em desc limit 1)`,
+      })
+      .from(crmConversas)
+      .innerJoin(crmContatos, eq(crmContatos.id, crmConversas.contatoId))
+      .innerJoin(crmCanais, eq(crmCanais.id, crmConversas.canalId))
+      .leftJoin(usuarios, eq(usuarios.id, crmConversas.atendenteId))
+      .where(and(...f))
+      // Fila: quem espera há mais tempo primeiro. Demais: mais recentes primeiro.
+      .orderBy(aba === 'fila' ? asc(crmConversas.filaDesde) : desc(crmConversas.ultimaMensagemEm))
+      .limit(300);
+  }
+
+  private async conversaVisivel(u: UsuarioLogado, id: string) {
+    const [cv] = await this.db.select().from(crmConversas).where(eq(crmConversas.id, id));
+    if (!cv) throw new NotFoundException('Conversa não encontrada.');
+    const canal = await this.canais.obter(cv.canalId);
+    if (!this.canais.podeAtender(canal, u.id, gestor(u))) throw new ForbiddenException('Você não atende por este número.');
+    return { cv, canal };
+  }
+
+  @Get('crm/conversas/:id/mensagens')
+  @Permissao('crm', 'ver')
+  async mensagens(@Usuario() u: UsuarioLogado, @Param('id', ParseUUIDPipe) id: string, @Query('antes') antes?: string) {
+    const { cv, canal } = await this.conversaVisivel(u, id);
+    const ms = await this.db
+      .select({
+        id: crmMensagens.id,
+        direcao: crmMensagens.direcao,
+        tipo: crmMensagens.tipo,
+        texto: crmMensagens.texto,
+        midia: crmMensagens.midia,
+        midiaNome: crmMensagens.midiaNome,
+        templateNome: crmMensagens.templateNome,
+        status: crmMensagens.status,
+        erro: crmMensagens.erro,
+        autor: usuarios.nome,
+        automatica: sql<boolean>`(${crmMensagens.gatilhoId} is not null or ${crmMensagens.disparoId} is not null)`,
+        criadoEm: crmMensagens.criadoEm,
+      })
+      .from(crmMensagens)
+      .leftJoin(usuarios, eq(usuarios.id, crmMensagens.usuarioId))
+      .where(and(eq(crmMensagens.conversaId, id), antes ? sql`${crmMensagens.criadoEm} < ${new Date(antes)}` : undefined))
+      .orderBy(desc(crmMensagens.criadoEm))
+      .limit(100);
+    // Quem está atendendo leu.
+    if (cv.naoLidas && cv.atendenteId === u.id) await this.db.update(crmConversas).set({ naoLidas: 0 }).where(eq(crmConversas.id, id));
+    const [contato] = await this.db.select().from(crmContatos).where(eq(crmContatos.id, cv.contatoId));
+    return {
+      conversa: { ...cv, canal: canal.nome, canalTipo: canal.tipo, dentroDaJanela: canal.tipo === 'oficial' ? this.canais.dentroDaJanela(cv) : true },
+      contato,
+      mensagens: ms.reverse(),
+    };
+  }
+
+  @Post('crm/conversas/:id/pegar')
+  @Permissao('crm', 'editar')
+  pegar(@Usuario() u: UsuarioLogado, @Param('id', ParseUUIDPipe) id: string) {
+    return this.canais.pegar(id, u.id, gestor(u));
+  }
+
+  @Post('crm/conversas/:id/transferir')
+  @Permissao('crm', 'editar')
+  async transferir(@Usuario() u: UsuarioLogado, @Param('id', ParseUUIDPipe) id: string, @Body() body: unknown) {
+    const { usuarioId } = validar(z.object({ usuarioId: uuid.nullable() }), body);
+    if (usuarioId) {
+      const { canal } = await this.conversaVisivel(u, id);
+      const [dest] = await this.db.select({ id: usuarios.id, ativo: usuarios.ativo }).from(usuarios).where(eq(usuarios.id, usuarioId));
+      if (!dest?.ativo) throw new BadRequestException('Atendente não encontrado.');
+      if (canal.atendentes.length && !canal.atendentes.includes(usuarioId) && canal.usuarioId !== usuarioId) throw new BadRequestException('Esta pessoa não atende por este número.');
+    }
+    return this.canais.transferir(id, usuarioId, u.id, gestor(u));
+  }
+
+  @Post('crm/conversas/:id/resolver')
+  @Permissao('crm', 'editar')
+  resolver(@Usuario() u: UsuarioLogado, @Param('id', ParseUUIDPipe) id: string) {
+    return this.canais.resolver(id, u.id, gestor(u));
+  }
+
+  @Post('crm/conversas/:id/mensagens')
+  @Permissao('crm', 'editar')
+  async enviar(@Usuario() u: UsuarioLogado, @Param('id', ParseUUIDPipe) id: string, @Body() body: unknown) {
+    const d = validar(z.object({ tipo: z.enum(['texto', 'template']).default('texto'), texto: z.string().max(4096).nullable().optional(), templateId: uuid.nullable().optional(), leadId: uuid.nullable().optional() }), body);
+    const { cv } = await this.conversaVisivel(u, id);
+    if (cv.status === 'atendimento' && cv.atendenteId && cv.atendenteId !== u.id && !gestor(u)) throw new ForbiddenException('Esta conversa está com outro atendente.');
+    return this.canais.enviar({ conversaId: id, tipo: d.tipo, texto: d.texto, templateId: d.templateId, usuarioId: u.id, leadId: d.leadId ?? (await this.leadPrincipal(cv.contatoId)) });
+  }
+
+  @Post('crm/conversas/:id/midia')
+  @Permissao('crm', 'editar')
+  async enviarMidia(@Usuario() u: UsuarioLogado, @Param('id', ParseUUIDPipe) id: string, @Body() body: unknown) {
+    const d = validar(z.object({ nome: z.string().trim().min(1).max(150), mime: z.string().min(3).max(120), base64: z.string().min(10), texto: z.string().max(1024).nullable().optional() }), body);
+    const { cv } = await this.conversaVisivel(u, id);
+    if (cv.status === 'atendimento' && cv.atendenteId && cv.atendenteId !== u.id && !gestor(u)) throw new ForbiddenException('Esta conversa está com outro atendente.');
+    const conteudo = Buffer.from(d.base64.replace(/^data:[^,]+,/, ''), 'base64');
+    if (conteudo.length > 16_000_000) throw new BadRequestException('Arquivo maior que 16 MB.');
+    const tipo = d.mime.startsWith('image/') ? 'imagem' : d.mime.startsWith('audio/') ? 'audio' : d.mime.startsWith('video/') ? 'video' : 'documento';
+    return this.canais.enviar({ conversaId: id, tipo, texto: d.texto, midia: { conteudo, mime: d.mime, nome: d.nome }, usuarioId: u.id, leadId: await this.leadPrincipal(cv.contatoId) });
+  }
+
+  private async leadPrincipal(contatoId: string) {
+    const [l] = await this.db.select({ id: crmLeads.id }).from(crmLeads).where(eq(crmLeads.contatoId, contatoId)).orderBy(desc(sql`${crmLeads.status} = 'aberto'`), desc(crmLeads.atualizadoEm)).limit(1);
+    return l?.id ?? null;
+  }
+
+  /** Abre (ou acha) a conversa com o contato num número, para escrever a partir do card. */
+  @Post('crm/contatos/:id/conversa')
+  @Permissao('crm', 'editar')
+  async abrirConversa(@Usuario() u: UsuarioLogado, @Param('id', ParseUUIDPipe) contatoId: string, @Body() body: unknown) {
+    const { canalId } = validar(z.object({ canalId: uuid }), body);
+    const canal = await this.canais.obter(canalId);
+    if (!this.canais.podeAtender(canal, u.id, gestor(u))) throw new ForbiddenException('Você não atende por este número.');
+    return this.canais.garantirConversa(contatoId, canalId, 'resolvida');
+  }
+
+  @Get('crm/midia/:nome')
+  @Permissao('crm', 'ver')
+  midia(@Param('nome') nome: string, @Res() res: Response) {
+    const caminho = this.arquivos.caminhoMidia(nome);
+    if (!caminho || !existsSync(caminho)) throw new NotFoundException('Arquivo não encontrado.');
+    res.setHeader('Cache-Control', 'private, max-age=86400');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.sendFile(caminho);
+  }
+
+  /** Conversa interna: a equipe escreve no chat do lead e o cliente não vê. "@Nome" avisa o colega. */
+  @Post('crm/conversas/:id/interna')
+  @Permissao('crm', 'editar')
+  async interna(@Usuario() u: UsuarioLogado, @Param('id', ParseUUIDPipe) id: string, @Body() body: unknown) {
+    const { texto } = validar(z.object({ texto: z.string().trim().min(1).max(4000) }), body);
+    const { cv } = await this.conversaVisivel(u, id);
+    const [m] = await this.db.insert(crmMensagens).values({ conversaId: id, direcao: 'interna', tipo: 'texto', texto, status: 'interna', usuarioId: u.id }).returning();
+    const lead = await this.leadPrincipal(cv.contatoId);
+    if (lead) await this.crm.evento(lead, 'nota', `Conversa interna: ${texto}`, u.id);
+    return m;
+  }
+
+  /** Menções a mim em conversas internas desde a última vez que olhei. */
+  @Get('crm/mencoes')
+  @Permissao('crm', 'ver')
+  async mencoes(@Usuario() u: UsuarioLogado, @Query('marcar') marcar?: string) {
+    const lista = await this.buscarMencoes(u);
+    if (marcar) {
+      const chave = `crm_mencoes_visto:${u.id}`;
+      const valor = { em: new Date().toISOString() };
+      await this.db.insert(configuracoes).values({ chave, valor }).onConflictDoUpdate({ target: configuracoes.chave, set: { valor, atualizadoEm: new Date() } });
+    }
+    return lista;
+  }
+
+  private async buscarMencoes(u: UsuarioLogado, so_contar = false) {
+    const primeiro = (u.nome ?? '').trim().split(/\s+/)[0];
+    if (!primeiro || primeiro.length < 2) return [];
+    const [visto] = await this.db.select().from(configuracoes).where(eq(configuracoes.chave, `crm_mencoes_visto:${u.id}`));
+    const desde = (visto?.valor as { em?: string } | undefined)?.em ?? new Date(Date.now() - 7 * 86400_000).toISOString();
+    const r = await this.db.execute<{ id: string; texto: string; conversa_id: string; contato: string; autor: string; criado_em: string }>(sql`
+      select m.id, m.texto, m.conversa_id, c.nome as contato, us.nome as autor, m.criado_em
+      from crm_mensagens m join crm_conversas cv on cv.id = m.conversa_id join crm_contatos c on c.id = cv.contato_id left join usuarios us on us.id = m.usuario_id
+      where m.direcao = 'interna' and m.usuario_id is distinct from ${u.id} and m.criado_em > ${desde}::timestamptz
+        and m.texto ~* ${'(^|\s)@' + primeiro.replace(/[^\p{L}\p{N}]/gu, '') + '(\M|$)'}
+      order by m.criado_em desc limit ${so_contar ? 100 : 50}`);
+    return r.rows;
+  }
+
+  // ───────────── Campos personalizados ─────────────
+
+  @Get('crm/campos')
+  @Permissao('crm', 'ver')
+  campos() {
+    return this.db.select().from(crmCampos).orderBy(asc(crmCampos.entidade), asc(crmCampos.ordem), asc(crmCampos.nome));
+  }
+
+  @Post('crm/campos')
+  @Permissao('crm', 'excluir')
+  async criarCampo(@Body() body: unknown) {
+    const d = validar(
+      z.object({
+        entidade: z.enum(['contato', 'lead']),
+        nome: z.string().trim().min(1).max(60),
+        tipo: z.enum(['texto', 'numero', 'data', 'lista', 'telefone', 'email', 'url', 'sim_nao']).default('texto'),
+        opcoes: z.array(z.string().trim().min(1).max(60)).max(50).default([]),
+        funilId: uuid.nullable().optional(),
+      }),
+      body,
+    );
+    if (d.tipo === 'lista' && !d.opcoes.length) throw new BadRequestException('Informe as opções da lista.');
+    const [{ ordem }] = await this.db.select({ ordem: sql<number>`coalesce(max(${crmCampos.ordem}),0)+1` }).from(crmCampos).where(eq(crmCampos.entidade, d.entidade));
+    const [c] = await this.db.insert(crmCampos).values({ ...d, funilId: d.entidade === 'lead' ? (d.funilId ?? null) : null, ordem }).returning();
+    return c;
+  }
+
+  @Patch('crm/campos/:id')
+  @Permissao('crm', 'excluir')
+  async editarCampo(@Param('id', ParseUUIDPipe) id: string, @Body() body: unknown) {
+    const d = validar(z.object({ nome: z.string().trim().min(1).max(60).optional(), opcoes: z.array(z.string().trim().min(1).max(60)).max(50).optional(), ordem: z.number().int().optional() }), body);
+    const [atual] = await this.db.select().from(crmCampos).where(eq(crmCampos.id, id));
+    if (!atual) throw new NotFoundException('Campo não encontrado.');
+    const [c] = await this.db.update(crmCampos).set(d).where(eq(crmCampos.id, id)).returning();
+    // Renomeou: leva os valores já preenchidos para o nome novo.
+    if (d.nome && d.nome !== atual.nome) {
+      const tabela = atual.entidade === 'contato' ? 'crm_contatos' : 'crm_leads';
+      await this.db.execute(sql.raw(`update ${tabela} set campos_extras = (campos_extras - '${atual.nome.replace(/'/g, "''")}') || jsonb_build_object('${d.nome.replace(/'/g, "''")}', campos_extras->'${atual.nome.replace(/'/g, "''")}') where campos_extras ? '${atual.nome.replace(/'/g, "''")}'`));
+    }
+    return c;
+  }
+
+  @Delete('crm/campos/:id')
+  @Permissao('crm', 'excluir')
+  async apagarCampo(@Param('id', ParseUUIDPipe) id: string) {
+    await this.db.delete(crmCampos).where(eq(crmCampos.id, id));
+    return { ok: true };
+  }
+
+  // ───────────── Softphone ─────────────
+
+  /** O ramal do próprio atendente, para o softphone do navegador registrar no servidor de voz. */
+  @Get('crm/ramal')
+  @Permissao('crm', 'ver')
+  async meuRamal(@Usuario() u: UsuarioLogado) {
+    const [r] = await this.db.select().from(crmRamais).where(and(eq(crmRamais.usuarioId, u.id), eq(crmRamais.ativo, true)));
+    if (!r) return null;
+    return { servidor: r.servidor, usuarioSip: r.usuarioSip, senha: this.segredos.decifrar(r.senhaCifrada), nomeExibicao: r.nomeExibicao ?? u.nome, prefixo: r.prefixo ?? '' };
+  }
+
+  @Get('crm/ramais')
+  @Permissao('configuracoes', 'editar')
+  async ramais() {
+    const r = await this.db.select({ r: crmRamais, nome: usuarios.nome }).from(crmRamais).innerJoin(usuarios, eq(usuarios.id, crmRamais.usuarioId)).orderBy(asc(usuarios.nome));
+    return r.map(({ r, nome }) => ({ usuarioId: r.usuarioId, nome, servidor: r.servidor, usuarioSip: r.usuarioSip, nomeExibicao: r.nomeExibicao, prefixo: r.prefixo, ativo: r.ativo }));
+  }
+
+  @Post('crm/ramais')
+  @Permissao('configuracoes', 'editar')
+  async salvarRamal(@Usuario() u: UsuarioLogado, @Body() body: unknown) {
+    const d = validar(
+      z.object({
+        usuarioId: uuid,
+        servidor: z.string().trim().regex(/^wss?:\/\/.+/i, 'O servidor começa com wss://'),
+        usuarioSip: z.string().trim().regex(/^sip:[^@\s]+@[^\s]+$/i, 'Formato: sip:ramal@dominio'),
+        senha: z.string().max(200).optional(),
+        nomeExibicao: opcional(80),
+        prefixo: z.string().trim().max(5).regex(/^[0-9*#]*$/).nullable().optional(),
+        ativo: z.boolean().default(true),
+      }),
+      body,
+    );
+    const [atual] = await this.db.select().from(crmRamais).where(eq(crmRamais.usuarioId, d.usuarioId));
+    if (!atual && !d.senha) throw new BadRequestException('Informe a senha do ramal.');
+    const valores = { servidor: d.servidor, usuarioSip: d.usuarioSip, nomeExibicao: d.nomeExibicao ?? null, prefixo: d.prefixo ?? null, ativo: d.ativo, senhaCifrada: d.senha ? this.segredos.cifrar(d.senha) : atual!.senhaCifrada, atualizadoEm: new Date() };
+    await this.db.insert(crmRamais).values({ usuarioId: d.usuarioId, ...valores }).onConflictDoUpdate({ target: crmRamais.usuarioId, set: valores });
+    await this.auditoria.registrar({ usuarioId: u.id, acao: 'editar', entidade: 'crm_ramal', entidadeId: d.usuarioId, dados: { servidor: d.servidor, usuarioSip: d.usuarioSip } });
+    return { ok: true };
+  }
+
+  /** Ligação feita pelo softphone: entra no histórico do card. */
+  @Post('crm/leads/:id/ligacoes')
+  @Permissao('crm', 'editar')
+  async ligacao(@Usuario() u: UsuarioLogado, @Param('id', ParseUUIDPipe) id: string, @Body() body: unknown) {
+    const d = validar(z.object({ numero: z.string().trim().max(30), duracaoSeg: z.number().int().min(0).max(86400), resultado: z.enum(['atendida', 'nao_atendida', 'ocupado', 'falhou', 'cancelada']), observacao: opcional(500) }), body);
+    const dur = `${Math.floor(d.duracaoSeg / 60)}min${String(d.duracaoSeg % 60).padStart(2, '0')}s`;
+    const rotulo = { atendida: `atendida, ${dur}`, nao_atendida: 'não atendida', ocupado: 'ocupado', falhou: 'falhou', cancelada: 'cancelada' }[d.resultado];
+    await this.crm.evento(id, 'ligacao', `Ligação para ${d.numero}: ${rotulo}.${d.observacao ? ` ${d.observacao}` : ''}`, u.id, d);
+    await this.db.update(crmLeads).set({ ultimaInteracaoEm: new Date(), atualizadoEm: new Date() }).where(eq(crmLeads.id, id));
+    return { ok: true };
+  }
+
+  // ───────────── Números de WhatsApp ─────────────
+
+  @Get('crm/canais')
+  @Permissao('crm', 'ver')
+  async listarCanais(@Usuario() u: UsuarioLogado) {
+    const todos = await this.canais.listar();
+    if (temPermissao(u.permissoes, 'configuracoes', 'editar')) return todos;
+    // Atendente: só os números dele, sem credenciais nem webhook.
+    const meus = new Set((await this.canais.canaisDoUsuario(u.id, gestor(u))).map((c) => c.id));
+    return todos.filter((c) => meus.has(c.id)).map((c) => ({ id: c.id, nome: c.nome, tipo: c.tipo, numero: c.numero, ativo: c.ativo }));
+  }
+
+  @Post('crm/canais')
+  @Permissao('configuracoes', 'editar')
+  async criarCanal(@Usuario() u: UsuarioLogado, @Body() body: unknown) {
+    const d = validar(
+      z.object({
+        nome: z.string().trim().min(2).max(80),
+        tipo: z.enum(['oficial', 'qrcode']),
+        config: z.record(z.string().max(40), z.string().max(2000)),
+        usuarioId: uuid.nullable().optional(),
+        atendentes: z.array(uuid).default([]),
+        funilEntradaId: uuid.nullable().optional(),
+      }),
+      body,
+    );
+    const c = await this.canais.criar(d);
+    await this.auditoria.registrar({ usuarioId: u.id, acao: 'criar', entidade: 'crm_canal', entidadeId: c.id, dados: { nome: d.nome, tipo: d.tipo } });
+    return c;
+  }
+
+  @Patch('crm/canais/:id')
+  @Permissao('configuracoes', 'editar')
+  async editarCanal(@Usuario() u: UsuarioLogado, @Param('id', ParseUUIDPipe) id: string, @Body() body: unknown) {
+    const d = validar(
+      z.object({
+        nome: z.string().trim().min(2).max(80).optional(),
+        config: z.record(z.string().max(40), z.string().max(2000)).optional(),
+        usuarioId: uuid.nullable().optional(),
+        atendentes: z.array(uuid).optional(),
+        funilEntradaId: uuid.nullable().optional(),
+        ativo: z.boolean().optional(),
+      }),
+      body,
+    );
+    const c = await this.canais.atualizar(id, d);
+    await this.auditoria.registrar({ usuarioId: u.id, acao: 'editar', entidade: 'crm_canal', entidadeId: id, dados: { campos: Object.keys(d) } });
+    return c;
+  }
+
+  @Get('crm/canais/:id/situacao')
+  @Permissao('crm', 'ver')
+  situacaoCanal(@Param('id', ParseUUIDPipe) id: string) {
+    return this.canais.situacao(id);
+  }
+
+  @Post('crm/canais/:id/templates')
+  @Permissao('crm', 'excluir')
+  sincronizar(@Param('id', ParseUUIDPipe) id: string) {
+    return this.canais.sincronizarTemplates(id);
+  }
+
+  @Post('crm/canais/:id/webhook')
+  @Permissao('configuracoes', 'editar')
+  async webhook(@Param('id', ParseUUIDPipe) id: string) {
+    await this.canais.apontarWebhookZapi(await this.canais.obter(id));
+    return { ok: true };
+  }
+
+  @Post('crm/canais/:id/desconectar')
+  @Permissao('configuracoes', 'editar')
+  desconectar(@Param('id', ParseUUIDPipe) id: string) {
+    return this.canais.desconectar(id);
+  }
+
+  /** Atendentes que podem receber conversas (para transferir e para o rodízio dos gatilhos). */
+  @Get('crm/atendentes')
+  @Permissao('crm', 'ver')
+  async atendentes() {
+    const us = await this.db.execute<{ id: string; nome: string; permissoes: Record<string, string[]> }>(sql`select u.id, u.nome, g.permissoes from usuarios u join grupos g on g.id = u.grupo_id where u.ativo order by u.nome`);
+    return us.rows.filter((u) => u.permissoes['*'] || u.permissoes.crm?.includes('editar')).map((u) => ({ id: u.id, nome: u.nome }));
+  }
+
+  // ───────────── Templates e respostas rápidas ─────────────
+
+  @Get('crm/templates')
+  @Permissao('crm', 'ver')
+  templates(@Query('canalId') canalId?: string) {
+    return this.db
+      .select()
+      .from(crmTemplates)
+      .where(canalId ? sql`(${crmTemplates.canalId} = ${canalId} or ${crmTemplates.canalId} is null)` : undefined)
+      .orderBy(asc(crmTemplates.tipo), asc(crmTemplates.nome));
+  }
+
+  @Post('crm/templates')
+  @Permissao('crm', 'excluir')
+  async criarTemplate(@Body() body: unknown) {
+    const d = validar(z.object({ nome: z.string().trim().min(2).max(80), texto: z.string().trim().min(1).max(4096), categoria: opcional(40) }), body);
+    const [t] = await this.db.insert(crmTemplates).values({ ...d, tipo: 'livre', status: 'ATIVO' }).returning();
+    return t;
+  }
+
+  @Patch('crm/templates/:id')
+  @Permissao('crm', 'excluir')
+  async editarTemplate(@Param('id', ParseUUIDPipe) id: string, @Body() body: unknown) {
+    const [t] = await this.db.select().from(crmTemplates).where(eq(crmTemplates.id, id));
+    if (!t) throw new NotFoundException('Template não encontrado.');
+    // Template da Meta: só se escolhe de onde vêm as variáveis ({{1}} = nome…). O texto é aprovado lá.
+    const d = t.tipo === 'meta'
+      ? validar(z.object({ variaveis: z.array(z.string().max(200)).max(20) }), body)
+      : validar(z.object({ nome: z.string().trim().min(2).max(80).optional(), texto: z.string().trim().min(1).max(4096).optional(), categoria: opcional(40) }), body);
+    const [r] = await this.db.update(crmTemplates).set({ ...d, atualizadoEm: new Date() }).where(eq(crmTemplates.id, id)).returning();
+    return r;
+  }
+
+  @Delete('crm/templates/:id')
+  @Permissao('crm', 'excluir')
+  async apagarTemplate(@Param('id', ParseUUIDPipe) id: string) {
+    const [t] = await this.db.select().from(crmTemplates).where(eq(crmTemplates.id, id));
+    if (t?.tipo === 'meta') throw new BadRequestException('Templates da Meta são apagados no Gerenciador do WhatsApp e somem na próxima sincronização.');
+    await this.db.delete(crmTemplates).where(eq(crmTemplates.id, id));
+    return { ok: true };
+  }
+
+  @Get('crm/respostas')
+  @Permissao('crm', 'ver')
+  respostas() {
+    return this.db.select().from(crmRespostasRapidas).orderBy(asc(crmRespostasRapidas.atalho));
+  }
+
+  @Post('crm/respostas')
+  @Permissao('crm', 'excluir')
+  async criarResposta(@Body() body: unknown) {
+    const d = validar(z.object({ atalho: z.string().trim().min(2).max(30).regex(/^[a-z0-9_-]+$/i, 'Use letras, números, - ou _').transform((s) => s.toLowerCase()), texto: z.string().trim().min(1).max(4096) }), body);
+    const [r] = await this.db.insert(crmRespostasRapidas).values(d).returning();
+    return r;
+  }
+
+  @Delete('crm/respostas/:id')
+  @Permissao('crm', 'excluir')
+  async apagarResposta(@Param('id', ParseUUIDPipe) id: string) {
+    await this.db.delete(crmRespostasRapidas).where(eq(crmRespostasRapidas.id, id));
+    return { ok: true };
+  }
+
+  // ───────────── Gatilhos ─────────────
+
+  @Get('crm/gatilhos')
+  @Permissao('crm', 'ver')
+  async gatilhos() {
+    const gs = await this.db.select().from(crmGatilhos).orderBy(asc(crmGatilhos.criadoEm));
+    const pend = await this.db.execute<{ gatilho_id: string; n: number }>(sql`select gatilho_id, count(*)::int as n from crm_fila where status = 'pendente' group by gatilho_id`);
+    const erros = await this.db.execute<{ gatilho_id: string; n: number }>(sql`select gatilho_id, count(*)::int as n from crm_fila where status = 'erro' and criado_em > now() - interval '7 days' group by gatilho_id`);
+    const p = new Map(pend.rows.map((x) => [x.gatilho_id, x.n]));
+    const e = new Map(erros.rows.map((x) => [x.gatilho_id, x.n]));
+    return gs.map((g) => ({ ...g, agendados: p.get(g.id) ?? 0, errosSemana: e.get(g.id) ?? 0 }));
+  }
+
+  @Post('crm/gatilhos')
+  @Permissao('crm', 'excluir')
+  async criarGatilho(@Usuario() u: UsuarioLogado, @Body() body: unknown) {
+    const d = validar(gatilhoSchema, body);
+    if (d.evento === 'entrou_etapa' && !d.etapaId) throw new BadRequestException('Escolha a etapa.');
+    if (d.evento === 'sem_resposta' && !(Number(d.parametro) >= 1)) throw new BadRequestException('Informe quantas horas sem resposta.');
+    const [g] = await this.db.insert(crmGatilhos).values({ ...d, acoes: d.acoes as Record<string, unknown>[] }).returning();
+    await this.auditoria.registrar({ usuarioId: u.id, acao: 'criar', entidade: 'crm_gatilho', entidadeId: g.id, dados: { nome: d.nome } });
+    return g;
+  }
+
+  @Patch('crm/gatilhos/:id')
+  @Permissao('crm', 'excluir')
+  async editarGatilho(@Param('id', ParseUUIDPipe) id: string, @Body() body: unknown) {
+    const d = validar(gatilhoSchema.partial(), body);
+    const [g] = await this.db.update(crmGatilhos).set({ ...d, acoes: d.acoes as Record<string, unknown>[] | undefined }).where(eq(crmGatilhos.id, id)).returning();
+    if (!g) throw new NotFoundException('Gatilho não encontrado.');
+    // Desligado: o que estava esperando não acontece mais.
+    if (d.ativo === false) await this.db.update(crmFila).set({ status: 'cancelado', erro: 'gatilho desligado' }).where(and(eq(crmFila.gatilhoId, id), eq(crmFila.status, 'pendente')));
+    return g;
+  }
+
+  @Delete('crm/gatilhos/:id')
+  @Permissao('crm', 'excluir')
+  async apagarGatilho(@Param('id', ParseUUIDPipe) id: string) {
+    await this.db.delete(crmGatilhos).where(eq(crmGatilhos.id, id));
+    return { ok: true };
+  }
+
+  // ───────────── Disparos em massa ─────────────
+
+  @Get('crm/disparos')
+  @Permissao('crm', 'ver')
+  async disparos() {
+    const ds = await this.db
+      .select({ d: crmDisparos, canal: crmCanais.nome, template: crmTemplates.nome })
+      .from(crmDisparos)
+      .innerJoin(crmCanais, eq(crmCanais.id, crmDisparos.canalId))
+      .leftJoin(crmTemplates, eq(crmTemplates.id, crmDisparos.templateId))
+      .orderBy(desc(crmDisparos.criadoEm))
+      .limit(100);
+    const st = await this.db.execute<{ disparo_id: string; status: string; n: number }>(sql`select disparo_id, status, count(*)::int as n from crm_disparo_destinos group by 1, 2`);
+    return ds.map(({ d, canal, template }) => ({ ...d, canal, template, porStatus: Object.fromEntries(st.rows.filter((x) => x.disparo_id === d.id).map((x) => [x.status, x.n])) }));
+  }
+
+  @Post('crm/disparos')
+  @Permissao('crm', 'excluir')
+  async criarDisparo(@Usuario() u: UsuarioLogado, @Body() body: unknown) {
+    const d = validar(
+      z.object({
+        nome: z.string().trim().min(2).max(120),
+        canalId: uuid,
+        templateId: uuid.nullable().optional(),
+        texto: z.string().trim().max(4096).nullable().optional(),
+        filtro: z.object({ funilId: uuid.optional(), etapaIds: z.array(uuid).optional(), etiquetas: z.array(z.string()).optional(), status: z.enum(['aberto', 'ganho', 'perdido']).optional(), contatoIds: z.array(uuid).max(5000).optional() }),
+        ritmo: z.number().int().min(1).max(200).default(20),
+      }),
+      body,
+    );
+    const canal = await this.canais.obter(d.canalId);
+    if (!d.templateId && !d.texto) throw new BadRequestException('Escolha um template ou escreva a mensagem.');
+    if (canal.tipo === 'oficial' && !d.templateId) throw new BadRequestException('No número oficial, disparo em massa só com template aprovado pela Meta.');
+    if (d.templateId) {
+      const [t] = await this.db.select().from(crmTemplates).where(eq(crmTemplates.id, d.templateId));
+      if (!t) throw new BadRequestException('Template não encontrado.');
+      if (canal.tipo === 'oficial' && (t.tipo !== 'meta' || t.canalId !== canal.id)) throw new BadRequestException('Use um template aprovado deste número.');
+      if (t.tipo === 'meta' && t.status !== 'APPROVED') throw new BadRequestException('Template ainda não aprovado pela Meta.');
+    }
+    const [r] = await this.db.insert(crmDisparos).values({ ...d, usuarioId: u.id }).returning();
+    const total = await this.automacao.prepararDisparo(r.id);
+    return { ...r, total };
+  }
+
+  @Get('crm/disparos/:id')
+  @Permissao('crm', 'ver')
+  async disparo(@Param('id', ParseUUIDPipe) id: string) {
+    const [d] = await this.db.select().from(crmDisparos).where(eq(crmDisparos.id, id));
+    if (!d) throw new NotFoundException('Disparo não encontrado.');
+    const destinos = await this.db
+      .select({ id: crmDisparoDestinos.id, status: crmDisparoDestinos.status, erro: crmDisparoDestinos.erro, enviadoEm: crmDisparoDestinos.enviadoEm, contato: crmContatos.nome, telefone: crmContatos.telefone })
+      .from(crmDisparoDestinos)
+      .innerJoin(crmContatos, eq(crmContatos.id, crmDisparoDestinos.contatoId))
+      .where(eq(crmDisparoDestinos.disparoId, id))
+      .orderBy(asc(crmContatos.nome))
+      .limit(2000);
+    return { ...d, destinos };
+  }
+
+  @Post('crm/disparos/:id/iniciar')
+  @Permissao('crm', 'excluir')
+  async iniciar(@Usuario() u: UsuarioLogado, @Param('id', ParseUUIDPipe) id: string, @Body() body: unknown) {
+    const { quando } = validar(z.object({ quando: z.string().datetime({ offset: true }).nullable().optional() }), body ?? {});
+    const r = await this.automacao.iniciarDisparo(id, quando ? new Date(quando) : null);
+    await this.auditoria.registrar({ usuarioId: u.id, acao: 'disparo', entidade: 'crm_disparo', entidadeId: id, dados: r });
+    if (r.status === 'enviando') void this.automacao.ciclo();
+    return r;
+  }
+
+  @Post('crm/disparos/:id/pausar')
+  @Permissao('crm', 'excluir')
+  async pausar(@Param('id', ParseUUIDPipe) id: string) {
+    const [d] = await this.db.update(crmDisparos).set({ status: 'pausado' }).where(and(eq(crmDisparos.id, id), inArray(crmDisparos.status, ['enviando', 'agendado']))).returning();
+    if (!d) throw new BadRequestException('Só disparos em andamento ou agendados podem ser pausados.');
+    return d;
+  }
+
+  @Post('crm/disparos/:id/cancelar')
+  @Permissao('crm', 'excluir')
+  async cancelarDisparo(@Param('id', ParseUUIDPipe) id: string) {
+    const [d] = await this.db.update(crmDisparos).set({ status: 'cancelado' }).where(and(eq(crmDisparos.id, id), inArray(crmDisparos.status, ['rascunho', 'enviando', 'agendado', 'pausado']))).returning();
+    if (!d) throw new BadRequestException('Este disparo já terminou.');
+    await this.db.update(crmDisparoDestinos).set({ status: 'pulado', erro: 'disparo cancelado' }).where(and(eq(crmDisparoDestinos.disparoId, id), eq(crmDisparoDestinos.status, 'pendente')));
+    return d;
+  }
+
+  // ───────────── Motor ─────────────
+
+  @Post('crm/processar')
+  @Permissao('crm', 'excluir')
+  async processar() {
+    await this.automacao.ciclo();
+    return { ok: true };
+  }
+
+  @Post('crm/revendedoras/sincronizar')
+  @Permissao('crm', 'excluir')
+  sincronizarRevendedoras() {
+    return this.automacao.sincronizarRevendedoras();
+  }
+
+  // ───────────── Webhooks do WhatsApp ─────────────
+
+  /** Verificação do webhook pela Meta (hub.challenge). */
+  @Publico()
+  @Get('webhooks/whatsapp/:canalId/:token')
+  async verificar(@Param('canalId', ParseUUIDPipe) canalId: string, @Param('token') token: string, @Query() q: Record<string, string>, @Res() res: Response) {
+    const desafio = await this.canais.verificarMeta(canalId, token, q['hub.mode'], q['hub.verify_token'], q['hub.challenge']);
+    res.type('text/plain').send(desafio);
+  }
+
+  @Publico()
+  @Post('webhooks/whatsapp/:canalId/:token')
+  @HttpCode(200)
+  receber(@Param('canalId', ParseUUIDPipe) canalId: string, @Param('token') token: string, @Body() body: unknown, @Req() req: Request & { rawBody?: Buffer }, @Headers('x-hub-signature-256') assinatura?: string) {
+    return this.canais.receber(canalId, token, body, req.rawBody, assinatura);
+  }
+}

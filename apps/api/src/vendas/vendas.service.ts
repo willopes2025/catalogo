@@ -109,7 +109,19 @@ export class VendasService {
 
   // ───────── Venda ─────────
 
+  private aoVenderFns: ((venda: { id: string; clienteId: string | null; total: number; numero: number }) => Promise<void>)[] = [];
+  /** O CRM ouve as vendas para mover a cliente no funil de clientes. */
+  aoVender(fn: (venda: { id: string; clienteId: string | null; total: number; numero: number }) => Promise<void>) {
+    this.aoVenderFns.push(fn);
+  }
+
   async registrar(d: DadosVenda, usuarioId: string, podePassarDesconto: boolean) {
+    const venda = await this.registrarNaTransacao(d, usuarioId, podePassarDesconto);
+    for (const fn of this.aoVenderFns) void fn(venda).catch(() => undefined);
+    return venda;
+  }
+
+  private async registrarNaTransacao(d: DadosVenda, usuarioId: string, podePassarDesconto: boolean) {
     return this.db.transaction(async (tx) => {
       const regras = await this.regras(tx);
       const [local] = await tx.select().from(locaisEstoque).where(eq(locaisEstoque.id, d.localId));

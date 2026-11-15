@@ -25,14 +25,15 @@ export class SegredosService implements OnModuleInit {
     return createHash('sha256').update(base).digest();
   }
 
-  private cifrar(texto: string) {
+  /** Também usado para as credenciais de cada número de WhatsApp do CRM. */
+  cifrar(texto: string) {
     const iv = randomBytes(12);
     const c = createCipheriv('aes-256-gcm', this.chave(), iv);
     const dados = Buffer.concat([c.update(texto, 'utf8'), c.final()]);
     return `v1:${iv.toString('base64')}:${c.getAuthTag().toString('base64')}:${dados.toString('base64')}`;
   }
 
-  private decifrar(v: string) {
+  decifrar(v: string) {
     const [ver, iv, tag, dados] = v.split(':');
     if (ver !== 'v1') throw new Error('formato desconhecido');
     const d = createDecipheriv('aes-256-gcm', this.chave(), Buffer.from(iv, 'base64'));

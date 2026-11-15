@@ -1031,6 +1031,174 @@ test('Jueri na virada: maletas e contas trazidas antes acompanham o que mudou no
 });
 
 // Este fica por último: apaga os dados de teste.
+test('CRM: funis, números de WhatsApp, fila de atendimento, chat, conversa interna, gatilhos, disparos e campos', async () => {
+  const { createHmac } = await import('node:crypto');
+  const sim = async () => (await (await fetch('http://localhost:3199/__recebidos')).json()).filter((r) => !r.caminho.startsWith('/__'));
+  const funis = await ok('GET', '/crm/funis');
+  const rec = funis.find((f) => f.tipo === 'recrutamento');
+  const cli = funis.find((f) => f.tipo === 'clientes');
+  const revF = funis.find((f) => f.tipo === 'revendedoras');
+  assert.ok(rec && cli && revF, 'três funis instalados');
+
+  // Recrutamento: a candidata do formulário virou card, foi aprovada e o card acompanhou.
+  const cards = await ok('GET', `/crm/leads?funilId=${rec.id}&busca=Formulário`);
+  assert.equal(cards.length, 1);
+  assert.equal(cards[0].status, 'ganho', 'aprovada no recrutamento');
+  const card = await ok('GET', `/crm/leads/${cards[0].id}`);
+  assert.equal(card.origem.utm_source, 'instagram', 'UTM do formulário no card');
+  assert.equal(card.contato.camposExtras.Cidade, 'Serra', 'cidade é dado do contato');
+  assert.ok(card.pessoa, 'card ligado à revendedora criada');
+
+  // Números: um oficial (Meta) e um por QR code (Z-API).
+  const oficial = await ok('POST', '/crm/canais', { nome: 'Matriz oficial', tipo: 'oficial', config: { phoneNumberId: 'PN1', wabaId: 'WABA1', token: 'token-meta-wa', appSecret: 'segredo-app' }, funilEntradaId: cli.id });
+  assert.ok(oficial.config.token.startsWith('••••'), 'token nunca volta para a tela');
+  const qr = await ok('POST', '/crm/canais', { nome: 'Celular da Ana', tipo: 'qrcode', config: { instancia: 'I1', token: 'T1', clientToken: 'CT1' } });
+  assert.ok((await sim()).some((r) => r.caminho.endsWith('update-every-webhooks') && r.corpo.value.includes(`/api/webhooks/whatsapp/${qr.id}/`)), 'webhook da Z-API apontado sozinho');
+  assert.equal((await ok('GET', `/crm/canais/${qr.id}/situacao`)).conectado, true);
+  assert.match((await ok('GET', `/crm/canais/${oficial.id}/situacao`)).detalhe, /Aritana/);
+  const sinc = await ok('POST', `/crm/canais/${oficial.id}/templates`);
+  assert.equal(sinc.aprovados, 1);
+  const tpl = (await ok('GET', `/crm/templates?canalId=${oficial.id}`)).find((t) => t.nome === 'boas_vindas');
+  await ok('PATCH', `/crm/templates/${tpl.id}`, { variaveis: ['primeiro_nome', 'etapa'] });
+
+  // Mensagem chegando pelo oficial, vinda de anúncio "clique para WhatsApp", com assinatura da Meta.
+  const hook = oficial.webhook.replace('http://localhost:3100', '');
+  const corpoMeta = { entry: [{ changes: [{ value: { contacts: [{ wa_id: '5527911112222', profile: { name: 'Maria Cliente' } }], messages: [{ from: '5527911112222', id: 'wamid.ENTRADA1', timestamp: String(Math.floor(Date.now() / 1000)), type: 'text', text: { body: 'Oi, vi o anúncio dos brincos' }, referral: { source_id: 'AD123', source_type: 'ad', headline: 'Brincos dourados', ctwa_clid: 'CLID9' } }] } }] }] };
+  const bruto = JSON.stringify(corpoMeta);
+  const assinar = (b) => 'sha256=' + createHmac('sha256', 'segredo-app').update(b).digest('hex');
+  assert.equal((await fetch(API.replace(/\/api$/, '') + hook, { method: 'POST', headers: { 'content-type': 'application/json', 'x-hub-signature-256': 'sha256=errada' }, body: bruto })).status, 403, 'assinatura errada recusada');
+  assert.equal((await fetch(API.replace(/\/api$/, '') + hook, { method: 'POST', headers: { 'content-type': 'application/json', 'x-hub-signature-256': assinar(bruto) }, body: bruto })).status, 200);
+  const verif = await fetch(API.replace(/\/api$/, '') + hook + `?hub.mode=subscribe&hub.verify_token=${hook.split('/').pop()}&hub.challenge=XYZ`);
+  assert.equal(await verif.text(), 'XYZ', 'verificação do webhook pela Meta');
+
+  // Fila de espera: chegou, ninguém pegou.
+  let fila = await ok('GET', '/crm/conversas?aba=fila');
+  const conv = fila.find((c) => c.telefone === '5527911112222');
+  assert.ok(conv, 'conversa nova cai na fila');
+  assert.equal(conv.lead.funil, cli.nome, 'card criado no funil de entrada do número');
+  const leadMaria = await ok('GET', `/crm/leads/${conv.lead.id}`);
+  assert.equal(leadMaria.origem.anuncio_id, 'AD123', 'anúncio de origem no card');
+  assert.equal(leadMaria.origem.ctwa_clid, 'CLID9');
+  assert.ok((await ok('GET', '/crm/contadores')).fila >= 1);
+  await ok('POST', `/crm/conversas/${conv.id}/pegar`);
+  assert.ok(!(await ok('GET', '/crm/conversas?aba=fila')).some((c) => c.id === conv.id), 'saiu da fila');
+  assert.ok((await ok('GET', '/crm/conversas?aba=minhas')).some((c) => c.id === conv.id), 'agora é minha');
+
+  // Responder dentro da janela de 24h; status de entregue/lida vem pelo webhook.
+  const enviada = await ok('POST', `/crm/conversas/${conv.id}/mensagens`, { texto: 'Olá {{primeiro_nome}}! Temos sim.' });
+  assert.equal(enviada.texto, 'Olá Maria! Temos sim.');
+  const envioMeta = (await sim()).filter((r) => r.caminho === '/meta-wa/PN1/messages').pop();
+  assert.equal(envioMeta.corpo.text.body, 'Olá Maria! Temos sim.');
+  const st = JSON.stringify({ entry: [{ changes: [{ value: { statuses: [{ id: enviada.idExterno, status: 'delivered' }, { id: enviada.idExterno, status: 'read' }] } }] }] });
+  await fetch(API.replace(/\/api$/, '') + hook, { method: 'POST', headers: { 'content-type': 'application/json', 'x-hub-signature-256': assinar(st) }, body: st });
+  let msgs = await ok('GET', `/crm/conversas/${conv.id}/mensagens`);
+  assert.equal(msgs.mensagens.find((m) => m.id === enviada.id).status, 'lida');
+  assert.equal(msgs.conversa.dentroDaJanela, true);
+
+  // Conversa interna: não vai para o WhatsApp.
+  const antes = (await sim()).length;
+  await ok('POST', `/crm/conversas/${conv.id}/interna`, { texto: 'Cliente quer o brinco da vitrine, separar' });
+  assert.equal((await sim()).length, antes, 'interna não sai para o cliente');
+  msgs = await ok('GET', `/crm/conversas/${conv.id}/mensagens`);
+  assert.ok(msgs.mensagens.some((m) => m.direcao === 'interna'));
+
+  // Resolver; o cliente escreve de novo e volta para a fila.
+  await ok('POST', `/crm/conversas/${conv.id}/resolver`);
+  const volta = JSON.stringify({ entry: [{ changes: [{ value: { contacts: [{ wa_id: '5527911112222', profile: { name: 'Maria Cliente' } }], messages: [{ from: '5527911112222', id: 'wamid.ENTRADA2', timestamp: String(Math.floor(Date.now() / 1000)), type: 'image', image: { id: 'midia-recebida-1', mime_type: 'image/png', caption: 'Este aqui' } }] } }] }] });
+  await fetch(API.replace(/\/api$/, '') + hook, { method: 'POST', headers: { 'content-type': 'application/json', 'x-hub-signature-256': assinar(volta) }, body: volta });
+  fila = await ok('GET', '/crm/conversas?aba=fila');
+  assert.ok(fila.some((c) => c.id === conv.id), 'resolvida + mensagem nova = volta para a fila');
+  msgs = await ok('GET', `/crm/conversas/${conv.id}/mensagens`);
+  const foto = msgs.mensagens.find((m) => m.tipo === 'imagem');
+  assert.ok(foto.midia, 'foto recebida guardada');
+  assert.equal((await chamar('GET', `/crm/midia/${foto.midia}`)).status, 200);
+  assert.equal((await fetch(API + `/crm/midia/${foto.midia}`)).status, 401, 'mídia de conversa só com login');
+  await ok('POST', `/crm/conversas/${conv.id}/transferir`, { usuarioId: null });
+
+  // Fora da janela de 24h no oficial: texto livre recusado, template aprovado sai.
+  const novo = await ok('POST', '/crm/leads', { funilId: cli.id, nome: 'João Sem Conversa', telefone: '(27) 93333-4444', valor: 15000 });
+  const lj = await ok('GET', `/crm/leads/${novo.id}`);
+  const cvJ = await ok('POST', `/crm/contatos/${lj.contatoId}/conversa`, { canalId: oficial.id });
+  const fora = await chamar('POST', `/crm/conversas/${cvJ.id}/mensagens`, { texto: 'Oi' });
+  assert.equal(fora.status, 400);
+  assert.match(fora.dados.mensagem, /24h/);
+  const t = await ok('POST', `/crm/conversas/${cvJ.id}/mensagens`, { tipo: 'template', templateId: tpl.id, leadId: novo.id });
+  assert.equal(t.texto, 'Olá João, bem-vinda à Aritana! Sua etapa: Novo contato.');
+  const envioT = (await sim()).filter((r) => r.caminho === '/meta-wa/PN1/messages').pop();
+  assert.deepEqual(envioT.corpo.template.components[0].parameters.map((p) => p.text), ['João', 'Novo contato']);
+  assert.ok(!(await ok('GET', '/crm/conversas?aba=fila')).some((c) => c.id === cvJ.id), 'conversa aberta pela equipe não entra na fila');
+
+  // Gatilho: entrou em "Em atendimento" → mensagem pelo QR, etiqueta, espera e tarefa.
+  const etAtend = cli.etapas.find((e) => e.chave === 'atendimento');
+  const g = await ok('POST', '/crm/gatilhos', { nome: 'Boas-vindas atendimento', funilId: cli.id, evento: 'entrou_etapa', etapaId: etAtend.id, acoes: [{ tipo: 'enviar_mensagem', texto: 'Oi {{primeiro_nome}}, já vou te atender!', canalId: qr.id }, { tipo: 'adicionar_etiqueta', etiqueta: 'quente' }, { tipo: 'esperar', minutos: 60 }, { tipo: 'criar_tarefa', titulo: 'Ligar para o João' }] });
+  assert.equal((await chamar('POST', '/crm/gatilhos', { nome: 'x', evento: 'entrou_etapa', acoes: [{ tipo: 'enviar_template' }] })).status, 400, 'ação incompleta recusada');
+  await ok('PATCH', `/crm/leads/${novo.id}`, { etapaId: etAtend.id });
+  await new Promise((r) => setTimeout(r, 400));
+  await ok('POST', '/crm/processar');
+  const envioZ = (await sim()).filter((r) => r.caminho.endsWith('/send-text')).pop();
+  assert.equal(envioZ.corpo.message, 'Oi João, já vou te atender!');
+  assert.equal(envioZ.corpo.phone, '5527933334444');
+  let lj2 = await ok('GET', `/crm/leads/${novo.id}`);
+  assert.ok(lj2.etiquetas.includes('quente'));
+  assert.equal(lj2.tarefas.length, 0, 'tarefa só depois da espera');
+  assert.equal((await ok('GET', '/crm/gatilhos')).find((x) => x.id === g.id).agendados, 1);
+
+  // Respostas rápidas, templates livres, campos personalizados.
+  await ok('POST', '/crm/respostas', { atalho: 'pix', texto: 'Nossa chave Pix é o CNPJ.' });
+  const livre = await ok('POST', '/crm/templates', { nome: 'Lembrete de acerto', texto: 'Oi {{primeiro_nome}}, seu acerto vence em breve.' });
+  const campo = await ok('POST', '/crm/campos', { entidade: 'lead', nome: 'Peça desejada', tipo: 'texto', funilId: cli.id });
+  await ok('PATCH', `/crm/leads/${novo.id}`, { camposExtras: { 'Peça desejada': 'Brinco argola' } });
+  await ok('PATCH', `/crm/campos/${campo.id}`, { nome: 'Peça de interesse' });
+  assert.equal((await ok('GET', `/crm/leads/${novo.id}`)).camposExtras['Peça de interesse'], 'Brinco argola', 'renomear leva o valor junto');
+  await ok('PATCH', `/crm/contatos/${lj.contatoId}`, { camposExtras: { Aniversário: '1990-05-10' } });
+
+  // Descadastro: respondeu SAIR pelo QR code.
+  const hookQr = qr.webhook.replace('http://localhost:3100', '');
+  await fetch(API.replace(/\/api$/, '') + hookQr, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ type: 'ReceivedCallback', phone: '5527933334444', messageId: 'ZIN1', momment: Date.now(), senderName: 'João', text: { message: 'SAIR' } }) });
+  assert.equal((await ok('GET', `/crm/leads/${novo.id}`)).contato.descadastrado, true);
+  assert.equal((await fetch(API.replace(/\/api$/, '') + `/api/webhooks/whatsapp/${qr.id}/token-errado`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })).status, 403);
+
+  // Disparo em massa pelo QR code, para o funil de clientes: quem pediu para sair fica de fora.
+  // As vendas da loja com cliente identificada (testes de venda acima) já criaram cards em "Comprou".
+  const comprou = cli.etapas.find((e) => e.chave === 'comprou');
+  const daLoja = await ok('GET', `/crm/leads?funilId=${cli.id}`);
+  assert.ok(daLoja.some((l) => l.etapaId === comprou.id), 'venda da loja move a cliente para Comprou');
+  const disp = await ok('POST', '/crm/disparos', { nome: 'Novidades de novembro', canalId: qr.id, templateId: livre.id, filtro: { funilId: cli.id, contatoIds: [leadMaria.contatoId, lj.contatoId] }, ritmo: 60 });
+  assert.equal(disp.total, 1, 'só a Maria (o João pediu para sair)');
+  assert.equal((await chamar('POST', '/crm/disparos', { nome: 'x', canalId: oficial.id, texto: 'oi', filtro: {} })).status, 400, 'oficial só com template');
+  await ok('POST', `/crm/disparos/${disp.id}/iniciar`, {});
+  await ok('POST', '/crm/processar');
+  await ok('POST', '/crm/processar');
+  const fim = await ok('GET', `/crm/disparos/${disp.id}`);
+  assert.equal(fim.status, 'concluido');
+  assert.equal(fim.enviados, 1);
+  assert.equal((await sim()).filter((r) => r.caminho.endsWith('/send-text')).pop().corpo.message, 'Oi Maria, seu acerto vence em breve.');
+
+  // Revendedoras: cada uma num card, na etapa conforme as maletas.
+  await ok('POST', '/crm/revendedoras/sincronizar'); // (a sincronização diária pode já ter rodado no ciclo)
+  const doFunil = await ok('GET', `/crm/leads?funilId=${revF.id}`);
+  assert.ok(doFunil.length >= 1);
+  assert.equal((await ok('POST', '/crm/revendedoras/sincronizar')).criados, 0, 'de novo não duplica');
+
+  // Softphone: ramal do atendente e ligação no histórico.
+  const eu = await ok('GET', '/auth/eu');
+  await ok('POST', '/crm/ramais', { usuarioId: eu.id, servidor: 'wss://voz.exemplo.com:7443', usuarioSip: 'sip:1001@voz.exemplo.com', senha: 'senha-ramal' });
+  const ramal = await ok('GET', '/crm/ramal');
+  assert.equal(ramal.senha, 'senha-ramal');
+  assert.ok(!JSON.stringify(await ok('GET', '/crm/ramais')).includes('senha-ramal'), 'lista de ramais não mostra a senha');
+  await ok('POST', `/crm/leads/${novo.id}/ligacoes`, { numero: '27933334444', duracaoSeg: 95, resultado: 'atendida' });
+  assert.ok((await ok('GET', `/crm/leads/${novo.id}`)).eventos.some((e) => e.tipo === 'ligacao' && e.texto.includes('1min35s')));
+
+  // Etapa de perda exige motivo.
+  const perdido = cli.etapas.find((e) => e.tipo === 'perdido');
+  assert.equal((await chamar('PATCH', `/crm/leads/${novo.id}`, { etapaId: perdido.id })).status, 400);
+  await ok('PATCH', `/crm/leads/${novo.id}`, { etapaId: perdido.id, motivoPerda: 'Achou caro' });
+  assert.equal((await ok('GET', `/crm/leads/${novo.id}`)).status, 'perdido');
+  // Gatilho de etapa: o card saiu da etapa durante a espera → a tarefa não é criada.
+  await ok('POST', '/crm/processar');
+  assert.equal((await ok('GET', `/crm/leads/${novo.id}`)).tarefas.length, 0);
+});
+
 test('implantação: apagar dados de teste exige APAGAR e mantém o que é configuração', async () => {
   assert.equal((await chamar('POST', '/implantacao/apagar-dados-de-teste', { confirmacao: 'apagar' })).status, 400);
   const bloq = await chamar('POST', '/implantacao/apagar-dados-de-teste', { confirmacao: 'APAGAR', manterProdutos: true });

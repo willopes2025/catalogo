@@ -78,6 +78,13 @@
       "when": 1794677448331,
       "tag": "0010_jueri_campos",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1794737037567,
+      "tag": "0011_crm_completo",
+      "breakpoints": true
     }
   ]
 }
