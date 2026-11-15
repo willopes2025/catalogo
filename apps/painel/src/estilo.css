@@ -40,7 +40,17 @@ p { margin: 0; }
 .lateral .marca { padding: 22px 22px 18px; border-bottom: 1px solid #6e5b4c; }
 .lateral .marca img { width: 128px; display: block; }
 .lateral nav { padding: 10px 10px 20px; display: flex; flex-direction: column; gap: 2px; }
-.lateral nav a, .lateral nav span.item { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 12px; border-radius: 8px; color: #eadfce; font-size: 14.5px; text-decoration: none; }
+.lateral nav a, .lateral nav span.item { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 12px; border-radius: 8px; color: #eadfce; font-size: 14.5px; text-decoration: none; }
+.lateral .busca-menu { margin: 12px 12px 0; width: calc(100% - 24px); box-sizing: border-box; padding: 7px 10px; border-radius: 8px; border: 1px solid #6e5b4c; background: var(--marrom-2); color: #faf6ef; font: inherit; font-size: 13.5px; }
+.lateral .busca-menu::placeholder { color: #b9a892; }
+.lateral .busca-menu:focus { outline: 2px solid var(--areia); outline-offset: 1px; }
+.lateral .grupo-menu { display: flex; flex-direction: column; gap: 2px; }
+.lateral .titulo-menu { display: flex; align-items: center; gap: 6px; width: 100%; margin-top: 8px; padding: 6px 12px 4px; border: 0; border-radius: 8px; background: none; cursor: pointer; text-align: left; font: inherit; font-size: 11px; font-weight: 600; letter-spacing: 1.2px; text-transform: uppercase; color: #b9a892; }
+.lateral .titulo-menu:hover { color: #faf6ef; }
+.lateral .titulo-menu:focus-visible { outline: 2px solid var(--areia); }
+.lateral .titulo-menu .seta { margin-left: auto; font-size: 12px; letter-spacing: 0; }
+.lateral .titulo-menu .bolha-menu { letter-spacing: 0; }
+.lateral .vazio-menu { padding: 12px; font-size: 13.5px; color: #b9a892; }
 .lateral nav a:hover { background: var(--marrom-2); }
 .lateral nav a.ativo { background: var(--areia); color: var(--marrom-3); font-weight: 600; }
 .lateral nav span.item { opacity: 0.55; cursor: default; }
@@ -147,7 +157,7 @@ input.invalido { border-color: var(--erro); }
 .publico .peca .info { flex: 1; }
 
 @media (max-width: 900px) {
-  .app { grid-template-columns: 1fr; }
+  .app { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
   /* No celular, o menu fica compacto em cima: o que importa (ex.: bater o ponto) aparece na primeira tela. */
   .lateral .marca { padding: 10px 16px 8px; }
   .lateral .marca img { max-height: 30px; width: auto; }
@@ -155,6 +165,12 @@ input.invalido { border-color: var(--erro); }
   .lateral .rodape > * { margin: 0 !important; }
   .lateral { position: static; height: auto; }
   .lateral nav { flex-direction: row; flex-wrap: wrap; }
+  /* No celular os títulos entram na mesma linha dos itens, para o menu não ocupar a tela toda. */
+  .lateral nav { align-items: center; }
+  .lateral .grupo-menu { display: contents; }
+  .lateral .titulo-menu { width: auto; margin: 0; padding: 6px 4px 6px 10px; font-size: 10px; }
+  .lateral .busca-menu { margin: 0 12px 4px; }
+  .lateral nav a, .lateral .titulo-menu { min-height: 40px; }
   .conteudo { padding: 18px 16px 40px; }
   .g3, .g4 { grid-template-columns: repeat(2, 1fr); }
   .form { grid-template-columns: 1fr 1fr; }

@@ -1,4 +1,5 @@
-import { NavLink, Outlet, useNavigate } from 'react-router-dom';
+import { useState } from 'react';
+import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { MODULOS } from '@aritana/regras';
 import { useQuery } from '@tanstack/react-query';
 import { api, atualizarUsuario, lerSessao, pode, salvarSessao } from '../api';
@@ -7,7 +8,40 @@ import { Softphone } from './Softphone';
 /** Rotas já construídas nesta etapa; as demais abrem a página "em construção". */
 const ROTAS: Record<string, string> = { inicio: '/', rede: '/rede', cadastros: '/cadastros', produtos: '/produtos', estoque: '/estoque', maletas: '/maletas', vendas: '/vendas', lojas: '/lojas', financeiro: '/financeiro', fiscal: '/fiscal', relatorios: '/relatorios', configuracoes: '/configuracoes', suporte: '/suporte', garantia: '/garantia', comissoes: '/comissoes', crm: '/crm', pontos: '/pontos', formularios: '/formularios', marketing: '/marketing', rh: '/rh' };
 
+/** Menu separado por assunto. Módulo novo que não estiver aqui aparece em "Outros". */
+const GRUPOS: { titulo: string; chaves: string[] }[] = [
+  { titulo: '', chaves: ['inicio'] },
+  { titulo: 'Atendimento', chaves: ['crm', 'agenda', 'marketing', 'formularios'] },
+  { titulo: 'Revendedoras', chaves: ['rede', 'maletas', 'pontos', 'comissoes'] },
+  { titulo: 'Vendas', chaves: ['vendas', 'lojas', 'garantia'] },
+  { titulo: 'Produtos', chaves: ['produtos', 'estoque'] },
+  { titulo: 'Financeiro', chaves: ['financeiro', 'fiscal', 'relatorios'] },
+  { titulo: 'Equipe', chaves: ['meu-ponto', 'rh'] },
+  { titulo: 'Sistema', chaves: ['cadastros', 'configuracoes', 'suporte'] },
+];
+const semAcento = (t: string) => t.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+
 export function Layout() {
+  const [busca, setBusca] = useState('');
+  const local = useLocation();
+  // Grupos que a pessoa fechou (fica guardado neste navegador).
+  const [fechados, setFechados] = useState<string[]>(() => {
+    try {
+      return JSON.parse(localStorage.getItem('aritana.menu.fechados') ?? '[]') as string[];
+    } catch {
+      return [];
+    }
+  });
+  const alternar = (titulo: string) =>
+    setFechados((f) => {
+      const n = f.includes(titulo) ? f.filter((t) => t !== titulo) : [...f, titulo];
+      try {
+        localStorage.setItem('aritana.menu.fechados', JSON.stringify(n));
+      } catch {
+        /* sem armazenamento: vale até recarregar */
+      }
+      return n;
+    });
   const navegar = useNavigate();
   // Relê as permissões do servidor (a gerência pode ter mudado o grupo desde o login).
   useQuery({ queryKey: ['eu'], queryFn: async () => { const u = await api<any>('/auth/eu'); atualizarUsuario({ id: u.id, nome: u.nome, email: u.email, grupo: u.grupo, permissoes: u.permissoes }); return u; }, staleTime: 60_000 });
@@ -18,31 +52,57 @@ export function Layout() {
   // Quem é funcionário (tem cadastro no RH) vê "Meu ponto", mesmo sem nenhum outro módulo.
   const ponto = useQuery({ queryKey: ['ponto', 'eu'], queryFn: () => api<{ eFuncionario: boolean; espelhosParaConfirmar?: string[]; documentosNovos?: number }>('/ponto/eu'), staleTime: 60_000 });
   const avisoPonto = (ponto.data?.espelhosParaConfirmar?.length ?? 0) + (ponto.data?.documentosNovos ?? 0);
+  // O que esta pessoa pode ver, separado por assunto e filtrado pela busca.
+  const visiveis: { chave: string; nome: string; versao: number }[] = MODULOS.filter((m) => m.chave === 'suporte' || pode(m.chave, 'ver')).map((m) => ({ chave: m.chave, nome: m.nome, versao: m.versao as number }));
+  if (ponto.data?.eFuncionario) visiveis.push({ chave: 'meu-ponto', nome: 'Meu ponto', versao: 1 });
+  const agrupadas = new Set(GRUPOS.flatMap((g) => g.chaves));
+  const termo = semAcento(busca.trim());
+  const grupos = [...GRUPOS, { titulo: 'Outros', chaves: visiveis.filter((m) => !agrupadas.has(m.chave)).map((m) => m.chave) }]
+    .map((g) => ({
+      titulo: g.titulo,
+      // Buscar pelo título do grupo mostra o grupo inteiro.
+      itens: g.chaves.map((c) => visiveis.find((m) => m.chave === c)).filter((m): m is (typeof visiveis)[number] => !!m && (!termo || semAcento(m.nome).includes(termo) || semAcento(g.titulo).includes(termo))),
+    }))
+    .filter((g) => g.itens.length > 0)
+    .map((g) => {
+      const rota = (c: string) => (c === 'meu-ponto' ? '/meu-ponto' : (ROTAS[c] ?? `/${c}`));
+      const aqui = g.itens.some((m) => rota(m.chave) !== '/' && (local.pathname === rota(m.chave) || local.pathname.startsWith(rota(m.chave) + '/')));
+      // Buscando, ou na tela de um item do grupo, o grupo fica aberto mesmo que esteja fechado.
+      return { ...g, aberto: !g.titulo || !!termo || aqui || !fechados.includes(g.titulo), aviso: (g.itens.some((m) => m.chave === 'crm') ? avisoCrm : 0) + (g.itens.some((m) => m.chave === 'meu-ponto') ? avisoPonto : 0) };
+    });
   return (
     <div className="app">
       <aside className="lateral">
         <div className="marca">
           <img src="/logo-creme.png" alt="Aritana Semijoias" />
         </div>
+        <input className="busca-menu" type="search" placeholder="Buscar no menu" aria-label="Buscar no menu" value={busca} onChange={(e) => setBusca(e.target.value)} />
         <nav aria-label="Módulos">
-          {ponto.data?.eFuncionario && (
-            <NavLink to="/meu-ponto" className={({ isActive }) => (isActive ? 'ativo' : '')}>
-              Meu ponto
-              {avisoPonto > 0 && <span className="bolha-menu" title="Espelho para confirmar e documentos novos">{avisoPonto}</span>}
-            </NavLink>
-          )}
-          {MODULOS.filter((m) => m.chave === 'suporte' || pode(m.chave, 'ver')).map((m) =>
-            (m.versao as number) === 2 ? (
-              <span key={m.chave} className="item" title="Entra na Versão 2">
-                {m.nome} <span className="v2">V2</span>
-              </span>
-            ) : (
-              <NavLink key={m.chave} to={ROTAS[m.chave] ?? `/${m.chave}`} end={m.chave === 'inicio'} className={({ isActive }) => (isActive ? 'ativo' : '')}>
-                {m.nome}
-                {m.chave === 'crm' && avisoCrm > 0 && <span className="bolha-menu" title="Na fila e não lidas">{avisoCrm}</span>}
-              </NavLink>
-            ),
-          )}
+          {grupos.map((g) => (
+            <div key={g.titulo || 'inicio'} className="grupo-menu" role="group" aria-label={g.titulo || undefined}>
+              {g.titulo && (
+                <button type="button" className="titulo-menu" aria-expanded={g.aberto} onClick={() => alternar(g.titulo)}>
+                  {g.titulo}
+                  <span className="seta" aria-hidden="true">{g.aberto ? '▾' : '▸'}</span>
+                  {!g.aberto && g.aviso > 0 && <span className="bolha-menu">{g.aviso}</span>}
+                </button>
+              )}
+              {g.aberto && g.itens.map((m) =>
+                m.versao === 2 ? (
+                  <span key={m.chave} className="item" title="Entra na Versão 2">
+                    {m.nome} <span className="v2">V2</span>
+                  </span>
+                ) : (
+                  <NavLink key={m.chave} to={m.chave === 'meu-ponto' ? '/meu-ponto' : (ROTAS[m.chave] ?? `/${m.chave}`)} end={m.chave === 'inicio'} onClick={() => setBusca('')} className={({ isActive }) => (isActive ? 'ativo' : '')}>
+                    {m.nome}
+                    {m.chave === 'crm' && avisoCrm > 0 && <span className="bolha-menu" title="Na fila e não lidas">{avisoCrm}</span>}
+                    {m.chave === 'meu-ponto' && avisoPonto > 0 && <span className="bolha-menu" title="Espelho para confirmar e documentos novos">{avisoPonto}</span>}
+                  </NavLink>
+                ),
+              )}
+            </div>
+          ))}
+          {grupos.length === 0 && <div className="vazio-menu">Nada encontrado</div>}
         </nav>
         <div className="rodape">
           <div style={{ fontWeight: 600, color: '#faf6ef' }}>{sessao?.usuario.nome}</div>
