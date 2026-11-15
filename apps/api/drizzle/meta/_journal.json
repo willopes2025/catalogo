@@ -169,6 +169,13 @@
       "when": 1794772514937,
       "tag": "0023_agenda",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1794774203601,
+      "tag": "0024_pedidos_link",
+      "breakpoints": true
     }
   ]
 }

@@ -16,6 +16,7 @@ import { MaletasService, hoje } from '../maletas/maletas.service';
 import { PontosService } from '../pontos/pontos.service';
 import { DistribuicaoService } from '../crm/distribuicao.service';
 import { AgendaService } from '../agenda/agenda.service';
+import { PedidosLinkService } from '../catalogo/pedidos.service';
 import { acertos, categorias, crmContatos, crmFunis, crmLeads, documentos, locaisEstoque, maletas, niveis, pedidosPecas, pessoas, portalAcessos, premios, produtos, resgates, saldos, titulos } from '../db/schema';
 
 const sha256 = (t: string) => createHash('sha256').update(t).digest('hex');
@@ -40,6 +41,7 @@ export class PortalController {
     private readonly pontosSvc: PontosService,
     private readonly distribuicao: DistribuicaoService,
     private readonly agenda: AgendaService,
+    private readonly pedidosLink: PedidosLinkService,
   ) {}
 
   private sessao(p: { id: string; nome: string }) {
@@ -121,6 +123,39 @@ export class PortalController {
     await this.db.insert(portalAcessos).values({ pessoaId, tipo: 'link', hash: sha256(token), expiraEm: new Date(Date.now() + 7 * 86_400_000), criadoPor: u.id });
     await this.auditoria.registrar({ usuarioId: u.id, acao: 'gerar_link_portal', entidade: 'pessoa', entidadeId: pessoaId });
     return { token, caminho: `/portal/entrar/${token}`, telefone: p.telefone1, nome: p.nome };
+  }
+
+  // ───── Pedidos das clientes pelo catálogo dela ─────
+
+  @RotaPortal()
+  @Get('pedidos-link')
+  async pedidosDoLink(@Representante() r: RepresentanteLogada) {
+    return (await this.pedidosLink.daConsultora(r.rep)).map((p) => ({
+      id: p.id, numero: p.numero, origem: p.origem, status: p.status, clienteNome: p.clienteNome, clienteTelefone: p.clienteTelefone, clienteCidade: p.clienteCidade,
+      entrega: p.entrega, endereco: p.endereco, observacao: p.observacao, itens: p.itens, total: p.total, criadoEm: p.criadoEm, motivoCancelamento: p.motivoCancelamento,
+    }));
+  }
+
+  @RotaPortal()
+  @Post('pedidos-link/:id/confirmar')
+  async confirmarPedido(@Representante() r: RepresentanteLogada, @Param('id', ParseUUIDPipe) id: string) {
+    await this.pedidosLink.confirmar(id, { pessoaId: r.rep });
+    return { ok: true };
+  }
+
+  @RotaPortal()
+  @Post('pedidos-link/:id/entregue')
+  async entreguePedido(@Representante() r: RepresentanteLogada, @Param('id', ParseUUIDPipe) id: string) {
+    await this.pedidosLink.entregarDaMaleta(id, r.rep);
+    return { ok: true };
+  }
+
+  @RotaPortal()
+  @Post('pedidos-link/:id/cancelar')
+  async cancelarPedido(@Representante() r: RepresentanteLogada, @Param('id', ParseUUIDPipe) id: string, @Body() body: unknown) {
+    const d = validar(z.object({ motivo: z.string().trim().max(300).nullable().optional() }), body ?? {});
+    await this.pedidosLink.cancelar(id, d.motivo ?? null, { pessoaId: r.rep });
+    return { ok: true };
   }
 
   // ───── Compromissos da representante (acerto por vídeo, retirada, reunião) ─────

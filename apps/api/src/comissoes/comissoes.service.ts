@@ -7,7 +7,7 @@ import { ConfiguracoesService } from '../configuracoes/configuracoes.service';
 import { comissoes, empresas, fechamentosComissao, titulos } from '../db/schema';
 
 export interface LinhaComissao {
-  tipo: 'loja' | 'rede';
+  tipo: 'loja' | 'rede' | 'link';
   usuarioId: string | null;
   pessoaId: string | null;
   nome: string;
@@ -49,6 +49,7 @@ export class ComissoesService {
                    then v.total::numeric / (select sum(vi.total) from venda_itens vi where vi.venda_id = v.id) else 1 end as devolvido
         from vendas v
         where v.status = 'concluida' and v.tipo in ('balcao', 'avulsa') and v.vendedor_id is not null
+          and not exists (select 1 from pedidos_link pl where pl.venda_id = v.id)
           and v.criado_em >= (${ini}::date at time zone 'America/Sao_Paulo') and v.criado_em < (${fim}::date at time zone 'America/Sao_Paulo')
       )
       select u.id as usuario_id, u.nome, u.comissao_pb, u.meta_mensal, count(v.id)::int as vendas, sum(v.total)::bigint as vendido, round(sum(v.devolvido))::bigint as devolvido
@@ -83,6 +84,22 @@ export class ComissoesService {
       for (const r of rede.rows) {
         const base = Number(r.vendido);
         linhas.push({ tipo: 'rede', usuarioId: null, pessoaId: r.lider_id, nome: r.nome, base, percentualPb: regras.redeLiderPb, valor: aplicarPercentual(base, regras.redeLiderPb), meta: null, detalhes: { acertos: r.acertos, representantes: r.representantes } });
+      }
+    }
+
+    // Venda pelo link: pedidos atendidos pela matriz e faturados no mês, para a consultora/afiliada do catálogo.
+    const link = await this.config.ler('regras_link');
+    if (link.comissaoPb > 0) {
+      const r = await this.db.execute<{ pessoa_id: string; nome: string; pedidos: number; vendido: string; devolvido: string }>(sql`
+        select p.id as pessoa_id, p.nome, count(pl.id)::int as pedidos, sum(v.total)::bigint as vendido, sum(v.devolvido)::bigint as devolvido
+        from pedidos_link pl join vendas v on v.id = pl.venda_id join pessoas p on p.id = pl.pessoa_id
+        where pl.origem = 'matriz' and v.status = 'concluida'
+          and v.criado_em >= (${ini}::date at time zone 'America/Sao_Paulo') and v.criado_em < (${fim}::date at time zone 'America/Sao_Paulo')
+        group by p.id order by p.nome`);
+      for (const x of r.rows) {
+        const base = Number(x.vendido) - Number(x.devolvido);
+        if (base <= 0) continue;
+        linhas.push({ tipo: 'link', usuarioId: null, pessoaId: x.pessoa_id, nome: x.nome, base, percentualPb: link.comissaoPb, valor: aplicarPercentual(base, link.comissaoPb), meta: null, detalhes: { pedidos: x.pedidos, vendido: Number(x.vendido), devolvido: Number(x.devolvido) } });
       }
     }
 
@@ -121,7 +138,7 @@ export class ComissoesService {
       for (const l of aPagar) {
         const [t] = await tx
           .insert(titulos)
-          .values({ empresaId: matriz.id, tipo: 'pagar', pessoaId: l.pessoaId, descricao: `Comissão ${l.tipo === 'rede' ? 'da rede' : 'de vendas'} · ${l.nome} · ${mes.slice(5)}/${mes.slice(0, 4)}`, categoria: 'Comissões', valor: l.valor, vencimento: venc, origemTipo: 'comissao', origemId: f.id })
+          .values({ empresaId: matriz.id, tipo: 'pagar', pessoaId: l.pessoaId, descricao: `Comissão ${l.tipo === 'rede' ? 'da rede' : l.tipo === 'link' ? 'de vendas pelo link' : 'de vendas'} · ${l.nome} · ${mes.slice(5)}/${mes.slice(0, 4)}`, categoria: 'Comissões', valor: l.valor, vencimento: venc, origemTipo: 'comissao', origemId: f.id })
           .returning();
         await tx.insert(comissoes).values({ fechamentoId: f.id, tipo: l.tipo, usuarioId: l.usuarioId, pessoaId: l.pessoaId, nome: l.nome, base: l.base, percentualPb: l.percentualPb, valor: l.valor, meta: l.meta, detalhes: l.detalhes, tituloId: t.id });
       }

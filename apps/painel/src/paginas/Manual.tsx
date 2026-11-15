@@ -150,6 +150,22 @@ const SECOES: Secao[] = [
     ],
   },
   {
+    id: 'pedidos-link',
+    titulo: 'Venda pelo link (catálogo com pedido)',
+    passos: [
+      { t: 'O link', d: 'Cada consultora tem o catálogo dela (na ficha, "Link do catálogo"). Ela manda para as clientes ou põe na bio do Instagram.' },
+      { t: 'A cliente pede', d: 'Escolhe as peças, monta a sacola e envia com nome, WhatsApp, cidade e se vai retirar, receber em casa ou combinar. O preço e o estoque são sempre os do sistema.' },
+      { t: 'Peças da maleta', d: 'Quem tem maleta aberta mostra as peças dela. O pedido aparece no portal, em Clientes: ela confirma, entrega e marca "Entreguei". As peças entram como vendidas na pré-baixa da maleta e a matriz confere no acerto.' },
+      { t: 'Afiliada ou sem maleta', d: 'O catálogo mostra o estoque da matriz. O pedido aparece em Vendas › Pedidos pelo link: a equipe confirma, separa e clica em "Faturar". Vira uma venda, sai do estoque e a consultora ganha a comissão no fechamento do mês.' },
+      { t: 'Regras', d: 'Em Vendas › Pedidos pelo link › Regras: comissão, estoque que atende, entrega em casa e mensagem final. Desligando, o catálogo volta a ter só o botão do WhatsApp.' },
+    ],
+    dicas: [
+      'Todo pedido também abre um card no funil de clientes do CRM, com a etiqueta "Pedido pelo link", e a consultora recebe o aviso no WhatsApp.',
+      'Enquanto o pedido está em aberto, as peças ficam seguradas: outra cliente não consegue pedir a mesma peça. Cancelar libera.',
+      'A venda faturada pelo link não conta como comissão de loja de quem faturou.',
+    ],
+  },
+  {
     id: 'agenda',
     titulo: 'Agenda e Google Meet',
     passos: [

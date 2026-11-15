@@ -43,6 +43,20 @@ export const CONFIGS = {
     padrao: { prazoDias: 90 },
     schema: z.object({ prazoDias: z.number().int().min(0).max(3650) }),
   },
+  regras_link: {
+    padrao: { ativo: true, localId: '', comissaoPb: 1000, catalogoMatrizSemMaleta: true, aceitaEntrega: true, mensagemFinal: '' },
+    schema: z.object({
+      ativo: z.boolean(),
+      /** Local do estoque da matriz que abastece os pedidos das afiliadas (vazio: o primeiro depósito ativo). */
+      localId: z.union([z.literal(''), z.string().uuid()]),
+      /** Comissão da consultora/afiliada sobre pedidos atendidos pela matriz. */
+      comissaoPb: z.number().int().min(0).max(10000),
+      /** Consultora sem maleta aberta mostra as peças da matriz (em vez de catálogo vazio). */
+      catalogoMatrizSemMaleta: z.boolean(),
+      aceitaEntrega: z.boolean(),
+      mensagemFinal: z.string().max(300),
+    }),
+  },
   regras_comissao: {
     padrao: { lojaPadraoPb: 300, redeLiderPb: 0, diaPagamento: 10 },
     schema: z.object({ lojaPadraoPb: z.number().int().min(0).max(10000), redeLiderPb: z.number().int().min(0).max(10000), diaPagamento: z.number().int().min(1).max(28) }),

@@ -105,7 +105,8 @@ function EntrarPorLink() {
 function Area() {
   // Contatos esperando o aceite: aparece no menu e faz a lista se atualizar sozinha.
   const leads = useQuery({ queryKey: ['p-leads'], queryFn: () => apiPortal<LeadPortal[]>('/leads'), refetchInterval: 60_000 });
-  const esperando = leads.data?.filter((l) => l.situacao === 'aguardando').length ?? 0;
+  const pedidosNovos = useQuery({ queryKey: ['p-pedidos'], queryFn: () => apiPortal<PedidoPortal[]>('/pedidos-link'), refetchInterval: 60_000 });
+  const esperando = (leads.data?.filter((l) => l.situacao === 'aguardando').length ?? 0) + (pedidosNovos.data?.filter((p) => p.status === 'novo' && p.origem === 'maleta').length ?? 0);
   return (
     <>
       <main className="p-conteudo">
@@ -520,6 +521,54 @@ const faltam = (ate: string) => {
   return min >= 60 ? `${Math.floor(min / 60)} h ${min % 60} min` : `${min} min`;
 };
 
+interface PedidoPortal {
+  id: string; numero: number; origem: 'maleta' | 'matriz'; status: 'novo' | 'confirmado' | 'entregue' | 'cancelado'; clienteNome: string; clienteTelefone: string; clienteCidade: string | null;
+  entrega: string; endereco: string | null; observacao: string | null; itens: { produtoId: string; descricao: string; preco: number; quantidade: number }[]; total: number; criadoEm: string; motivoCancelamento: string | null;
+}
+
+const ENTREGA: Record<string, string> = { retirar: 'Vai retirar', entregar: 'Quer receber em casa', combinar: 'Combinar' };
+const SIT_PEDIDO: Record<PedidoPortal['status'], string> = { novo: 'Novo', confirmado: 'Confirmado', entregue: 'Entregue', cancelado: 'Cancelado' };
+
+/** Pedidos que as clientes fizeram pelo catálogo dela: da maleta (ela confirma e entrega) ou da matriz (só acompanha). */
+function PedidosCatalogo() {
+  const qc = useQueryClient();
+  const q = useQuery({ queryKey: ['p-pedidos'], queryFn: () => apiPortal<PedidoPortal[]>('/pedidos-link'), refetchInterval: 30_000 });
+  const acao = useMutation({
+    mutationFn: ({ id, a, corpo }: { id: string; a: 'confirmar' | 'entregue' | 'cancelar'; corpo?: unknown }) => apiPortal(`/pedidos-link/${id}/${a}`, { corpo: corpo ?? {} }),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['p-pedidos'] }); qc.invalidateQueries({ queryKey: ['p-maletas'] }); qc.invalidateQueries({ queryKey: ['p-maleta'] }); },
+  });
+  const lista = q.data ?? [];
+  if (!lista.length) return null;
+  const zap = (p: PedidoPortal) => `https://wa.me/${p.clienteTelefone.replace(/\D/g, '').replace(/^(?!55)/, '55')}?text=${encodeURIComponent(`Oi, ${p.clienteNome.split(' ')[0]}! Recebi seu pedido nº ${p.numero} pelo meu catálogo da Aritana.`)}`;
+  return (
+    <section className="p-col" style={{ gap: 10 }}>
+      <div className="p-rotulo">Pedidos pelo seu catálogo</div>
+      <Aviso erro={acao.error} />
+      {lista.map((p) => (
+        <div key={p.id} className="p-cartao p-col" style={{ opacity: p.status === 'cancelado' ? 0.6 : 1 }}>
+          <div className="p-linha" style={{ padding: 0 }}><b>Pedido nº {p.numero} · {p.clienteNome}</b><span className="p-suave">{SIT_PEDIDO[p.status]}</span></div>
+          {p.itens.map((i) => <div key={i.produtoId} className="p-linha"><span>{i.quantidade}× {i.descricao}</span><span>{reais(i.preco * i.quantidade)}</span></div>)}
+          <div className="p-linha"><b>Total</b><b>{reais(p.total)}</b></div>
+          <div className="p-suave">{[p.clienteCidade, ENTREGA[p.entrega], p.endereco].filter(Boolean).join(' · ')}</div>
+          {p.observacao && <div className="p-suave">“{p.observacao}”</div>}
+          {p.origem === 'matriz' ? (
+            <div className="p-suave">{p.status === 'entregue' ? '✓ Faturado pela Aritana: a comissão entra no fechamento do mês.' : p.status === 'cancelado' ? `Cancelado${p.motivoCancelamento ? `: ${p.motivoCancelamento}` : ''}.` : 'A Aritana separa e envia as peças. Você ganha a comissão quando for faturado.'}</div>
+          ) : (
+            <>
+              {['novo', 'confirmado'].includes(p.status) && <a className="p-botao claro" href={zap(p)} target="_blank" rel="noreferrer">Chamar {p.clienteNome.split(' ')[0]} no WhatsApp</a>}
+              {p.status === 'novo' && <button className="p-botao" disabled={acao.isPending} onClick={() => acao.mutate({ id: p.id, a: 'confirmar' })}>Confirmar pedido</button>}
+              {p.status === 'confirmado' && <button className="p-botao" disabled={acao.isPending} onClick={() => window.confirm('Entregou as peças? Elas entram como vendidas na sua maleta.') && acao.mutate({ id: p.id, a: 'entregue' })}>Entreguei</button>}
+              {['novo', 'confirmado'].includes(p.status) && <button className="p-link" onClick={() => { const m = window.prompt('Cancelar este pedido? Motivo (opcional):'); if (m !== null) acao.mutate({ id: p.id, a: 'cancelar', corpo: { motivo: m || null } }); }}>Cancelar pedido</button>}
+              {p.status === 'entregue' && <div className="p-suave">✓ Entregue: as peças estão marcadas como vendidas na maleta.</div>}
+              {p.status === 'cancelado' && <div className="p-suave">Cancelado{p.motivoCancelamento ? `: ${p.motivoCancelamento}` : ''}.</div>}
+            </>
+          )}
+        </div>
+      ))}
+    </section>
+  );
+}
+
 function AvisoLeads() {
   const q = useQuery({ queryKey: ['p-leads'], queryFn: () => apiPortal<LeadPortal[]>('/leads') });
   const n = q.data?.filter((l) => l.situacao === 'aguardando').length ?? 0;
@@ -548,7 +597,9 @@ function Leads() {
   const zap = (t: string, nome: string) => `https://wa.me/${t}?text=${encodeURIComponent(`Oi, ${nome.split(' ')[0]}! Aqui é da Aritana Semijoias, recebi seu contato.`)}`;
   return (
     <>
-      <Topo titulo="Clientes perto de você" sub="A Aritana manda para quem está mais perto. Aceite logo: depois do prazo, passa para outra pessoa." />
+      <Topo titulo="Clientes" sub="Pedidos do seu catálogo e contatos que a Aritana mandou para você." />
+      <PedidosCatalogo />
+      <div className="p-rotulo" style={{ marginTop: 6 }}>Perto de você</div>
       <Aviso erro={acao.error} />
       {!lista.length && <div className="p-cartao p-suave">Nenhum contato agora. Quando chegar alguém da sua região, você recebe um aviso no WhatsApp.</div>}
       {grupos.map(([titulo, ls]) => ls.length > 0 && (

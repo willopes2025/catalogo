@@ -1901,6 +1901,96 @@ test('metas do mês: define, recusa repetida, acompanha venda nova e mostra o ri
   assert.equal((await ok('PUT', '/metas', { competencia: '2020-01', metas: [] })).linhas.length, 0);
 });
 
+test('venda pelo link: afiliada vende do estoque da matriz com comissão; consultora vende da maleta e a peça vai para a pré-baixa', async () => {
+  const admin = token;
+  const mes = new Date(Date.now() - 3 * 3600e3).toISOString().slice(0, 7);
+  try {
+    await ok('PUT', '/configuracoes/chave/regras_link', { ativo: true, localId: ctx.deposito.id, comissaoPb: 1000, catalogoMatrizSemMaleta: true, aceitaEntrega: true, mensagemFinal: 'Obrigada! Já já falamos com você.' });
+    const prod = (await ok('GET', '/produtos')).itens.find((x) => x.preco >= 1000 && x.codigoBarras);
+    await ok('POST', '/estoque/entradas', { destinoId: ctx.deposito.id, itens: [{ codigoBarras: prod.codigoBarras, quantidade: 5 }] });
+    const af = await ok('POST', '/pessoas', { tipo: 'representante', nome: 'Afiliada Link Teste', modeloTrabalho: 'afiliado', telefone1: '27991230001', cidade: 'Serra', uf: 'ES' });
+    token = '';
+    // Afiliada: catálogo com o estoque da matriz.
+    let cat = await ok('GET', `/publico/catalogo/${af.slug}`);
+    assert.equal(cat.origem, 'matriz');
+    assert.equal(cat.pedidos.ativo, true);
+    const peca = cat.pecas.find((x) => x.id === prod.id);
+    assert.ok(peca.disponivel >= 5);
+    const antes = peca.disponivel;
+    const pedir = (slug, corpo) => chamar('POST', `/publico/catalogo/${slug}/pedido`, { nome: 'Cliente do Link', telefone: '(27) 99888-1001', cidade: 'Serra', entrega: 'combinar', consentimento: true, ...corpo });
+    assert.equal((await pedir(af.slug, { itens: [{ produtoId: prod.id, quantidade: antes + 1 }] })).status, 400, 'mais do que tem');
+    assert.equal((await pedir(af.slug, { itens: [{ produtoId: prod.id, quantidade: 1 }], consentimento: false })).status, 400, 'sem autorização de contato');
+    assert.equal((await pedir(af.slug, { itens: [{ produtoId: prod.id, quantidade: 1 }], entrega: 'entregar' })).status, 400, 'entrega sem endereço');
+    const r = await pedir(af.slug, { itens: [{ produtoId: prod.id, quantidade: 2, preco: 1 }] });
+    assert.equal(r.status, 201);
+    assert.equal(r.dados.total, prod.preco * 2, 'preço do servidor, nunca o que veio do navegador');
+    assert.equal(r.dados.origem, 'matriz');
+    assert.equal(r.dados.mensagem, 'Obrigada! Já já falamos com você.');
+    cat = await ok('GET', `/publico/catalogo/${af.slug}`);
+    assert.equal(cat.pecas.find((x) => x.id === prod.id).disponivel, antes - 2, 'o pedido segura as peças');
+    token = admin;
+    // Equipe: lista, card no CRM, fatura → venda, estoque e comissão.
+    const lista = await ok('GET', '/pedidos-link?status=abertos');
+    const ped = lista.find((x) => x.numero === r.dados.numero);
+    assert.equal(ped.consultora, 'Afiliada Link Teste');
+    assert.ok(ped.leadId, 'card no CRM');
+    assert.ok((await ok('GET', `/crm/leads/${ped.leadId}`)).etiquetas.includes('Pedido pelo link'));
+    const comAntes = await ok('GET', `/comissoes?mes=${mes}`);
+    const lojaAntes = comAntes.linhas.filter((l) => l.tipo === 'loja').reduce((a, l) => a + l.base, 0);
+    const fat = await ok('POST', `/pedidos-link/${ped.id}/faturar`, { pagamentos: [{ forma: 'pix', valor: prod.preco * 2 }] });
+    assert.equal(fat.status, 'entregue');
+    assert.ok(fat.venda.numero);
+    assert.equal((await chamar('POST', `/pedidos-link/${ped.id}/faturar`, { pagamentos: [{ forma: 'pix', valor: prod.preco * 2 }] })).status, 400, 'não fatura duas vezes');
+    const com = await ok('GET', `/comissoes?mes=${mes}`);
+    const linha = com.linhas.find((l) => l.tipo === 'link' && l.pessoaId === af.id);
+    assert.equal(linha.base, prod.preco * 2);
+    assert.equal(linha.valor, Math.round(prod.preco * 2 * 0.1));
+    assert.equal(com.linhas.filter((l) => l.tipo === 'loja').reduce((a, l) => a + l.base, 0), lojaAntes, 'venda do link não vira comissão de loja de quem faturou');
+    token = '';
+    assert.equal((await ok('GET', `/publico/catalogo/${af.slug}`)).pecas.find((x) => x.id === prod.id).disponivel, antes - 2, 'faturado: saiu do estoque');
+    // Pedido cancelado libera a reserva.
+    const r2 = await pedir(af.slug, { itens: [{ produtoId: prod.id, quantidade: 1 }] });
+    token = admin;
+    const p2 = (await ok('GET', '/pedidos-link?status=abertos')).find((x) => x.numero === r2.dados.numero);
+    await ok('POST', `/pedidos-link/${p2.id}/cancelar`, { motivo: 'Cliente desistiu' });
+    token = '';
+    assert.equal((await ok('GET', `/publico/catalogo/${af.slug}`)).pecas.find((x) => x.id === prod.id).disponivel, antes - 2);
+
+    // Consultora com maleta: o pedido sai da maleta; entregue, vai para a pré-baixa.
+    token = admin;
+    const cons = await ok('POST', '/pessoas', { tipo: 'representante', nome: 'Consultora Link Maleta', modeloTrabalho: 'consignado', telefone1: '27991230002', cidade: 'Vitória', uf: 'ES', limiteCredito: 500000 });
+    const m = await ok('POST', '/maletas', { representanteId: cons.id, origemId: ctx.deposito.id, itens: [{ codigoBarras: prod.codigoBarras, quantidade: 2 }] });
+    token = '';
+    cat = await ok('GET', `/publico/catalogo/${cons.slug}`);
+    assert.equal(cat.origem, 'maleta');
+    assert.equal(cat.pecas.find((x) => x.id === prod.id).disponivel, 2);
+    const r3 = await pedir(cons.slug, { itens: [{ produtoId: prod.id, quantidade: 1 }], entrega: 'entregar', endereco: 'Rua das Flores, 10' });
+    assert.equal(r3.dados.origem, 'maleta');
+    token = admin;
+    const link = await ok('POST', `/portal/gerar-link/${cons.id}`);
+    token = (await ok('POST', `/portal/link/${link.token}`)).token;
+    const meus = await ok('GET', '/portal/pedidos-link');
+    const meu = meus.find((x) => x.numero === r3.dados.numero);
+    assert.equal(meu.endereco, 'Rua das Flores, 10');
+    await ok('POST', `/portal/pedidos-link/${meu.id}/confirmar`);
+    await ok('POST', `/portal/pedidos-link/${meu.id}/entregue`);
+    const mal = await ok('GET', `/portal/maletas/${m.id}`);
+    assert.equal(mal.itens.find((i) => i.produtoId === prod.id).prebaixaVendida, 1, 'peça entregue entra como vendida na pré-baixa');
+    assert.equal((await chamar('POST', `/portal/pedidos-link/${meu.id}/entregue`)).status, 400, 'não entrega duas vezes');
+    // A afiliada não mexe em pedido da matriz pelo portal.
+    token = admin;
+    const linkAf = await ok('POST', `/portal/gerar-link/${af.id}`);
+    token = (await ok('POST', `/portal/link/${linkAf.token}`)).token;
+    const doAf = (await ok('GET', '/portal/pedidos-link')).find((x) => x.numero === r.dados.numero);
+    assert.equal(doAf.status, 'entregue');
+    assert.equal((await chamar('POST', `/portal/pedidos-link/${doAf.id}/cancelar`)).status, 400);
+    token = '';
+    assert.equal((await ok('GET', `/publico/catalogo/${cons.slug}`)).pecas.find((x) => x.id === prod.id).disponivel, 1, 'a vendida sai do catálogo');
+  } finally {
+    token = admin;
+  }
+});
+
 test('implantação: apagar dados de teste exige APAGAR e mantém o que é configuração', async () => {
   assert.equal((await chamar('POST', '/implantacao/apagar-dados-de-teste', { confirmacao: 'apagar' })).status, 400);
   const bloq = await chamar('POST', '/implantacao/apagar-dados-de-teste', { confirmacao: 'APAGAR', manterProdutos: true });

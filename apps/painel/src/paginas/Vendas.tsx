@@ -6,21 +6,23 @@ import { dataHora, documento, reais } from '../formato';
 import { Abas, Campo, Carregando, Erro, Topo } from '../componentes/ui';
 import { FORMAS, PontoDeVenda } from '../componentes/PontoDeVenda';
 import { BotaoNfce } from './Lojas';
+import { PedidosLink } from './PedidosLink';
 
 const TIPO: Record<string, string> = { balcao: 'Loja / evento', avulsa: 'Avulsa (matriz)', revenda: 'Revenda' };
 const nomeForma = (f: string) => FORMAS.find((x) => x[0] === f)?.[1] ?? f;
 
 export function Vendas() {
-  const [aba, setAba] = useState<'concluidas' | 'canceladas'>('concluidas');
+  const [aba, setAba] = useState<'concluidas' | 'canceladas' | 'link'>('concluidas');
   const [tipo, setTipo] = useState('');
   const [de, setDe] = useState('');
   const [ate, setAte] = useState('');
   const navegar = useNavigate();
-  const q = useQuery({ queryKey: ['vendas', aba, tipo, de, ate], queryFn: () => api<{ itens: any[]; total: number }>(`/vendas?${new URLSearchParams({ aba, ...(tipo && { tipo }), ...(de && { de }), ...(ate && { ate }) })}`) });
+  const q = useQuery({ enabled: aba !== 'link', queryKey: ['vendas', aba, tipo, de, ate], queryFn: () => api<{ itens: any[]; total: number }>(`/vendas?${new URLSearchParams({ aba, ...(tipo && { tipo }), ...(de && { de }), ...(ate && { ate }) })}`) });
   return (
     <>
       <Topo eb="Vendas" titulo="Vendas" sub={q.data && `${q.data.itens.length} vendas · ${reais(q.data.total)}`} acoes={pode('vendas', 'criar') && <><Link className="botao claro" to="/vendas/nova?tipo=revenda">Venda de revenda</Link><Link className="botao" to="/vendas/nova?tipo=avulsa">Venda avulsa</Link></>} />
-      <Abas ativa={aba} mudar={setAba} abas={[['concluidas', 'Concluídas'], ['canceladas', 'Canceladas']]} />
+      <Abas ativa={aba} mudar={setAba} abas={[['concluidas', 'Concluídas'], ['canceladas', 'Canceladas'], ['link', 'Pedidos pelo link']]} />
+      {aba === 'link' ? <PedidosLink /> : <>
       <div className="busca">
         <select value={tipo} onChange={(e) => setTipo(e.target.value)}><option value="">Todos os tipos</option>{Object.entries(TIPO).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select>
         <input type="date" value={de} onChange={(e) => setDe(e.target.value)} style={{ maxWidth: 170 }} />
@@ -32,6 +34,7 @@ export function Vendas() {
           <tbody>{q.data!.itens.map((v) => <tr key={v.id} className="clicavel" onClick={() => navegar(`/vendas/${v.id}`)}><td><b>{v.numero}</b></td><td>{dataHora(v.criadoEm)}</td><td>{TIPO[v.tipo]}</td><td>{v.local}</td><td>{v.cliente ?? '—'}</td><td>{v.vendedor ?? '—'}</td><td className="num">{v.desconto ? reais(v.desconto) : '—'}</td><td className="num">{reais(v.total)}</td></tr>)}</tbody>
         </table>
       )}
+      </>}
     </>
   );
 }

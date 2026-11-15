@@ -44,8 +44,8 @@ function Mes() {
             <tbody>
               {c.linhas.map((l: any, i: number) => (
                 <tr key={i}>
-                  <td><b>{l.nome}</b>{l.tipo === 'loja' && <div className="muted">{l.detalhes.vendas} venda(s){l.detalhes.devolvido ? ` · ${reais(l.detalhes.devolvido)} devolvido` : ''}</div>}{l.tipo === 'rede' && <div className="muted">{l.detalhes.representantes} representante(s) · {l.detalhes.acertos} acerto(s)</div>}</td>
-                  <td>{l.tipo === 'loja' ? 'Vendas' : 'Rede'}</td>
+                  <td><b>{l.nome}</b>{l.tipo === 'loja' && <div className="muted">{l.detalhes.vendas} venda(s){l.detalhes.devolvido ? ` · ${reais(l.detalhes.devolvido)} devolvido` : ''}</div>}{l.tipo === 'rede' && <div className="muted">{l.detalhes.representantes} representante(s) · {l.detalhes.acertos} acerto(s)</div>}{l.tipo === 'link' && <div className="muted">{l.detalhes.pedidos} pedido(s) pelo catálogo{l.detalhes.devolvido ? ` · ${reais(l.detalhes.devolvido)} devolvido` : ''}</div>}</td>
+                  <td>{l.tipo === 'loja' ? 'Vendas' : l.tipo === 'link' ? 'Pelo link' : 'Rede'}</td>
                   <td className="num">{reais(l.base)}</td>
                   <td className="num">{pct(l.percentualPb)}</td>
                   <td className="num"><b>{reais(l.valor)}</b></td>

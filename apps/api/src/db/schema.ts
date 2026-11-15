@@ -1660,3 +1660,37 @@ export const agendaCompromissos = pgTable(
   },
   (t) => ({ porInicio: index('agenda_inicio_idx').on(t.inicio), porResp: index('agenda_resp_idx').on(t.responsavelId, t.inicio), porPessoa: index('agenda_pessoa_idx').on(t.pessoaId), porLead: index('agenda_lead_idx').on(t.leadId) }),
 );
+
+/**
+ * Pedido feito pela cliente no catálogo (link) da consultora ou da afiliada.
+ * origem "maleta": sai da maleta dela, ela entrega e as peças ficam pré-baixadas como vendidas.
+ * origem "matriz": sai do estoque da matriz; a equipe fatura (vira venda) e a consultora ganha comissão no mês.
+ */
+export const pedidosLink = pgTable(
+  'pedidos_link',
+  {
+    id: id(),
+    numero: serial('numero').notNull(),
+    pessoaId: uuid('pessoa_id').notNull().references(() => pessoas.id),
+    origem: text('origem').notNull(), // maleta | matriz
+    clienteNome: text('cliente_nome').notNull(),
+    clienteTelefone: text('cliente_telefone').notNull(),
+    clienteCidade: text('cliente_cidade'),
+    entrega: text('entrega').notNull().default('combinar'), // retirar | entregar | combinar
+    endereco: text('endereco'),
+    observacao: text('observacao'),
+    itens: jsonb('itens').$type<{ produtoId: string; referencia: string; descricao: string; preco: number; quantidade: number }[]>().notNull(),
+    total: integer('total').notNull(),
+    /** novo | confirmado | entregue | cancelado */
+    status: text('status').notNull().default('novo'),
+    vendaId: uuid('venda_id').references(() => vendas.id, { onDelete: 'set null' }),
+    leadId: uuid('lead_id').references(() => crmLeads.id, { onDelete: 'set null' }),
+    motivoCancelamento: text('motivo_cancelamento'),
+    origemUtm: jsonb('origem_utm').$type<Record<string, string>>().notNull().default({}),
+    confirmadoEm: timestamp('confirmado_em', { withTimezone: true }),
+    entregueEm: timestamp('entregue_em', { withTimezone: true }),
+    criadoEm: criadoEm(),
+    atualizadoEm: atualizadoEm(),
+  },
+  (t) => ({ porPessoa: index('pedidos_link_pessoa_idx').on(t.pessoaId, t.status), porData: index('pedidos_link_data_idx').on(t.criadoEm) }),
+);

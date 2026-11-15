@@ -62,6 +62,7 @@ import { CanaisService } from './crm/canais.service';
 import { AutomacaoService } from './crm/automacao.service';
 import { DistribuicaoService } from './crm/distribuicao.service';
 import { AgendaService } from './agenda/agenda.service';
+import { PedidosLinkService } from './catalogo/pedidos.service';
 import { GoogleService } from './agenda/google.service';
 import { AgendaController } from './agenda/agenda.controller';
 import { DistribuicaoController } from './crm/distribuicao.controller';
@@ -125,6 +126,7 @@ if (!segredo || (process.env.NODE_ENV === 'production' && segredo.length < 32)) 
     DistribuicaoService,
     GoogleService,
     AgendaService,
+    PedidosLinkService,
     ArquivosService,
     PontosService,
     AuditoriaService,
