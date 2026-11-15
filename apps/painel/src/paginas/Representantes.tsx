@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { HistoricoRede } from './indicadores/Historico';
+import { BlocoAgenda } from './BlocoAgenda';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { api, ErroApi, pode } from '../api';
 import { centavosParaTexto, data, documento, paraCentavos, reais, telefone } from '../formato';
@@ -244,6 +245,11 @@ export function FichaRepresentante() {
             <div><div className="muted">Crédito disponível (devoluções)</div><div style={{ fontSize: 24, fontWeight: 700 }}>{reais(f.saldoCredito ?? 0)}</div></div>
             <ScoreRepresentante id={id!} />
             <p className="muted" style={{ gridColumn: 'span 3' }}>O limite sobe sozinho depois de cada acerto em dia que bate a meta mínima, até o máximo definido nas Configurações. Atraso acima do prazo de bloqueio faz o limite voltar ao inicial.</p>
+          </div>
+        )}
+        {aba === 'maletas' && pode('agenda', 'ver') && (
+          <div className="cartao" style={{ marginBottom: 14 }}>
+            <BlocoAgenda titulo="Agenda (acertos por vídeo, retiradas)" filtro={{ pessoaId: id! }} inicial={{ tipo: 'acerto_video', pessoaId: id!, pessoaNome: f.nome, maletaId: f.maletas?.find((m: any) => m.status === 'aberta')?.id ?? null }} />
           </div>
         )}
         {aba === 'maletas' && pode('relatorios', 'ver') && <div style={{ marginBottom: 14 }}><HistoricoRede pessoaId={id!} /></div>}

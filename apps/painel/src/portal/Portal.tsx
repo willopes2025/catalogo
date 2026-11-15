@@ -180,6 +180,7 @@ function Inicio() {
         );
       })}
       <AvisoLeads />
+      <Compromissos />
       {!e.maletas.length && <div className="p-cartao p-suave">Você não tem maleta aberta agora. Peça peças em "Pedir peças".</div>}
       <div className="p-grade2">
         <div className="p-cartao"><div className="p-rotulo">Crédito livre</div><div className="p-grande">{reais(e.credito.livre)}</div><div className="p-suave">de {reais(e.credito.limite)}</div></div>
@@ -591,5 +592,40 @@ function Leads() {
         </section>
       ))}
     </>
+  );
+}
+
+// ───── Compromissos marcados pela Aritana (acerto por vídeo, retirada, reunião) ─────
+
+function Compromissos() {
+  const qc = useQueryClient();
+  const q = useQuery({ queryKey: ['p-agenda'], queryFn: () => apiPortal<{ id: string; titulo: string; inicio: string; fim: string; online: boolean; local: string | null; link: string | null; status: string }[]>('/agenda'), refetchInterval: 120_000 });
+  const confirmar = useMutation({ mutationFn: (id: string) => apiPortal(`/agenda/${id}/confirmar`, { corpo: {} }), onSuccess: () => qc.invalidateQueries({ queryKey: ['p-agenda'] }) });
+  const proximos = (q.data ?? []).filter((c) => new Date(c.fim).getTime() > Date.now() && ['marcado', 'confirmado'].includes(c.status)).slice(0, 3);
+  if (!proximos.length) return null;
+  const quando = (d: string) => {
+    const t = new Date(d).toLocaleString('pt-BR', { weekday: 'long', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' });
+    return t.charAt(0).toUpperCase() + t.slice(1);
+  };
+  return (
+    <div className="p-cartao p-col">
+      <div className="p-rotulo">Seus compromissos</div>
+      {proximos.map((c) => {
+        const comeca = new Date(c.inicio).getTime() - Date.now();
+        return (
+          <div key={c.id} className="p-col" style={{ gap: 6, paddingTop: 4 }}>
+            <b>{c.titulo}</b>
+            <span className="p-suave">{quando(c.inicio)}{c.online ? ' · por vídeo' : c.local ? ` · ${c.local}` : ''}</span>
+            {c.online && c.link && comeca < 30 * 60_000 && <a className="p-botao" href={c.link} target="_blank" rel="noreferrer">Entrar na chamada</a>}
+            {c.status === 'marcado' ? (
+              <button className="p-botao claro" disabled={confirmar.isPending} onClick={() => confirmar.mutate(c.id)}>Confirmar presença</button>
+            ) : (
+              <span className="p-suave" style={{ color: 'var(--ok)' }}>✓ Presença confirmada{c.online && c.link && comeca >= 30 * 60_000 ? ' · o botão da chamada aparece meia hora antes' : ''}</span>
+            )}
+          </div>
+        );
+      })}
+      <Aviso erro={confirmar.error} />
+    </div>
   );
 }

@@ -61,6 +61,9 @@ import { CrmService } from './crm/crm.service';
 import { CanaisService } from './crm/canais.service';
 import { AutomacaoService } from './crm/automacao.service';
 import { DistribuicaoService } from './crm/distribuicao.service';
+import { AgendaService } from './agenda/agenda.service';
+import { GoogleService } from './agenda/google.service';
+import { AgendaController } from './agenda/agenda.controller';
 import { DistribuicaoController } from './crm/distribuicao.controller';
 import { ArquivosController } from './arquivos/arquivos.controller';
 import { ArquivosService } from './arquivos/arquivos.service';
@@ -98,7 +101,7 @@ if (!segredo || (process.env.NODE_ENV === 'production' && segredo.length < 32)) 
     VendasController,
     WebhooksController,
     FiscalController,
-    RelatoriosController, IndicadoresController, MetasController, DistribuicaoController, RhController, PontoController,
+    RelatoriosController, IndicadoresController, MetasController, DistribuicaoController, AgendaController, RhController, PontoController,
     SuporteController,
     ImportacaoController,
     GarantiaController,
@@ -120,6 +123,8 @@ if (!segredo || (process.env.NODE_ENV === 'production' && segredo.length < 32)) 
     CanaisService,
     AutomacaoService,
     DistribuicaoService,
+    GoogleService,
+    AgendaService,
     ArquivosService,
     PontosService,
     AuditoriaService,

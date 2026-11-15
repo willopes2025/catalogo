@@ -150,6 +150,22 @@ const SECOES: Secao[] = [
     ],
   },
   {
+    id: 'agenda',
+    titulo: 'Agenda e Google Meet',
+    passos: [
+      { t: 'Marcar', d: 'Agenda › Novo compromisso, ou "Agendar" no card do CRM e na ficha da revendedora. Escolha o tipo (entrevista, acerto por vídeo, retirada de maleta, reunião), o dia, a hora, com quem e o responsável.' },
+      { t: 'Horário ocupado', d: 'Se o responsável já tem algo no mesmo horário, o sistema avisa. Dá para escolher outro horário ou marcar mesmo assim.' },
+      { t: 'Online com Meet', d: 'Com a conta Google conectada, compromisso online vai para o Google Agenda da Aritana e ganha link do Meet sozinho. Sem o Google, cole qualquer link de chamada.' },
+      { t: 'Lembretes', d: 'Quem vem recebe pelo WhatsApp a confirmação na hora, um lembrete na véspera e outro uma hora antes. Remarcar ou cancelar também avisa.' },
+      { t: 'Depois', d: 'Abra o compromisso e marque "Realizado" ou "Não compareceu". Tudo fica no histórico do card do CRM.' },
+    ],
+    dicas: [
+      'Conectar o Google (uma vez): em Configurações › Integrações › Google, cole o Client ID e o Client secret criados no Google Cloud da Aritana; depois, na tela Agenda, clique em "Conectar conta Google" e autorize.',
+      'A revendedora vê os compromissos dela no portal, confirma a presença e entra na chamada pelo botão que aparece meia hora antes.',
+      'O sistema nunca vê a senha do Google: a autorização pode ser removida a qualquer momento em myaccount.google.com › Segurança.',
+    ],
+  },
+  {
     id: 'distribuicao',
     titulo: 'Leads para a consultora mais perto',
     passos: [

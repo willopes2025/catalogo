@@ -15,6 +15,7 @@ import { AsaasService } from '../integracoes/asaas.service';
 import { MaletasService, hoje } from '../maletas/maletas.service';
 import { PontosService } from '../pontos/pontos.service';
 import { DistribuicaoService } from '../crm/distribuicao.service';
+import { AgendaService } from '../agenda/agenda.service';
 import { acertos, categorias, crmContatos, crmFunis, crmLeads, documentos, locaisEstoque, maletas, niveis, pedidosPecas, pessoas, portalAcessos, premios, produtos, resgates, saldos, titulos } from '../db/schema';
 
 const sha256 = (t: string) => createHash('sha256').update(t).digest('hex');
@@ -38,6 +39,7 @@ export class PortalController {
     private readonly auditoria: AuditoriaService,
     private readonly pontosSvc: PontosService,
     private readonly distribuicao: DistribuicaoService,
+    private readonly agenda: AgendaService,
   ) {}
 
   private sessao(p: { id: string; nome: string }) {
@@ -119,6 +121,26 @@ export class PortalController {
     await this.db.insert(portalAcessos).values({ pessoaId, tipo: 'link', hash: sha256(token), expiraEm: new Date(Date.now() + 7 * 86_400_000), criadoPor: u.id });
     await this.auditoria.registrar({ usuarioId: u.id, acao: 'gerar_link_portal', entidade: 'pessoa', entidadeId: pessoaId });
     return { token, caminho: `/portal/entrar/${token}`, telefone: p.telefone1, nome: p.nome };
+  }
+
+  // ───── Compromissos da representante (acerto por vídeo, retirada, reunião) ─────
+
+  @RotaPortal()
+  @Get('agenda')
+  async meusCompromissos(@Representante() r: RepresentanteLogada) {
+    const lista = await this.agenda.listar({ pessoaId: r.rep, de: new Date(Date.now() - 2 * 86_400_000), ate: new Date(Date.now() + 60 * 86_400_000) });
+    // O título leva o nome dela ("Acerto por vídeo · Ana"); no portal dela, só o que é.
+    return lista.filter((c) => c.status !== 'cancelado').map((c) => ({ id: c.id, titulo: c.quem && c.titulo.endsWith(` · ${c.quem}`) ? c.titulo.slice(0, -(` · ${c.quem}`.length)) : c.titulo, tipo: c.tipo, inicio: c.inicio, fim: c.fim, online: c.online, local: c.local, link: c.link, status: c.status, confirmadoEm: c.confirmadoEm }));
+  }
+
+  @RotaPortal()
+  @Post('agenda/:id/confirmar')
+  async confirmarCompromisso(@Representante() r: RepresentanteLogada, @Param('id', ParseUUIDPipe) id: string) {
+    const c = await this.agenda.obter(id);
+    if (c.pessoaId !== r.rep) throw new NotFoundException('Compromisso não encontrado.');
+    if (c.status !== 'marcado') return { ok: true };
+    await this.agenda.situacao(id, 'confirmado', null);
+    return { ok: true };
   }
 
   // ───── Clientes e candidatas que a matriz mandou (distribuição por localização) ─────

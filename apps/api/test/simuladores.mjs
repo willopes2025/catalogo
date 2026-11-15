@@ -9,6 +9,9 @@ const recebidos = [];
 const wa = { n: 0, zapiConectado: true, webhookZapi: null };
 /** Evolution API (servidor próprio de WhatsApp por QR code): instâncias por nome. */
 const evo = new Map();
+// Google: eventos criados na agenda simulada
+const googleEventos = new Map();
+let googleSeq = 0;
 
 /** Dados fictícios do Jueri (CPFs gerados, válidos só no dígito). */
 const jueri = {
@@ -112,6 +115,40 @@ http
       return responder(res, 200, { ok: !!i });
     }
     if (url.pathname === '/__evo/apagar') { evo.delete(url.searchParams.get('i')); return responder(res, 200, { ok: true }); }
+    // ───── Google (OAuth + Agenda + Meet) ─────
+    if (url.pathname === '/google/token' && req.method === 'POST') {
+      const f = new URLSearchParams(txt);
+      if (f.get('client_secret') !== 'segredo-google-teste-123') return responder(res, 401, { error: 'invalid_client' });
+      if (f.get('grant_type') === 'authorization_code') {
+        if (f.get('code') !== 'codigo-bom') return responder(res, 400, { error: 'invalid_grant', error_description: 'Bad code' });
+        const idToken = `x.${Buffer.from(JSON.stringify({ email: 'agenda@aritana.com.br' })).toString('base64url')}.y`;
+        return responder(res, 200, { access_token: 'acesso-1', refresh_token: 'refresh-google-1', expires_in: 3600, id_token: idToken });
+      }
+      if (f.get('grant_type') === 'refresh_token') return f.get('refresh_token') === 'refresh-google-1' ? responder(res, 200, { access_token: 'acesso-2', expires_in: 3600 }) : responder(res, 400, { error: 'invalid_grant' });
+      return responder(res, 400, { error: 'unsupported_grant_type' });
+    }
+    if (url.pathname === '/google/revoke') return responder(res, 200, {});
+    const gev = url.pathname.match(/^\/google\/calendar\/v3\/calendars\/([^/]+)\/events(?:\/([^/]+))?$/);
+    if (gev) {
+      if (!/^Bearer acesso-/.test(req.headers.authorization ?? '')) return responder(res, 401, { error: { message: 'Invalid Credentials' } });
+      if (req.method === 'POST') {
+        const id = `ev${++googleSeq}`;
+        const comMeet = !!corpo?.conferenceData?.createRequest && url.searchParams.get('conferenceDataVersion') === '1';
+        const ev = { id, ...corpo, agenda: decodeURIComponent(gev[1]), hangoutLink: comMeet ? `https://meet.google.com/abc-defg-${String(googleSeq).padStart(3, '0')}` : undefined };
+        googleEventos.set(id, ev);
+        return responder(res, 200, ev);
+      }
+      const ev = googleEventos.get(gev[2]);
+      if (!ev) return responder(res, 404, { error: { message: 'Not Found' } });
+      if (req.method === 'PATCH') {
+        Object.assign(ev, corpo);
+        if (corpo?.conferenceData?.createRequest && !ev.hangoutLink) ev.hangoutLink = `https://meet.google.com/abc-defg-${ev.id}`;
+        return responder(res, 200, ev);
+      }
+      if (req.method === 'DELETE') { googleEventos.delete(gev[2]); res.writeHead(204); return res.end(); }
+    }
+    if (url.pathname === '/google/__eventos') return responder(res, 200, [...googleEventos.values()]);
+
     if (url.pathname.startsWith('/evo/')) {
       if (req.headers.apikey !== 'chave-evo-teste') return responder(res, 401, { status: 401, error: 'Unauthorized', response: { message: 'Unauthorized' } });
       const partes = url.pathname.slice(5).split('/').map(decodeURIComponent);

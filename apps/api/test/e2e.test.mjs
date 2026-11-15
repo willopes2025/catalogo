@@ -1604,6 +1604,104 @@ test('conciliação de cartão: marca vários, informa o depósito, baixa tudo e
   assert.equal((await chamar('POST', '/financeiro/cartao/conciliar', { ids, valorRecebido: bruto, recebidoEm: c.hoje, contaId: conta.id })).status, 400, 'não concilia duas vezes');
 });
 
+test('agenda: marca, avisa conflito, gera Meet pelo Google, lembra no WhatsApp e a representante confirma no portal', async () => {
+  const pg = createRequire(import.meta.url)('pg');
+  const banco = new pg.Client({ connectionString: process.env.DATABASE_URL ?? 'postgres://aritana:aritana@localhost:5432/aritana_teste' });
+  await banco.connect();
+  const admin = token;
+  try {
+    const rep = (await ok('GET', '/pessoas?tipo=representante')).itens.find((p) => p.telefone1 && p.status === 'ativo');
+    const daqui = (min) => new Date(Date.now() + min * 60_000).toISOString();
+    const textos = async () => (await recebidos()).map((r) => JSON.stringify(r.corpo ?? ''));
+
+    // Sem Google: marca, mas avisa que falta o link.
+    let t = await ok('GET', '/agenda/tipos');
+    assert.equal(t.google.conectado, false);
+    assert.match(t.google.retorno, /\/api\/agenda\/google\/retorno$/);
+    const a = await ok('POST', '/agenda', { tipo: 'acerto_video', inicio: daqui(48 * 60), duracaoMin: 45, online: true, pessoaId: rep.id, avisar: true });
+    assert.match(a.titulo, /Acerto por vídeo/);
+    assert.ok(a.avisos.some((x) => /conecte a conta Google/.test(x)));
+    assert.equal(a.link, null);
+    assert.ok((await textos()).some((x) => x.includes('Marcamos') && x.includes('Acerto por v')), 'aviso de marcado foi pelo WhatsApp');
+    // Mesmo responsável, mesmo horário: avisa; com "marcar mesmo assim", marca.
+    const bate = await chamar('POST', '/agenda', { tipo: 'reuniao', titulo: 'Reunião de equipe', inicio: daqui(48 * 60 + 15), duracaoMin: 30, online: false, local: 'Matriz', avisar: false });
+    assert.equal(bate.status, 409);
+    assert.match(bate.dados.mensagem, /Bate com/);
+    await ok('POST', '/agenda', { tipo: 'reuniao', titulo: 'Reunião de equipe', inicio: daqui(48 * 60 + 15), duracaoMin: 30, online: false, local: 'Matriz', avisar: false, forcar: true });
+    assert.equal((await chamar('POST', '/agenda', { tipo: 'outro', inicio: daqui(60), duracaoMin: 30, online: true, link: 'javascript:alert(1)', avisar: false })).status, 400, 'link só https');
+
+    // Conecta o Google pelo OAuth (o navegador volta do Google com code e state).
+    await ok('PUT', '/integracoes/google', { valores: { GOOGLE_CLIENT_ID: 'cliente.apps.googleusercontent.com', GOOGLE_CLIENT_SECRET: 'segredo-google-teste-123' } });
+    const { url } = await ok('GET', '/agenda/google/conectar');
+    const u = new URL(url);
+    assert.equal(u.searchParams.get('client_id'), 'cliente.apps.googleusercontent.com');
+    assert.match(u.searchParams.get('scope'), /calendar\.events/);
+    assert.equal(u.searchParams.get('access_type'), 'offline');
+    const ruim = await fetch(`${API}/agenda/google/retorno?code=codigo-bom&state=inventado`, { redirect: 'manual' });
+    assert.match(ruim.headers.get('location'), /google=erro$/, 'state que o sistema não gerou é recusado');
+    const volta = await fetch(`${API}/agenda/google/retorno?code=codigo-bom&state=${u.searchParams.get('state')}`, { redirect: 'manual' });
+    assert.equal(volta.status, 302);
+    assert.match(volta.headers.get('location'), /\/agenda\?google=ok$/);
+    assert.equal((await fetch(`${API}/agenda/google/retorno?code=codigo-bom&state=${u.searchParams.get('state')}`, { redirect: 'manual' })).headers.get('location').endsWith('google=erro'), true, 'o mesmo state não serve duas vezes');
+    t = await ok('GET', '/agenda/tipos');
+    assert.equal(t.google.conectado, true);
+    assert.equal(t.google.conta, 'agenda@aritana.com.br');
+    assert.ok(!JSON.stringify(await ok('GET', '/integracoes/status')).includes('refresh-google-1'), 'o token do Google nunca volta para a tela');
+
+    // Online com Google: evento na agenda com Meet.
+    const r = await ok('POST', '/agenda', { tipo: 'reuniao', titulo: 'Treinamento de vendas', inicio: daqui(72 * 60), duracaoMin: 60, online: true, pessoaId: rep.id, avisar: false });
+    assert.match(r.link, /^https:\/\/meet\.google\.com\//);
+    assert.ok(r.googleEventoId);
+    let evs = await (await fetch('http://localhost:3199/google/__eventos')).json();
+    const ev = evs.find((e) => e.id === r.googleEventoId);
+    assert.equal(ev.summary, 'Treinamento de vendas');
+    assert.equal(ev.start.timeZone, 'America/Sao_Paulo');
+    // Remarcar atualiza o Google e mantém o mesmo Meet.
+    const novoInicio = daqui(73 * 60);
+    const r2 = await ok('PATCH', `/agenda/${r.id}`, { inicio: novoInicio });
+    assert.equal(r2.link, r.link);
+    evs = await (await fetch('http://localhost:3199/google/__eventos')).json();
+    assert.equal(new Date(evs.find((e) => e.id === r.googleEventoId).start.dateTime).toISOString(), novoInicio);
+    // O que já passou não pode ser marcado como feito antes da hora; cancelar apaga do Google.
+    assert.equal((await chamar('POST', `/agenda/${r.id}/situacao`, { status: 'realizado' })).status, 400);
+    await ok('POST', `/agenda/${r.id}/situacao`, { status: 'cancelado', motivo: 'Mudou a data do treinamento' });
+    evs = await (await fetch('http://localhost:3199/google/__eventos')).json();
+    assert.ok(!evs.some((e) => e.id === r.googleEventoId), 'evento apagado do Google');
+    assert.ok(!(await ok('GET', `/agenda?de=${daqui(0)}&ate=${daqui(5 * 24 * 60)}`)).some((c) => c.id === r.id), 'cancelado sai da agenda');
+
+    // Lembretes: véspera (para o que foi marcado com antecedência) e uma hora antes; cada um sai uma vez.
+    const v = await ok('POST', '/agenda', { tipo: 'retirada', inicio: daqui(20 * 60), duracaoMin: 30, online: false, local: 'Matriz, Vila Velha', pessoaId: rep.id, avisar: true, forcar: true });
+    await banco.query(`update agenda_compromissos set criado_em = now() - interval '3 days' where id = $1`, [v.id]);
+    const h = await ok('POST', '/agenda', { tipo: 'entrevista', inicio: daqui(40), duracaoMin: 30, online: true, convidadoNome: 'Candidata Agenda', convidadoTelefone: '27991239999', avisar: true, forcar: true });
+    assert.match(h.link, /meet\.google\.com/);
+    const l1 = await ok('POST', '/agenda/lembretes');
+    assert.ok(l1.enviados >= 2);
+    assert.equal((await ok('POST', '/agenda/lembretes')).enviados, 0, 'não repete');
+    const tx = await textos();
+    assert.ok(tx.some((x) => x.includes('Lembrete') && x.includes('Matriz, Vila Velha')));
+    assert.ok(tx.some((x) => x.includes('Daqui a pouco') && x.includes('meet.google.com')));
+
+    // Portal: a representante vê e confirma.
+    token = admin;
+    const link = await ok('POST', `/portal/gerar-link/${rep.id}`);
+    token = (await ok('POST', `/portal/link/${link.token}`)).token;
+    const meus = await ok('GET', '/portal/agenda');
+    assert.ok(meus.some((c) => c.id === v.id));
+    assert.ok(!meus.some((c) => c.id === r.id), 'cancelado não aparece');
+    await ok('POST', `/portal/agenda/${v.id}/confirmar`);
+    assert.equal((await ok('GET', '/portal/agenda')).find((c) => c.id === v.id).status, 'confirmado');
+    assert.equal((await chamar('POST', `/portal/agenda/${h.id}/confirmar`)).status, 404, 'só confirma o que é dela');
+    token = admin;
+
+    // Desconectar: volta a marcar sem Google.
+    await ok('POST', '/agenda/google/desconectar');
+    assert.equal((await ok('GET', '/agenda/tipos')).google.conectado, false);
+  } finally {
+    token = admin;
+    await banco.end();
+  }
+});
+
 test('números de WhatsApp: excluir apaga o que nunca foi usado e arquiva o que tem conversas', async () => {
   const pg = createRequire(import.meta.url)('pg');
   const banco = new pg.Client({ connectionString: process.env.DATABASE_URL ?? 'postgres://aritana:aritana@localhost:5432/aritana_teste' });

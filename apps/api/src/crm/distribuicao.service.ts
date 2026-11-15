@@ -3,6 +3,7 @@ import { and, asc, eq, lt, sql } from 'drizzle-orm';
 import { DB, type Db } from '../comum/db.module';
 import { candidaturas, crmCanais, crmContatos, crmDistribuicoes, crmEtapas, crmFunis, crmLeads, pessoas } from '../db/schema';
 import { distanciaKm, localizar, type Ponto } from '../geo/geo';
+import { urlPublica } from '../comum/url';
 import { CanaisService } from './canais.service';
 import { CrmService } from './crm.service';
 
@@ -136,7 +137,7 @@ export class DistribuicaoService implements OnModuleInit, OnModuleDestroy {
     if (!canalId) throw new Error('nenhum número de WhatsApp ativo no CRM');
     const [funil] = await this.db.select({ tipo: crmFunis.tipo }).from(crmFunis).where(eq(crmFunis.id, l.funilId));
     const oque = funil?.tipo === 'recrutamento' ? 'uma candidata a revendedora' : 'uma cliente';
-    const base = (process.env.PAINEL_URL ?? '').replace(/\/$/, '');
+    const base = urlPublica();
     const texto = [
       `Oi, ${p.nome.split(' ')[0]}! Tem ${oque} ${ponto ? `de ${ponto.cidade}` : ''} esperando atendimento, perto de você.`.replace(/\s+/g, ' '),
       `Você tem ${cfg.prazoMinutos} minutos para aceitar no portal; depois passa para outra pessoa.`,

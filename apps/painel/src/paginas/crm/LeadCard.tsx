@@ -1,4 +1,5 @@
 import { BlocoDistribuicao } from './Distribuicao';
+import { BlocoAgenda } from '../BlocoAgenda';
 import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate, useParams } from 'react-router-dom';
@@ -191,6 +192,8 @@ export function LeadCard() {
           )}
 
           <BlocoDistribuicao lead={l} />
+
+          <BlocoAgenda filtro={{ leadId: l.id }} inicial={{ leadId: l.id, pessoaNome: l.contato?.nome ?? l.titulo, tipo: funis.data?.find((f) => f.id === l.funilId)?.tipo === 'recrutamento' ? 'entrevista' : 'reuniao' }} />
 
           {l.candidatura && (
             <div className="bloco">

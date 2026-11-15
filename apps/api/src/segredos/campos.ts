@@ -67,6 +67,17 @@ export const INTEGRACOES: Integracao[] = [
     ],
   },
   {
+    chave: 'google',
+    nome: 'Google Agenda e Meet',
+    descricao: 'Compromissos online da Agenda vão para o Google da Aritana com link do Meet. Depois de salvar, clique em "Conectar conta Google" na tela Agenda.',
+    ondeConseguir: 'No Google Cloud Console da Aritana: crie um projeto, ative a "Google Calendar API", configure a tela de consentimento e crie uma credencial "ID do cliente OAuth" do tipo Aplicativo da Web. Em "URIs de redirecionamento autorizados", cole o endereço mostrado na tela Agenda (termina em /api/agenda/google/retorno).',
+    campos: [
+      { nome: 'GOOGLE_CLIENT_ID', rotulo: 'Client ID', ajuda: 'Termina em .apps.googleusercontent.com' },
+      { nome: 'GOOGLE_CLIENT_SECRET', rotulo: 'Client secret', secreto: true },
+      { nome: 'GOOGLE_AGENDA_ID', rotulo: 'Agenda (opcional)', ajuda: 'Vazio = agenda principal da conta conectada. Para outra, cole o ID dela (Configurações da agenda › Integrar agenda).' },
+    ],
+  },
+  {
     chave: 'assertiva',
     nome: 'Assertiva (consulta de CPF)',
     descricao: 'Preenche o cadastro da representante pelo CPF.',

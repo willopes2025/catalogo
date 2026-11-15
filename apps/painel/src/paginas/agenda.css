@@ -1,0 +1,33 @@
+/* Agenda: semana em colunas no computador, lista de dias no celular */
+.ag-barra { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 12px 0; }
+.ag-rotulo { margin: 0 6px; }
+.ag-filtro { margin-left: auto; width: auto; min-width: 200px; padding: 7px; border-radius: 8px; border: 1px solid var(--linha); font: inherit; background: var(--papel); }
+.ag-semana { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 8px; }
+.ag-dia { background: var(--papel); border: 1px solid var(--linha); border-radius: 10px; padding: 8px; min-height: 160px; display: flex; flex-direction: column; gap: 6px; }
+.ag-dia.hoje { border-color: var(--dourado); box-shadow: 0 0 0 1px var(--dourado) inset; }
+.ag-dia.passado { opacity: .72; }
+.ag-dia-topo { display: flex; align-items: baseline; gap: 6px; text-transform: capitalize; font-size: 13px; color: var(--suave, #7a7166); }
+.ag-dia-topo b { font-size: 18px; color: var(--tinta); }
+.ag-mais { margin-left: auto; border: 1px solid var(--linha); background: transparent; border-radius: 6px; width: 24px; height: 24px; cursor: pointer; font: inherit; color: var(--dourado); }
+.ag-item { text-align: left; border: 1px solid var(--linha); border-left: 4px solid #7a7166; background: #fff; border-radius: 8px; padding: 6px 8px; cursor: pointer; font: inherit; display: flex; flex-direction: column; gap: 1px; }
+.ag-item:hover { border-color: var(--dourado); }
+.ag-item.s-realizado, .ag-item.s-faltou { opacity: .6; }
+.ag-item.s-faltou .ag-titulo { text-decoration: line-through; }
+.ag-hora { font-size: 12px; font-weight: 700; color: var(--tinta); }
+.ag-titulo { font-size: 13px; line-height: 1.25; overflow-wrap: anywhere; }
+.ag-quem { font-size: 11px; color: var(--suave, #7a7166); }
+.ag-ok { font-size: 11px; color: var(--ok); font-weight: 600; }
+.ag-vazio { color: var(--linha); text-align: center; margin-top: 8px; }
+.ag-google { display: flex; gap: 12px; align-items: center; justify-content: space-between; flex-wrap: wrap; padding: 10px 14px; border-radius: 10px; border: 1px dashed var(--linha); margin-bottom: 12px; font-size: 14px; }
+.ag-google.ok { border-style: solid; background: var(--ok-fundo, #eef6f1); }
+.ag-google code { font-size: 12px; overflow-wrap: anywhere; }
+.ag-form { margin-bottom: 14px; }
+.ag-opcao { display: block; width: 100%; text-align: left; padding: 6px 8px; margin-top: 4px; border: 1px solid var(--linha); border-radius: 8px; background: var(--papel); font: inherit; cursor: pointer; }
+.ag-fundo { position: fixed; inset: 0; background: rgba(30, 22, 14, .35); display: flex; align-items: center; justify-content: center; z-index: 50; padding: 16px; }
+.ag-painel { width: min(480px, 100%); max-height: 90vh; overflow: auto; }
+@media (max-width: 900px) {
+  .ag-semana { grid-template-columns: 1fr; }
+  .ag-dia { min-height: 0; }
+  .ag-dia.passado:not(:has(.ag-item)) { display: none; }
+  .ag-filtro { margin-left: 0; width: 100%; }
+}

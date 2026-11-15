@@ -1621,3 +1621,42 @@ export const crmDistribuicoes = pgTable('crm_distribuicoes', {
   canalId: uuid('canal_id').references(() => crmCanais.id, { onDelete: 'set null' }),
   atualizadoEm: atualizadoEm(),
 });
+
+/**
+ * Agenda: entrevistas de candidatas, acertos por vídeo, retiradas de maleta e reuniões.
+ * Online com o Google conectado: o evento vai para a agenda do Google da Aritana com link do Meet.
+ */
+export const agendaCompromissos = pgTable(
+  'agenda_compromissos',
+  {
+    id: id(),
+    /** entrevista | acerto_video | retirada | reuniao | outro */
+    tipo: text('tipo').notNull(),
+    titulo: text('titulo').notNull(),
+    inicio: timestamp('inicio', { withTimezone: true }).notNull(),
+    fim: timestamp('fim', { withTimezone: true }).notNull(),
+    online: boolean('online').notNull().default(false),
+    local: text('local'),
+    /** Link do Meet (gerado pelo Google) ou colado à mão (Zoom, Meet de outra conta). */
+    link: text('link'),
+    googleEventoId: text('google_evento_id'),
+    responsavelId: uuid('responsavel_id').references(() => usuarios.id, { onDelete: 'set null' }),
+    pessoaId: uuid('pessoa_id').references(() => pessoas.id, { onDelete: 'set null' }),
+    leadId: uuid('lead_id').references(() => crmLeads.id, { onDelete: 'set null' }),
+    maletaId: uuid('maleta_id').references(() => maletas.id, { onDelete: 'set null' }),
+    /** Para quem vai o lembrete quando não há pessoa cadastrada (candidata, cliente do CRM). */
+    convidadoNome: text('convidado_nome'),
+    convidadoTelefone: text('convidado_telefone'),
+    observacao: text('observacao'),
+    /** marcado | confirmado | realizado | faltou | cancelado */
+    status: text('status').notNull().default('marcado'),
+    avisar: boolean('avisar').notNull().default(true),
+    lembreteDiaEm: timestamp('lembrete_dia_em', { withTimezone: true }),
+    lembreteHoraEm: timestamp('lembrete_hora_em', { withTimezone: true }),
+    confirmadoEm: timestamp('confirmado_em', { withTimezone: true }),
+    criadoPor: uuid('criado_por').references(() => usuarios.id),
+    criadoEm: criadoEm(),
+    atualizadoEm: atualizadoEm(),
+  },
+  (t) => ({ porInicio: index('agenda_inicio_idx').on(t.inicio), porResp: index('agenda_resp_idx').on(t.responsavelId, t.inicio), porPessoa: index('agenda_pessoa_idx').on(t.pessoaId), porLead: index('agenda_lead_idx').on(t.leadId) }),
+);

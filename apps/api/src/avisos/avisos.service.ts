@@ -1,4 +1,5 @@
 import { Inject, Injectable, Logger, type OnModuleDestroy, type OnModuleInit } from '@nestjs/common';
+import { urlPublica } from '../comum/url';
 import { eq, sql } from 'drizzle-orm';
 import { formatarReais, somarDias } from '@aritana/regras';
 import { DB, type Db } from '../comum/db.module';
@@ -125,7 +126,7 @@ export class AvisosService implements OnModuleInit, OnModuleDestroy {
         `Avisos enviados hoje às representantes e clientes: ${avisos.length}`,
       ];
       for (const para of cfg.emailsEquipe) {
-        avisos.push({ chave: `resumo:${dia}:${para}`, para, assunto: `Resumo do dia ${br(dia)} · Aritana`, texto: `Bom dia!\n\n${linhas.join('\n')}\n\nDetalhes no painel: ${process.env.PAINEL_URL ?? 'https://aritana.wideic.com'}` });
+        avisos.push({ chave: `resumo:${dia}:${para}`, para, assunto: `Resumo do dia ${br(dia)} · Aritana`, texto: `Bom dia!\n\n${linhas.join('\n')}\n\nDetalhes no painel: ${urlPublica()}` });
       }
     }
     return avisos;

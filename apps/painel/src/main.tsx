@@ -12,6 +12,7 @@ import { Entrar } from './paginas/Entrar';
 import { Inicio } from './paginas/Inicio';
 import { MeuPonto, Comprovante } from './paginas/rh/MeuPonto';
 import { Rh } from './paginas/rh/Rh';
+import { Agenda } from './paginas/Agenda';
 import { FichaFuncionario } from './paginas/rh/FichaFuncionario';
 import { Representantes, FichaRepresentante } from './paginas/Representantes';
 import { Produtos, FichaProduto } from './paginas/Produtos';
@@ -81,6 +82,7 @@ ReactDOM.createRoot(document.getElementById('raiz')!).render(
           >
             <Route index element={pode('inicio', 'ver') ? <Inicio /> : <Navigate to="/meu-ponto" replace />} />
             <Route path="meu-ponto" element={<MeuPonto />} />
+            <Route path="agenda" element={<Agenda />} />
             <Route path="rh" element={<Rh />} />
             <Route path="rh/funcionario/:id" element={<FichaFuncionario />} />
             <Route path="rede" element={<Representantes />} />
