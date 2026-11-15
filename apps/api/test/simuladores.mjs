@@ -73,6 +73,11 @@ http
     if (url.pathname === '/jueri-img/falsa.jpg') { res.writeHead(200, { 'content-type': 'image/jpeg' }); return res.end('<html>não é foto</html>'); }
 
     // ── Jueri (API v1, cliente 11566) ──
+    if (url.pathname === '/__jueri/lento') {
+      jueri.atraso = Number(url.searchParams.get('ms') ?? 0);
+      return responder(res, 200, { ok: true });
+    }
+    if (req.method === 'GET' && url.pathname.startsWith('/jueri/') && jueri.atraso) await new Promise((r) => setTimeout(r, jueri.atraso));
     if (req.method === 'GET' && url.pathname.startsWith('/jueri/')) {
       if (req.headers.authorization !== 'Bearer token-jueri-teste') return responder(res, 401, { message: 'Unauthenticated.' });
       const rota = url.pathname.replace(/^\/jueri\/api\/v1\/11566\//, '');

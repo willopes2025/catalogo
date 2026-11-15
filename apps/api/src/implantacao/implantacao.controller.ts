@@ -5,7 +5,8 @@ import { DB, type Db } from '../comum/db.module';
 import { Permissao, Usuario, temPermissao, type UsuarioLogado } from '../comum/auth';
 import { validar } from '../comum/validacao';
 import { AuditoriaService } from '../comum/auditoria.service';
-import { configuracoes } from '../db/schema';
+import { configuracoes, grupos } from '../db/schema';
+import { MODULOS } from '@aritana/regras';
 import { ConfiguracoesService } from '../configuracoes/configuracoes.service';
 import { EmailService } from '../integracoes/email.service';
 import { AsaasService } from '../integracoes/asaas.service';
@@ -35,10 +36,12 @@ const MANUAIS: Record<string, { grupo: string; titulo: string; descricao: string
   cfop_contador: { grupo: 'Notas fiscais', titulo: 'Naturezas e CFOPs conferidos pelo contador', descricao: 'Os CFOPs que vêm instalados são um ponto de partida para o Simples Nacional.', link: '/fiscal' },
   webhook_asaas: { grupo: 'Financeiro', titulo: 'Webhook cadastrado no Asaas', descricao: 'Sem ele, o boleto pago não baixa sozinho. Endereço e token estão em Integrações › Asaas.', link: '/configuracoes?aba=integracoes' },
   saldos_contas: { grupo: 'Financeiro', titulo: 'Saldos iniciais das contas conferidos', descricao: 'Caixa, bancos e Asaas com o saldo do dia da virada.', link: '/financeiro' },
-  regras_confirmadas: { grupo: 'Regras do negócio', titulo: 'Comissões, multa, juros e limites confirmados', descricao: 'Os valores atuais são provisórios até a Aritana confirmar.', link: '/configuracoes' },
+  regras_confirmadas: { grupo: 'Regras do negócio', titulo: 'Comissões, multa, juros e limites confirmados', descricao: 'Use "Usar regras do Jueri" em Regras do consignado, confira com a Aritana e salve.', link: '/configuracoes' },
   regras_loja: { grupo: 'Regras do negócio', titulo: 'Desconto máximo, prazo de troca, garantia e comissão da loja confirmados', descricao: 'Ficam em Configurações › Regras do consignado (regras de venda) e › Avisos e regras.', link: '/configuracoes?aba=avisos' },
   juridico: { grupo: 'Documentos', titulo: 'Contrato e promissória revisados pelo jurídico', descricao: 'Os textos instalados são provisórios. Troque em Configurações › Modelos de documento e marque aqui.', link: '/configuracoes?aba=modelos' },
   piloto: { grupo: 'Virada', titulo: 'Piloto em paralelo com o Jueri concluído', descricao: 'Algumas semanas usando os dois sistemas para comparar acertos, estoque e financeiro antes de desligar o Jueri.' },
+  jueri_fechado: { grupo: 'Virada', titulo: 'Jueri fechado e importação final feita', descricao: 'Ninguém lança mais nada no Jueri; a importação final roda com todas as partes marcadas (maletas e contas incluídas).', link: '/configuracoes?aba=importacao' },
+  jueri_token: { grupo: 'Virada', titulo: 'Token do Jueri apagado', descricao: 'Depois da virada, apague o token no Jueri (Configurações › API) e em Integrações › Jueri.', link: '/configuracoes?aba=integracoes' },
 };
 
 @Controller('implantacao')
@@ -75,6 +78,16 @@ export class ImplantacaoController {
       n(sql`select count(*) as n from modelos_documento where ativo and conteudo ilike '%MODELO PROVISÓRIO%'`),
     ]);
     const avisos = await this.config.ler('avisos');
+    const [ultimaJueri] = (await this.db.execute<{ arquivo: string; criado_em: string }>(sql`select arquivo, criado_em from importacoes where tipo = 'jueri:api' order by criado_em desc limit 1`)).rows;
+    const [contasSemPessoa, produtosSemPreco] = await Promise.all([
+      n(sql`select count(*) as n from titulos where id_jueri is not null and status in ('aberto','protestado') and pessoa_id is null`),
+      n(sql`select count(*) as n from produtos where preco = 0 and id_jueri is not null`),
+    ]);
+    // Grupos criados antes dos módulos novos não enxergam esses módulos até alguém marcar.
+    const gruposSemModulos = (await this.db.select().from(grupos))
+      .filter((g) => !g.permissoes['*'])
+      .map((g) => ({ nome: g.nome, faltam: MODULOS.filter((m) => ['crm', 'marketing', 'pontos', 'formularios'].includes(m.chave) && !g.permissoes[m.chave]).map((m) => m.nome) }))
+      .filter((g) => g.faltam.length);
     const itens: Item[] = [
       { chave: 'empresas', grupo: 'Notas fiscais', titulo: 'Empresas com razão social, CNPJ e inscrição estadual', descricao: 'Matriz (representantes) e loja, cada uma com o seu CNPJ.', status: empresasSemCnpj ? 'pendente' : 'ok', detalhe: empresasSemCnpj ? `${empresasSemCnpj} empresa(s) com dados faltando` : undefined, link: '/configuracoes?aba=empresas' },
       {
@@ -103,7 +116,18 @@ export class ImplantacaoController {
       { chave: 'usuarios', grupo: 'Virada', titulo: 'Usuários da equipe criados', descricao: 'Cada pessoa com o seu login e o grupo certo.', status: usuariosAtivos > 1 ? 'ok' : 'pendente', detalhe: `${usuariosAtivos} usuário(s) ativo(s)`, link: '/configuracoes?aba=usuarios' },
       { chave: 'senhas', grupo: 'Virada', titulo: 'Senhas provisórias trocadas', descricao: 'Inclusive a do administrador criado na instalação.', status: adminProvisorio ? 'pendente' : 'ok', detalhe: adminProvisorio ? `${adminProvisorio} usuário(s) ainda com senha provisória` : undefined, link: '/configuracoes?aba=usuarios' },
       { chave: 'dados_teste', grupo: 'Virada', titulo: 'Dados de teste apagados', descricao: 'Antes de começar de verdade, apague os cadastros e movimentos de exemplo.', status: exemplos ? 'pendente' : 'ok', detalhe: exemplos ? `${exemplos} cadastro(s) "Exemplo" ainda no sistema` : undefined },
-      { chave: 'importacao', grupo: 'Virada', titulo: 'Dados do Jueri importados', descricao: 'Produtos com estoque, representantes, clientes e fornecedores.', status: importacoes ? 'ok' : 'pendente', link: '/configuracoes?aba=importacao' },
+      {
+        chave: 'importacao',
+        grupo: 'Virada',
+        titulo: 'Dados do Jueri importados',
+        descricao: 'Produtos com estoque e fotos, revendedoras, clientes, fornecedores, maletas abertas e contas a receber.',
+        status: !importacoes ? 'pendente' : ultimaJueri && !(ultimaJueri.arquivo.includes('maletas') && ultimaJueri.arquivo.includes('financeiro')) ? 'atencao' : 'ok',
+        detalhe: ultimaJueri ? `Última importação do Jueri em ${new Date(ultimaJueri.criado_em).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo', dateStyle: 'short', timeStyle: 'short' })} (${ultimaJueri.arquivo}). Na virada, importe de novo com todas as partes.` : undefined,
+        link: '/configuracoes?aba=importacao',
+      },
+      { chave: 'contas_sem_pessoa', grupo: 'Financeiro', titulo: 'Contas do Jueri ligadas às pessoas', descricao: 'Contas que vieram só com o nome do contato. No Financeiro, marque "Só sem pessoa ligada" e use "Ligar pessoa".', status: contasSemPessoa ? 'atencao' : 'ok', detalhe: contasSemPessoa ? `${contasSemPessoa} conta(s) sem pessoa` : undefined, link: '/financeiro' },
+      { chave: 'produtos_sem_preco', grupo: 'Virada', titulo: 'Produtos do Jueri sem preço', descricao: 'Entraram inativos e fora do catálogo. Defina o preço dos que ainda são vendidos.', status: produtosSemPreco ? 'opcional' : 'ok', detalhe: produtosSemPreco ? `${produtosSemPreco} produto(s) com preço zero` : undefined, link: '/produtos' },
+      { chave: 'grupos_modulos', grupo: 'Virada', titulo: 'Grupos com acesso aos módulos novos', descricao: 'Grupos criados antes de Candidatas, Pontos, Formulários e Marketing não enxergam esses módulos até alguém marcar. Se for de propósito, ignore.', status: gruposSemModulos.length ? 'opcional' : 'ok', detalhe: gruposSemModulos.length ? gruposSemModulos.map((g) => `${g.nome}: ${g.faltam.join(', ')}`).join(' · ') : undefined, link: '/configuracoes?aba=grupos' },
     ];
     for (const [chave, m] of Object.entries(MANUAIS)) {
       const c = conf[chave];
@@ -112,7 +136,12 @@ export class ImplantacaoController {
     const ordem = ['Notas fiscais', 'Financeiro', 'Regras do negócio', 'Documentos', 'Comunicação', 'Virada'];
     itens.sort((a, b) => ordem.indexOf(a.grupo) - ordem.indexOf(b.grupo));
     const contam = itens.filter((i) => i.status !== 'opcional');
-    return { itens, feitos: contam.filter((i) => i.status === 'ok').length, total: contam.length };
+    return { itens, feitos: contam.filter((i) => i.status === 'ok').length, total: contam.length, importadosJueri: await this.importadosJueri() };
+  }
+
+  private async importadosJueri() {
+    const r = await this.db.execute<{ n: number }>(sql`select (select count(*) from maletas where id_jueri is not null) + (select count(*) from titulos where id_jueri is not null) + (select count(*) from pessoas where id_jueri is not null) + (select count(*) from produtos where id_jueri is not null) as n`);
+    return Number(r.rows[0]?.n ?? 0);
   }
 
   /** Marca (ou desmarca) um item que só a Aritana pode confirmar. */
@@ -139,7 +168,10 @@ export class ImplantacaoController {
   @Permissao('configuracoes', 'excluir')
   async apagar(@Usuario() u: UsuarioLogado, @Body() body: unknown) {
     if (!temPermissao(u.permissoes, '*', '*')) throw new ForbiddenException('Só a Diretoria (acesso total) pode apagar os dados.');
-    const d = validar(z.object({ confirmacao: z.literal('APAGAR', { message: 'Digite APAGAR para confirmar' }), manterProdutos: z.boolean().default(false), manterPessoas: z.boolean().default(false) }), body);
+    const d = validar(z.object({ confirmacao: z.literal('APAGAR', { message: 'Digite APAGAR para confirmar' }), manterProdutos: z.boolean().default(false), manterPessoas: z.boolean().default(false), apagarImportados: z.boolean().default(false) }), body);
+    // Depois da importação do Jueri, "apagar dados de teste" apagaria maletas, estoque e contas reais.
+    const importados = await this.importadosJueri();
+    if (importados && !d.apagarImportados) throw new BadRequestException(`Há ${importados} registro(s) importados do Jueri (maletas, estoque, contas, cadastros). Isto apagaria os dados reais. Se é isso mesmo (vai importar de novo), marque a opção de apagar também os dados importados.`);
     const contar = async () => {
       const r = await this.db.execute<{ pessoas: number; produtos: number; maletas: number; vendas: number; titulos: number }>(sql`
         select (select count(*)::int from pessoas) as pessoas, (select count(*)::int from produtos) as produtos, (select count(*)::int from maletas) as maletas,

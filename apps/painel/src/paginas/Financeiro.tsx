@@ -11,8 +11,12 @@ export function Financeiro() {
   const [tipo, setTipo] = useState<'receber' | 'pagar'>('receber');
   const [aba, setAba] = useState<Aba>('abertos');
   const [contaId, setContaId] = useState('');
+  const [busca, setBusca] = useState('');
+  const [semPessoa, setSemPessoa] = useState(false);
+  const [ligando, setLigando] = useState<string | null>(null);
   const qc = useQueryClient();
-  const q = useQuery({ queryKey: ['titulos', tipo, aba], queryFn: () => api<{ itens: any[]; total: number }>(`/financeiro/titulos?tipo=${tipo}&aba=${aba}`) });
+  const filtro = `tipo=${tipo}&aba=${aba}${busca.trim() ? `&busca=${encodeURIComponent(busca.trim())}` : ''}${semPessoa ? '&semPessoa=1' : ''}`;
+  const q = useQuery({ queryKey: ['titulos', filtro], queryFn: () => api<{ itens: any[]; total: number; quantidade: number }>(`/financeiro/titulos?${filtro}`) });
   const contas = useQuery({ queryKey: ['contas'], queryFn: () => api<any[]>('/financeiro/contas') });
   const [cobranca, setCobranca] = useState<any | null>(null);
   const cobrar = useMutation({
@@ -41,6 +45,10 @@ export function Financeiro() {
         </div>
       )}
       <Abas ativa={aba} mudar={setAba} abas={[['abertos', 'Em aberto'], ['vencidos', 'Vencidos'], ['pagos', 'Pagos']]} />
+      <div className="busca">
+        <input placeholder="Buscar por descrição ou nome…" value={busca} onChange={(e) => setBusca(e.target.value)} />
+        <label className="check" style={{ alignSelf: 'center' }}><input type="checkbox" checked={semPessoa} onChange={(e) => setSemPessoa(e.target.checked)} /> Só sem pessoa ligada</label>
+      </div>
       {aba !== 'pagos' && pode('financeiro', 'editar') && (
         <div className="busca">
           <select value={contaId} onChange={(e) => setContaId(e.target.value)}><option value="">Conta para as baixas…</option>{contas.data?.map((c) => <option key={c.id} value={c.id}>{c.nome}</option>)}</select>
@@ -73,7 +81,12 @@ export function Financeiro() {
               <tr key={t.id}>
                 <td>{data(t.vencimento)}</td>
                 <td>{t.descricao}</td>
-                <td>{t.pessoaId ? <Link to={`/rede/${t.pessoaId}`}>{t.pessoa}</Link> : ['debito', 'credito'].includes(t.formaPagamento) ? 'Maquininha' : '—'}</td>
+                <td>
+                  {t.pessoaId ? <Link to={`/rede/${t.pessoaId}`}>{t.pessoa}</Link> : ['debito', 'credito'].includes(t.formaPagamento) ? 'Maquininha' : '—'}
+                  {!t.pessoaId && ['aberto', 'protestado'].includes(t.status) && !t.cobrancaUrl && pode('financeiro', 'editar') && (
+                    ligando === t.id ? <LigarPessoa tituloId={t.id} sugestao={sugestaoDe(t.descricao)} fechar={() => setLigando(null)} /> : <> <button className="botao claro pequeno" onClick={() => setLigando(t.id)}>Ligar pessoa</button></>
+                  )}
+                </td>
                 <td>{t.formaPagamento ?? '—'}</td>
                 <td className="num">{reais(t.valor)}</td>
                 <td>{t.status === 'pago' ? <span className="etiqueta ok">Pago {data(t.pagoEm)}</span> : t.diasAtraso > 0 ? <span className="etiqueta erro">{t.diasAtraso} dias</span> : <span className="etiqueta alerta">A vencer</span>}</td>
@@ -94,9 +107,47 @@ export function Financeiro() {
               </tr>
             ))}
           </tbody>
-          <tfoot><tr><td colSpan={4}>Total</td><td className="num">{reais(q.data!.total)}</td><td colSpan={2}></td></tr></tfoot>
+          <tfoot><tr><td colSpan={4}>Total{q.data!.quantidade > q.data!.itens.length ? ` (${q.data!.quantidade} títulos; a lista mostra os ${q.data!.itens.length} primeiros, use a busca)` : ` (${q.data!.quantidade} títulos)`}</td><td className="num">{reais(q.data!.total)}</td><td colSpan={2}></td></tr></tfoot>
         </table>
       )}
     </>
+  );
+}
+
+/** Nome do contato que veio do Jueri no fim da descrição ("… · Maria da Silva"). */
+function sugestaoDe(descricao: string) {
+  const i = descricao.lastIndexOf(' · ');
+  return i >= 0 ? descricao.slice(i + 3).replace(/\s*\(saldo após pagamento parcial\)$/, '').trim() : '';
+}
+
+/** Procura a revendedora ou cliente e liga ao título. */
+function LigarPessoa({ tituloId, sugestao, fechar }: { tituloId: string; sugestao: string; fechar: () => void }) {
+  const qc = useQueryClient();
+  const [busca, setBusca] = useState(sugestao);
+  const termo = busca.trim();
+  const achadas = useQuery({
+    queryKey: ['ligar-pessoa', termo],
+    enabled: termo.length >= 2,
+    queryFn: async () => {
+      const [r, c] = await Promise.all(['representante', 'cliente'].map((tipo) => api<{ itens: any[] }>(`/pessoas?tipo=${tipo}&busca=${encodeURIComponent(termo)}`).catch(() => ({ itens: [] }))));
+      return [...r.itens.map((p) => ({ ...p, tipoNome: 'revendedora' })), ...c.itens.map((p) => ({ ...p, tipoNome: 'cliente' }))].slice(0, 8);
+    },
+  });
+  const ligar = useMutation({
+    mutationFn: (pessoaId: string) => api(`/financeiro/titulos/${tituloId}/pessoa`, { corpo: { pessoaId } }),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['titulos'] }); fechar(); },
+  });
+  return (
+    <div className="coluna" style={{ gap: 4, marginTop: 6, minWidth: 240 }}>
+      <input autoFocus placeholder="Nome, CPF ou telefone" value={busca} onChange={(e) => setBusca(e.target.value)} />
+      {achadas.data?.map((p) => (
+        <button key={p.id} className="botao claro pequeno" style={{ justifyContent: 'flex-start' }} disabled={ligar.isPending} onClick={() => ligar.mutate(p.id)}>
+          {p.nome} <span className="muted">· {p.tipoNome}{p.cidade ? ` · ${p.cidade}` : ''}</span>
+        </button>
+      ))}
+      {termo.length >= 2 && achadas.data?.length === 0 && <span className="muted">Ninguém com esse nome.</span>}
+      {ligar.error && <Erro erro={ligar.error} />}
+      <button className="botao claro pequeno" onClick={fechar}>Voltar</button>
+    </div>
   );
 }

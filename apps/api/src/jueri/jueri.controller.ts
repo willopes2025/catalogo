@@ -31,4 +31,11 @@ export class JueriController {
     const etapas = ETAPAS.filter((e) => d.etapas.includes(e));
     return this.svc.iniciar({ ...d, etapas }, u.id);
   }
+
+  /** Para no próximo ponto seguro: antes do fim da gravação nada fica; nas fotos, para entre um produto e outro. */
+  @Post('cancelar')
+  @Permissao('configuracoes', 'editar')
+  cancelar() {
+    return this.svc.cancelar();
+  }
 }

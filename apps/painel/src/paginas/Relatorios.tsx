@@ -32,6 +32,9 @@ function exportar(nome: string, colunas: Col[], linhas: Record<string, unknown>[
   URL.revokeObjectURL(url);
 }
 
+/** A tela mostra as primeiras linhas (milhares de linhas travam o navegador); o Excel leva todas. */
+const LIMITE_TELA = 300;
+
 function Tabela({ nome, colunas, linhas, titulo }: { nome: string; colunas: Col[]; linhas: Record<string, unknown>[]; titulo?: string }) {
   return (
     <div className="coluna" style={{ gap: 8 }}>
@@ -39,9 +42,10 @@ function Tabela({ nome, colunas, linhas, titulo }: { nome: string; colunas: Col[
       {linhas.length === 0 ? <div className="cartao vazio">Nada no período.</div> : (
         <table className="tabela">
           <thead><tr>{colunas.map((c) => <th key={c[0]} className={c[2] && c[2] !== 'tel' && c[2] !== 'data' ? 'num' : ''}>{c[1]}</th>)}</tr></thead>
-          <tbody>{linhas.map((l, i) => <tr key={i}>{colunas.map((c) => <td key={c[0]} className={c[2] && c[2] !== 'tel' && c[2] !== 'data' ? 'num' : ''}>{valor(l[c[0]], c[2])}</td>)}</tr>)}</tbody>
+          <tbody>{linhas.slice(0, LIMITE_TELA).map((l, i) => <tr key={i}>{colunas.map((c) => <td key={c[0]} className={c[2] && c[2] !== 'tel' && c[2] !== 'data' ? 'num' : ''}>{valor(l[c[0]], c[2])}</td>)}</tr>)}</tbody>
         </table>
       )}
+      {linhas.length > LIMITE_TELA && <p className="muted">Mostrando {LIMITE_TELA} de {linhas.length.toLocaleString('pt-BR')} linhas. Para ver todas, use Exportar para Excel.</p>}
     </div>
   );
 }

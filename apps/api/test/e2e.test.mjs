@@ -959,6 +959,28 @@ test('Jueri pela API: testa a conexão, simula sem gravar, importa tudo e repeti
   assert.ok(hist.some((h) => h.tipo === 'jueri:api'));
 });
 
+test('Jueri: cancelar no meio não grava nada', async () => {
+  const local = (await ok('GET', '/estoque/locais')).find((l) => l.tipo === 'deposito');
+  await fetch('http://localhost:3199/__jueri/lento?ms=300', { method: 'POST' });
+  try {
+    await ok('POST', '/jueri/importar', { simular: false, etapas: ['cadastros', 'produtos', 'pessoas'], localId: local.id });
+    await new Promise((r) => setTimeout(r, 400));
+    const c = await ok('POST', '/jueri/cancelar', {});
+    assert.equal(c.cancelando, true);
+    let s;
+    for (let i = 0; i < 100; i++) {
+      s = (await ok('GET', '/jueri')).execucao;
+      if (s.situacao !== 'rodando') break;
+      await new Promise((r) => setTimeout(r, 200));
+    }
+    assert.equal(s.situacao, 'cancelada');
+    assert.match(s.fase, /Nada desta execução foi gravado/);
+    assert.equal((await chamar('POST', '/jueri/cancelar', {})).status, 400, 'nada para cancelar');
+  } finally {
+    await fetch('http://localhost:3199/__jueri/lento?ms=0', { method: 'POST' });
+  }
+});
+
 test('Jueri na virada: maletas e contas trazidas antes acompanham o que mudou no Jueri', async () => {
   const local = (await ok('GET', '/estoque/locais')).find((l) => l.tipo === 'deposito');
   const todas = ['cadastros', 'produtos', 'pessoas', 'maletas', 'financeiro'];
@@ -992,12 +1014,29 @@ test('Jueri na virada: maletas e contas trazidas antes acompanham o que mudou no
   assert.equal(m.status, 'cancelada', 'maleta acertada no Jueri é encerrada aqui');
   const rast = await ok('GET', '/estoque/rastreio/7899990090027');
   assert.ok(!rast.porLocal.some((l) => l.tipo === 'maleta' && l.quantidade > 0 && l.nome.includes(`nº ${m.numero} `)), 'peças saem do local da maleta');
+  // Contas que vieram só com o nome: filtrar e ligar à pessoa.
+  const sem = await ok('GET', '/financeiro/titulos?tipo=receber&aba=abertos&semPessoa=1');
+  assert.ok(sem.itens.every((t) => !t.pessoaId));
+  assert.equal(sem.quantidade, sem.itens.length);
+  const implant = await ok('GET', '/implantacao');
+  assert.ok(implant.importadosJueri > 0);
+  assert.ok(implant.itens.find((i) => i.chave === 'importacao').detalhe.includes('Última importação do Jueri'));
+  const busca = await ok('GET', '/financeiro/titulos?tipo=receber&aba=abertos&busca=Revendedora API');
+  assert.ok(busca.itens.length >= 1, 'busca pelo nome da pessoa');
+  const aberto = busca.itens.find((t) => !t.cobrancaUrl);
+  const outra = (await ok('GET', '/pessoas?tipo=cliente&busca=Cliente API Jueri')).itens[0];
+  await ok('POST', `/financeiro/titulos/${aberto.id}/pessoa`, { pessoaId: outra.id });
+  const depois = await ok('GET', `/pessoas/${outra.id}`);
+  assert.ok(depois.titulos.some((t) => t.id === aberto.id), 'título ligado à pessoa escolhida');
 });
 
 // Este fica por último: apaga os dados de teste.
 test('implantação: apagar dados de teste exige APAGAR e mantém o que é configuração', async () => {
   assert.equal((await chamar('POST', '/implantacao/apagar-dados-de-teste', { confirmacao: 'apagar' })).status, 400);
-  const r = await ok('POST', '/implantacao/apagar-dados-de-teste', { confirmacao: 'APAGAR', manterProdutos: true });
+  const bloq = await chamar('POST', '/implantacao/apagar-dados-de-teste', { confirmacao: 'APAGAR', manterProdutos: true });
+  assert.equal(bloq.status, 400, 'com dados do Jueri, só apaga marcando a opção');
+  assert.match(bloq.dados.mensagem, /importados do Jueri/);
+  const r = await ok('POST', '/implantacao/apagar-dados-de-teste', { confirmacao: 'APAGAR', manterProdutos: true, apagarImportados: true });
   assert.ok(r.antes.maletas > 0);
   assert.equal(r.depois.maletas, 0);
   assert.equal(r.depois.pessoas, 0);

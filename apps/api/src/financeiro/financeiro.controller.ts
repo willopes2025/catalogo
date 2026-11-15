@@ -1,5 +1,5 @@
 import { Body, Controller, Get, Inject, NotFoundException, Param, ParseUUIDPipe, Post, Query, BadRequestException } from '@nestjs/common';
-import { and, asc, eq, gte, lt, lte, sql, type SQL } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, ilike, isNull, lt, lte, or, sql, type SQL } from 'drizzle-orm';
 import { z } from 'zod';
 import { DB, type Db } from '../comum/db.module';
 import { Permissao, Usuario, type UsuarioLogado } from '../comum/auth';
@@ -42,8 +42,12 @@ export class FinanceiroController {
     @Query('pessoaId') pessoaId?: string,
     @Query('de') de?: string,
     @Query('ate') ate?: string,
+    @Query('busca') busca?: string,
+    @Query('semPessoa') semPessoa?: string,
   ) {
     const f: SQL[] = [eq(titulos.tipo, tipo)];
+    if (semPessoa === '1') f.push(isNull(titulos.pessoaId));
+    if (busca?.trim()) f.push(or(ilike(titulos.descricao, `%${busca.trim()}%`), ilike(pessoas.nome, `%${busca.trim()}%`))!);
     if (aba === 'abertos') f.push(eq(titulos.status, 'aberto'));
     if (aba === 'vencidos') f.push(eq(titulos.status, 'aberto'), lt(titulos.vencimento, hoje()));
     if (aba === 'pagos') f.push(eq(titulos.status, 'pago'));
@@ -78,10 +82,15 @@ export class FinanceiroController {
       .leftJoin(pessoas, eq(pessoas.id, titulos.pessoaId))
       .leftJoin(contas, eq(contas.id, titulos.contaId))
       .where(and(...f))
-      .orderBy(asc(titulos.vencimento))
+      .orderBy(aba === 'pagos' ? desc(titulos.pagoEm) : asc(titulos.vencimento))
       .limit(500);
-    const total = itens.reduce((a, t) => a + t.valor, 0);
-    return { itens, total };
+    // Total e quantidade de tudo que bate com o filtro (a lista mostra no máximo 500).
+    const [soma] = await this.db
+      .select({ total: sql<number>`coalesce(sum(${titulos.valor}), 0)::bigint`, quantidade: sql<number>`count(*)::int` })
+      .from(titulos)
+      .leftJoin(pessoas, eq(pessoas.id, titulos.pessoaId))
+      .where(and(...f));
+    return { itens, total: Number(soma.total), quantidade: soma.quantidade };
   }
 
   @Get('contas')
@@ -161,6 +170,22 @@ export class FinanceiroController {
       if (r.saldo) await this.asaas.cancelarCobranca(r.cobrancaAnterior);
       else await this.asaas.informarPagamentoManual(r.cobrancaAnterior, pagoEm, r.valorPago ?? r.valor);
     }
+    return r;
+  }
+
+  /** Liga um título em aberto à pessoa certa (ex.: contas do Jueri que vieram só com o nome do contato). */
+  @Post('titulos/:id/pessoa')
+  @Permissao('financeiro', 'editar')
+  async ligarPessoa(@Usuario() u: UsuarioLogado, @Param('id', ParseUUIDPipe) id: string, @Body() body: unknown) {
+    const { pessoaId } = validar(z.object({ pessoaId: z.string().uuid('Escolha a pessoa') }), body);
+    const [t] = await this.db.select().from(titulos).where(eq(titulos.id, id));
+    if (!t) throw new NotFoundException('Título não encontrado.');
+    if (t.status !== 'aberto' && t.status !== 'protestado') throw new BadRequestException('Só títulos em aberto podem mudar de pessoa.');
+    if (t.cobrancaExternaId) throw new BadRequestException('Este título já tem boleto ou Pix gerado para outra pessoa. Cancele a cobrança antes.');
+    const [p] = await this.db.select({ id: pessoas.id, nome: pessoas.nome }).from(pessoas).where(eq(pessoas.id, pessoaId));
+    if (!p) throw new BadRequestException('Pessoa não encontrada.');
+    const [r] = await this.db.update(titulos).set({ pessoaId }).where(eq(titulos.id, id)).returning();
+    await this.auditoria.registrar({ usuarioId: u.id, acao: 'editar', entidade: 'titulo', entidadeId: id, dados: { pessoaAntes: t.pessoaId, pessoaDepois: pessoaId, nome: p.nome } });
     return r;
   }
 

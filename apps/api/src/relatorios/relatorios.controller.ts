@@ -89,7 +89,7 @@ export class RelatoriosController {
         coalesce(v.vendidas,0) * p.preco as faturamento,
         case when coalesce(e.estoque,0) + coalesce(e.em_maletas,0) > 0 then round(coalesce(v.vendidas,0)::numeric / (coalesce(e.estoque,0) + coalesce(e.em_maletas,0)), 2) else null end as giro
       from produtos p left join categorias c on c.id = p.categoria_id left join vend v on v.produto_id = p.id left join est e on e.produto_id = p.id
-      where p.ativo
+      where p.ativo and (coalesce(v.vendidas,0) > 0 or coalesce(e.estoque,0) > 0 or coalesce(e.em_maletas,0) > 0)
       order by faturamento desc nulls last, p.descricao`);
     const linhas = this.num(r.rows) as Record<string, number | string>[];
     // Curva ABC pelo faturamento: A = 80% do total, B = até 95%, C = o resto.

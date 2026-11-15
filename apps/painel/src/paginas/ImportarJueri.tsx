@@ -16,7 +16,7 @@ const ETAPAS: [string, string, string][] = [
 
 interface Parte { lidos: number; criados: number; atualizados: number; ignorados: number; falhas?: number; motivos?: Record<string, number>; erros: string[]; avisos: string[] }
 const falhas = (p: Parte) => p.falhas ?? p.erros.length;
-interface Execucao { id: string; simular: boolean; etapas: string[]; inicio: string; fim: string | null; situacao: 'rodando' | 'concluida' | 'falhou'; fase: string; erro: string | null; partes: Record<string, Parte>; estruturas: Record<string, string[]> }
+interface Execucao { id: string; simular: boolean; etapas: string[]; inicio: string; fim: string | null; situacao: 'rodando' | 'concluida' | 'falhou' | 'cancelada'; cancelando?: boolean; gravado?: boolean; fase: string; erro: string | null; partes: Record<string, Parte>; estruturas: Record<string, string[]> }
 
 /** Migração direto da API do Jueri: simula, confere o relatório e só então grava. */
 export function ImportarJueri() {
@@ -37,6 +37,7 @@ export function ImportarJueri() {
       api<Execucao>('/jueri/importar', { corpo: { simular, etapas, localId, atualizarEstoque: estoque, comissaoRepresentantePb: Math.round(Number(comissao.replace(',', '.')) * 100) || 0 } }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['jueri'] }),
   });
+  const cancelar = useMutation({ mutationFn: () => api('/jueri/cancelar', { corpo: {} }), onSuccess: () => qc.invalidateQueries({ queryKey: ['jueri'] }) });
   const rodando = ex?.situacao === 'rodando';
   const ultimaSimulacaoOk = ex && ex.simular && ex.situacao === 'concluida';
   const terminouDeVerdade = !!ex && ex.situacao !== 'rodando' && !ex.simular;
@@ -71,10 +72,11 @@ export function ImportarJueri() {
       <div className="l4 flex">
         <button className="botao claro" onClick={() => iniciar.mutate(true)} disabled={rodando || !localId || !etapas.length || iniciar.isPending}>Simular</button>
         {ultimaSimulacaoOk && <button className="botao" onClick={() => iniciar.mutate(false)} disabled={rodando || !localId || iniciar.isPending}>Importar de verdade</button>}
+        {rodando && <button className="botao claro" onClick={() => cancelar.mutate()} disabled={ex?.cancelando || cancelar.isPending} title="Antes de terminar a gravação nada fica gravado; durante as fotos, para entre um produto e outro">{ex?.cancelando ? 'Cancelando…' : 'Cancelar'}</button>}
       </div>
-      {iniciar.error && <div className="l4"><Erro erro={iniciar.error} /></div>}
+      {(iniciar.error || cancelar.error) && <div className="l4"><Erro erro={iniciar.error ?? cancelar.error} /></div>}
       {ex && (
-        <div className={`l4 aviso ${ex.situacao === 'falhou' ? 'erro' : ex.situacao === 'rodando' ? '' : Object.values(ex.partes).some((p) => falhas(p) > 0) ? 'alerta' : 'ok'}`}>
+        <div className={`l4 aviso ${ex.situacao === 'falhou' ? 'erro' : ex.situacao === 'cancelada' ? 'alerta' : ex.situacao === 'rodando' ? '' : Object.values(ex.partes).some((p) => falhas(p) > 0) ? 'alerta' : 'ok'}`}>
           <b>{ex.simular ? 'Simulação' : 'Importação'} de {dataHora(ex.inicio)}:</b> {ex.fase}
           {ex.erro && <div>{ex.erro}</div>}
           {Object.keys(ex.partes).length > 0 && (

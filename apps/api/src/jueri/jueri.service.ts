@@ -48,7 +48,11 @@ export interface Execucao {
   etapas: Etapa[];
   inicio: string;
   fim: string | null;
-  situacao: 'rodando' | 'concluida' | 'falhou';
+  situacao: 'rodando' | 'concluida' | 'falhou' | 'cancelada';
+  /** Pedido de cancelamento feito na tela. */
+  cancelando: boolean;
+  /** A gravação dos dados já terminou (só as fotos ficam depois disso). */
+  gravado: boolean;
   fase: string;
   erro: string | null;
   partes: Record<string, Parte>;
@@ -57,6 +61,7 @@ export interface Execucao {
 }
 
 class Simulacao extends Error {}
+class Cancelada extends Error {}
 const MAX_ERROS = 300;
 
 const ESTADO_CIVIL: Record<string, string> = { '1': 'Solteira(o)', '2': 'Casada(o)', '3': 'Divorciada(o)', '4': 'Viúva(o)' };
@@ -125,6 +130,7 @@ export class JueriService {
       const j = await this.get<unknown>(caminho, { ...params, page: pagina, per_page: 100 });
       const { itens, proxima } = extrairLista(j);
       out.push(...itens);
+      this.checar();
       if (this.atual) this.atual.fase = `Baixando ${caminho} do Jueri… ${out.length}`;
       if (!proxima || !itens.length) break;
     }
@@ -136,6 +142,7 @@ export class JueriService {
     if (!regs.length || regs.every((r) => pegar(r, campoObrigatorio) !== undefined)) return regs;
     const out: Reg[] = [];
     for (const [i, r] of regs.entries()) {
+      this.checar();
       if (this.atual) this.atual.fase = `Baixando detalhes de ${caminho}… ${i + 1}/${regs.length}`;
       out.push(pegar(r, campoObrigatorio) !== undefined ? r : umRegistro(await this.get<unknown>(`${caminho}/${r.id}`)));
     }
@@ -159,7 +166,7 @@ export class JueriService {
   iniciar(op: OpcoesJueri, usuarioId: string) {
     if (!this.configurado) throw new BadRequestException('Configure o Jueri em Configurações › Integrações antes de importar.');
     if (this.atual?.situacao === 'rodando') throw new BadRequestException('Já há uma importação do Jueri em andamento.');
-    const ex: Execucao = { id: randomBytes(6).toString('hex'), simular: op.simular, etapas: op.etapas, inicio: new Date().toISOString(), fim: null, situacao: 'rodando', fase: 'Começando…', erro: null, partes: {}, estruturas: {} };
+    const ex: Execucao = { id: randomBytes(6).toString('hex'), simular: op.simular, etapas: op.etapas, inicio: new Date().toISOString(), fim: null, situacao: 'rodando', cancelando: false, gravado: false, fase: 'Começando…', erro: null, partes: {}, estruturas: {} };
     this.atual = ex;
     void this.rodar(ex, op, usuarioId)
       .then(() => {
@@ -167,15 +174,34 @@ export class JueriService {
         ex.fase = op.simular ? 'Simulação concluída: nada foi gravado.' : 'Importação concluída.';
       })
       .catch((e) => {
+        if (e instanceof Cancelada) {
+          ex.situacao = 'cancelada';
+          ex.fase = ex.gravado
+            ? 'Cancelada durante as fotos. Os dados já estavam gravados; as fotos que faltaram vêm na próxima importação.'
+            : 'Cancelada. Nada desta execução foi gravado.';
+          return;
+        }
         ex.situacao = 'falhou';
         ex.erro = (e as Error).message;
-        ex.fase = 'Parou com erro. Nada desta execução foi gravado.';
+        ex.fase = ex.gravado ? 'Parou com erro nas fotos. Os dados já estavam gravados.' : 'Parou com erro. Nada desta execução foi gravado.';
         this.log.error(`Importação do Jueri falhou: ${(e as Error).message}`);
       })
       .finally(() => {
         ex.fim = new Date().toISOString();
       });
     return ex;
+  }
+
+  cancelar() {
+    if (this.atual?.situacao !== 'rodando') throw new BadRequestException('Não há importação do Jueri em andamento.');
+    this.atual.cancelando = true;
+    this.atual.fase = 'Cancelando…';
+    return this.atual;
+  }
+
+  /** Para no próximo ponto seguro se pediram para cancelar. */
+  private checar() {
+    if (this.atual?.cancelando) throw new Cancelada();
   }
 
   private parte(ex: Execucao, nome: string): Parte {
@@ -207,6 +233,7 @@ export class JueriService {
       const lista = (await this.todos('pedido', { status: 1 })).filter(pedidoAberto);
       dados.pedidos = [];
       for (const [i, p] of lista.entries()) {
+        this.checar();
         ex.fase = `Baixando maletas abertas… ${i + 1}/${lista.length}`;
         const itensLista = extrairLista(p.itens).itens;
         dados.pedidos.push(itensLista.length && itensLista.every((it) => Object.keys(it).length > 2) ? p : umRegistro(await this.get<unknown>(`pedido/${p.id}`)));
@@ -232,18 +259,20 @@ export class JueriService {
         if (quer('pessoas')) await rotular('Pessoas', () => this.gravarPessoas(tx, ex, dados, op));
         if (quer('maletas')) await rotular('Maletas', () => this.gravarMaletas(tx, ex, dados.pedidos, local, usuarioId));
         if (quer('financeiro')) await rotular('Contas a receber', () => this.gravarContas(tx, ex, dados.contas, Number(dados.contasTotal?.[0]?.n ?? 0)));
+        this.checar();
         if (op.simular) throw new Simulacao();
       });
     } catch (e) {
       if (!(e instanceof Simulacao)) throw e;
     }
-    if (quer('fotos')) await rotular('Fotos', () => this.fotos(ex, dados.produtos ?? [], op.simular));
+    if (!op.simular) ex.gravado = true;
     if (!op.simular) {
       const soma = Object.values(ex.partes).reduce((a, p) => ({ l: a.l + p.lidos, c: a.c + p.criados, u: a.u + p.atualizados }), { l: 0, c: 0, u: 0 });
       const erros = Object.entries(ex.partes).flatMap(([n, p]) => p.erros.map((m) => ({ linha: 0, mensagem: `${n}: ${m}` })));
       const [imp] = await this.db.insert(importacoes).values({ tipo: 'jueri:api', arquivo: op.etapas.join(', '), linhas: soma.l, criados: soma.c, atualizados: soma.u, erros: erros.slice(0, 500), usuarioId }).returning();
       await this.auditoria.registrar({ usuarioId, acao: 'importar', entidade: 'importacao', entidadeId: imp.id, dados: { origem: 'jueri', etapas: op.etapas, criados: soma.c, atualizados: soma.u, erros: erros.length } });
     }
+    if (quer('fotos')) await rotular('Fotos', () => this.fotos(ex, dados.produtos ?? [], op.simular));
   }
 
   /** Maleta trazida do Jueri que ninguém usou aqui: sem acerto, sem pré-baixa e sem movimento além da migração. */
@@ -324,7 +353,7 @@ export class JueriService {
     // A mesma foto pode servir a vários produtos: baixa uma vez só, mesmo com downloads em paralelo.
     const baixando = new Map<string, Promise<string>>();
     const trabalhar = async () => {
-      for (let x = fila.shift(); x; x = fila.shift()) {
+      for (let x = fila.shift(); x && !ex.cancelando; x = fila.shift()) {
         pf.lidos++;
         ex.fase = `Baixando fotos… ${++feitos}/${comFoto.length} produto(s)`;
         const produtoId = prods.get(String(x.r.id));
@@ -354,6 +383,7 @@ export class JueriService {
       }
     };
     await Promise.all(Array.from({ length: 6 }, trabalhar));
+    if (ex.cancelando) throw new Cancelada();
   }
 
   private async baixarFoto(url: string) {
@@ -476,6 +506,7 @@ export class JueriService {
     let pecas = 0;
     let semPrecoN = 0;
     for (const [i, r] of lista.entries()) {
+      this.checar();
       p.lidos++;
       if (i % 200 === 0) ex.fase = `${op.simular ? 'Simulando' : 'Gravando'} produtos… ${i}/${lista.length}`;
       try {
@@ -647,6 +678,7 @@ export class JueriService {
     const pr = this.parte(ex, 'Revendedoras');
     const lideres: [string, string][] = [];
     for (const r of d.revendedores ?? []) {
+      this.checar();
       pr.lidos++;
       try {
         const ident = this.identidade(r, pr.avisos, `Revendedor ${r.id}`);
@@ -759,6 +791,7 @@ export class JueriService {
     const abertosJ = new Set<string>();
     const mexidas: number[] = [];
     for (const ped of pedidos) {
+      this.checar();
       pm.lidos++;
       const numero = pegar(ped, 'codigo_pedido', 'id');
       try {
@@ -933,6 +966,7 @@ export class JueriService {
     };
 
     for (const c of contas) {
+      this.checar();
       pc.lidos++;
       try {
         // O Jueri repete o id da conta em cada parcela: a chave leva a parcela junto.
@@ -1072,6 +1106,7 @@ async function rotular<T>(etapa: string, fn: () => Promise<T>): Promise<T> {
   try {
     return await fn();
   } catch (e) {
+    if (e instanceof Cancelada) throw e;
     throw new Error(`${etapa}: ${(e as Error).message}`);
   }
 }
