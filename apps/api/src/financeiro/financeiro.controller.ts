@@ -102,7 +102,7 @@ export class FinanceiroController {
         nome: contas.nome,
         tipo: contas.tipo,
         empresa: empresas.nome,
-        saldo: sql<number>`(${contas.saldoInicial} + coalesce((select sum(case when t.tipo='receber' then t.valor_pago else -t.valor_pago end) from ${titulos} t where t.conta_id = ${contas.id} and t.status='pago'),0))::int`,
+        saldo: sql<number>`(${contas.saldoInicial} + coalesce((select sum(case when t.tipo='receber' then t.valor_pago else -t.valor_pago end) from ${titulos} t where t.conta_id = ${contas.id} and t.status='pago'),0))::bigint`,
       })
       .from(contas)
       .innerJoin(empresas, eq(empresas.id, contas.empresaId))

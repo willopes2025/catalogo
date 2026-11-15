@@ -21,6 +21,7 @@ import { AsaasService } from './integracoes/asaas.service';
 import { WebhooksController } from './integracoes/webhooks.controller';
 import { FiscalController } from './fiscal/fiscal.controller';
 import { FiscalService } from './fiscal/fiscal.service';
+import { IndicadoresController } from './relatorios/indicadores.controller';
 import { RelatoriosController } from './relatorios/relatorios.controller';
 import { SuporteController } from './suporte/suporte.controller';
 import { ImportacaoController } from './importacao/importacao.controller';
@@ -91,7 +92,7 @@ if (!segredo || (process.env.NODE_ENV === 'production' && segredo.length < 32)) 
     VendasController,
     WebhooksController,
     FiscalController,
-    RelatoriosController,
+    RelatoriosController, IndicadoresController,
     SuporteController,
     ImportacaoController,
     GarantiaController,

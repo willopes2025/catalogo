@@ -111,7 +111,10 @@ export class ComissoesService {
     if (c.fechado) throw new BadRequestException('Este mês já foi fechado.');
     const aPagar = c.linhas.filter((l) => l.valor > 0);
     const [a, m] = mes.split('-').map(Number);
-    const venc = m === 12 ? `${a + 1}-01-${String(c.regras.diaPagamento).padStart(2, '0')}` : `${a}-${String(m + 1).padStart(2, '0')}-${String(c.regras.diaPagamento).padStart(2, '0')}`;
+    // Dia de pagamento que não existe no mês (31 em fevereiro) cai no último dia.
+    const [av, mv] = m === 12 ? [a + 1, 1] : [a, m + 1];
+    const dia = Math.min(Math.max(1, c.regras.diaPagamento), new Date(Date.UTC(av, mv, 0)).getUTCDate());
+    const venc = `${av}-${String(mv).padStart(2, '0')}-${String(dia).padStart(2, '0')}`;
     return this.db.transaction(async (tx) => {
       const [matriz] = await tx.select().from(empresas).where(eq(empresas.tipo, 'matriz')).limit(1);
       const [f] = await tx.insert(fechamentosComissao).values({ mes, total: c.total, usuarioId }).returning();

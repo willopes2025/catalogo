@@ -297,7 +297,16 @@ export class MaletasService {
     if (d.forma === 'avista' && d.parcelas > 1) throw new BadRequestException('Pagamento à vista não pode ser parcelado.');
     const primeiro = d.primeiroVencimento ?? dataAcerto;
     const parcelas = gerarParcelas(resultado.totalAPagar, d.parcelas, primeiro);
-    return { m, itens, regras, sit, resultado, parcelas, dataAcerto };
+    // Desempenho da maleta inteira (somando acertos parciais anteriores): é ele que decide o limite no fechamento,
+    // não só o último pedaço acertado.
+    const enviado = doBanco.reduce((a, b) => a + b.preco * b.enviada, 0);
+    const vendidoAntes = doBanco.reduce((a, b) => a + b.preco * b.vendida, 0);
+    const perdidasAntes = doBanco.reduce((a, b) => a + b.perdida, 0);
+    const maletaInteira = {
+      percentualVendidoPb: enviado > 0 ? Math.round(((vendidoAntes + resultado.totalVendido) * 10000) / enviado) : 0,
+      houvePerda: perdidasAntes + resultado.pecas.perdidas > 0,
+    };
+    return { m, itens, regras, sit, resultado, parcelas, dataAcerto, maletaInteira };
   }
 
   async simular(id: string, d: DadosAcerto) {
@@ -306,7 +315,7 @@ export class MaletasService {
     await this.db
       .transaction(async (tx) => {
         const c = await this.montarCalculo(tx, id, d);
-        const lim = novoLimite(c.sit.limite, { diasAtraso: c.resultado.diasAtraso, percentualVendidoPb: c.resultado.percentualVendidoPb, houvePerda: c.resultado.pecas.perdidas > 0 }, c.regras);
+        const lim = novoLimite(c.sit.limite, { diasAtraso: c.resultado.diasAtraso, ...c.maletaInteira }, c.regras);
         saida = { resultado: c.resultado, parcelas: c.parcelas, regras: c.regras, limiteAtual: c.sit.limite, limiteNovo: d.parcial ? c.sit.limite : lim.limite, motivoLimite: d.parcial ? 'Acerto parcial: limite revisto no fechamento.' : lim.motivo };
         throw new SimulacaoConcluida();
       })
@@ -318,7 +327,7 @@ export class MaletasService {
 
   async acertar(id: string, d: DadosAcerto, usuarioId: string) {
     return this.db.transaction(async (tx) => {
-      const { m, regras, sit, resultado, parcelas, dataAcerto, itens } = await this.montarCalculo(tx, id, d);
+      const { m, regras, sit, resultado, parcelas, dataAcerto, itens, maletaInteira } = await this.montarCalculo(tx, id, d);
       const ref = { referenciaTipo: 'maleta', referenciaId: id, usuarioId };
 
       for (const i of itens) {
@@ -339,7 +348,7 @@ export class MaletasService {
 
       const fechou = resultado.pecas.continuam === 0;
       const lim = fechou
-        ? novoLimite(sit.limite, { diasAtraso: resultado.diasAtraso, percentualVendidoPb: resultado.percentualVendidoPb, houvePerda: resultado.pecas.perdidas > 0 }, regras)
+        ? novoLimite(sit.limite, { diasAtraso: resultado.diasAtraso, ...maletaInteira }, regras)
         : { limite: sit.limite, motivo: 'Acerto parcial.' };
 
       const [acerto] = await tx

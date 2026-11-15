@@ -490,6 +490,8 @@ export const vendas = pgTable(
     desconto: integer('desconto').notNull().default(0),
     total: integer('total').notNull(),
     troco: integer('troco').notNull().default(0),
+    /** Quanto desta venda já voltou em devoluções (centavos). Venda líquida = total − devolvido. */
+    devolvido: integer('devolvido').notNull().default(0),
     status: statusVenda('status').notNull().default('concluida'),
     observacao: text('observacao'),
     motivoCancelamento: text('motivo_cancelamento'),

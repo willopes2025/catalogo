@@ -1212,6 +1212,55 @@ test('CRM: funis, números de WhatsApp, fila de atendimento, chat, conversa inte
   assert.equal((await ok('GET', `/crm/leads/${novo.id}`)).tarefas.length, 0);
 });
 
+test('limite olha a maleta inteira depois de acerto parcial; indicadores batem entre si', async () => {
+  const dia = (n) => new Date(Date.now() - 3 * 3600e3 - n * 86400e3).toISOString().slice(0, 10);
+  const regras = await ok('GET', '/configuracoes/regras-consignado');
+  await ok('PUT', '/configuracoes/regras-consignado', { ...regras, multaAtrasoPb: 0, jurosMesPb: 0, diasParaBloquear: 0 });
+  const p = await ok('POST', '/pessoas', { tipo: 'representante', nome: 'Parcial Indicadores', telefone1: '27999991234', cidade: 'Serra', uf: 'ES', modeloTrabalho: 'consignado', limiteCredito: 100000 });
+  await ok('PATCH', `/pessoas/${p.id}`, { status: 'ativo' });
+  const [a, b] = (await ok('GET', '/produtos')).itens.slice(20, 22).sort((x, y) => y.preco - x.preco);
+  const m = await ok('POST', '/maletas', { representanteId: p.id, origemId: ctx.deposito.id, dataRetirada: dia(10), itens: [{ codigoBarras: a.codigoBarras, quantidade: 2 }, { codigoBarras: b.codigoBarras, quantidade: 2 }], liberarExcecao: true });
+  const base = { forma: 'avista', modalidade: 'presencial', parcelas: 1, formaPagamento: 'pix', pagoAgora: true };
+  // 1º acerto (parcial): vendeu as duas peças mais caras. 2º acerto fecha devolvendo o resto.
+  const r1 = await ok('POST', `/maletas/${m.id}/acerto`, { ...base, parcial: true, itens: [{ produtoId: a.id, vendida: 2, devolvida: 0, perdida: 0 }] });
+  assert.equal(r1.fechou, false);
+  assert.equal(r1.limiteNovo, 100000, 'parcial não mexe no limite');
+  const r2 = await ok('POST', `/maletas/${m.id}/acerto`, { ...base, parcial: false, itens: [{ produtoId: b.id, vendida: 0, devolvida: 2, perdida: 0 }] });
+  assert.equal(r2.fechou, true);
+  assert.equal(r2.resultado.percentualVendidoPb, 0, 'o último pedaço, sozinho, não vendeu nada');
+  assert.ok(r2.limiteNovo > 100000, 'mas a maleta inteira bateu a meta: o limite sobe');
+
+  // Indicadores: mesmas fontes, mesmos números.
+  const q = `de=${dia(700)}&ate=${dia(0)}`;
+  const g = await ok('GET', `/indicadores/geral?${q}`);
+  const des = await ok('GET', `/relatorios/desempenho?${q}`);
+  assert.equal(g.atual.rede, des.linhas.reduce((s, l) => s + l.vendido, 0), 'rede = soma do desempenho');
+  assert.equal(g.atual.lucroBruto, g.atual.faturamento - g.atual.comissaoRede - g.atual.cmv);
+  assert.ok(g.atual.devolucoes > 0, 'devolução da loja aparece e já está descontada');
+  assert.ok(g.atual.cmv > 0 && g.atual.margemPb > 0 && g.atual.margemPb < 10000);
+  assert.equal(g.serie.length, 12);
+  assert.ok(Array.isArray(g.alertas));
+  const pr = await ok('GET', `/indicadores/produtos?${q}`);
+  assert.ok(Math.abs(pr.resumo.faturamento - g.atual.faturamento) < 100, `produtos ${pr.resumo.faturamento} x geral ${g.atual.faturamento}`);
+  assert.equal(pr.resumo.cmv, g.atual.cmv);
+  assert.equal(typeof pr.maisVendidos[0].codigo_barras, 'string', 'código de barras continua texto');
+  const rd = await ok('GET', `/indicadores/rede?${q}`);
+  const eu = rd.linhas.find((l) => l.id === p.id);
+  assert.equal(eu.acertos, 2);
+  assert.equal(eu.vendido, a.preco * 2);
+  assert.equal(eu.sell_through_pb, 5000, '2 de 4 peças');
+  assert.equal(rd.resumo.vendido, g.atual.rede);
+  const fin = await ok('GET', '/indicadores/financeiro');
+  assert.equal(fin.meses.length, 6);
+  assert.equal(fin.fluxo.length, 8);
+  const crm = await ok('GET', `/indicadores/crm?${q}`);
+  assert.ok(crm.funis.length >= 3);
+  assert.equal((await chamar('GET', '/indicadores/geral?de=2026-02-30&ate=x')).status, 400);
+  // Cartão não é inadimplência: a venda no crédito (títulos da maquininha) não entra em "vencido".
+  const ini = await ok('GET', '/painel/inicio');
+  assert.equal(typeof ini.financeiro.vencido, 'number');
+});
+
 test('implantação: apagar dados de teste exige APAGAR e mantém o que é configuração', async () => {
   assert.equal((await chamar('POST', '/implantacao/apagar-dados-de-teste', { confirmacao: 'apagar' })).status, 400);
   const bloq = await chamar('POST', '/implantacao/apagar-dados-de-teste', { confirmacao: 'APAGAR', manterProdutos: true });

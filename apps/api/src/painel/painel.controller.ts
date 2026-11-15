@@ -60,7 +60,8 @@ export class PainelController {
         aReceber: sql<number>`coalesce(sum(${titulos.valor}),0)::bigint`,
       })
       .from(titulos)
-      .where(and(eq(titulos.tipo, 'receber'), eq(titulos.status, 'aberto')));
+      // Cartão é repasse da maquininha, não dívida de cliente: não entra em "vencido".
+      .where(and(eq(titulos.tipo, 'receber'), eq(titulos.status, 'aberto'), sql`coalesce(${titulos.formaPagamento}, '') not in ('debito', 'credito')`));
 
     const [mes] = await this.db
       .select({
@@ -124,8 +125,8 @@ export class PainelController {
     const porLocal = linhas<{ id: string; nome: string; tipo: string; hoje: number; mes: number; qtdMes: number }>(
       await this.db.execute(sql`
         select l.id, l.nome, l.tipo::text as tipo,
-          coalesce(sum(v.total) filter (where ${dia} = ${h}::date),0)::bigint as hoje,
-          coalesce(sum(v.total),0)::bigint as mes,
+          coalesce(sum(v.total - v.devolvido) filter (where ${dia} = ${h}::date),0)::bigint as hoje,
+          coalesce(sum(v.total - v.devolvido),0)::bigint as mes,
           count(v.id)::int as "qtdMes"
         from vendas v join locais_estoque l on l.id = v.local_id
         where v.status = 'concluida' and ${dia} >= ${inicioMes}::date
@@ -149,7 +150,7 @@ export class PainelController {
 
     const vendedoras = linhas<{ id: string; nome: string; vendido: number; vendas: number }>(
       await this.db.execute(sql`
-        select u.id, u.nome, coalesce(sum(v.total),0)::bigint as vendido, count(v.id)::int as vendas
+        select u.id, u.nome, coalesce(sum(v.total - v.devolvido),0)::bigint as vendido, count(v.id)::int as vendas
         from vendas v join usuarios u on u.id = v.vendedor_id
         where v.status = 'concluida' and ${dia} >= ${inicioMes}::date
         group by u.id, u.nome
@@ -162,7 +163,7 @@ export class PainelController {
         with dias as (select generate_series(${inicio30}::date, ${h}::date, interval '1 day')::date as dia),
         r as (select data as dia, sum((resultado->>'totalVendido')::int) as t from acertos where data >= ${inicio30}::date group by data),
         lv as (
-          select ${dia} as dia, sum(v.total) filter (where l.tipo = 'evento') as ev, sum(v.total) filter (where l.tipo <> 'evento') as lj
+          select ${dia} as dia, sum(v.total - v.devolvido) filter (where l.tipo = 'evento') as ev, sum(v.total - v.devolvido) filter (where l.tipo <> 'evento') as lj
           from vendas v join locais_estoque l on l.id = v.local_id
           where v.status = 'concluida' and ${dia} >= ${inicio30}::date group by 1)
         select to_char(d.dia, 'YYYY-MM-DD') as dia, coalesce(r.t,0)::bigint as rede, coalesce(lv.lj,0)::bigint as lojas, coalesce(lv.ev,0)::bigint as eventos
@@ -210,7 +211,7 @@ export class PainelController {
       if (pedidos) r.push({ chave: 'pedidos_pecas', rotulo: 'Pedidos de peças das representantes', quantidade: pedidos, link: '/maletas?aba=pedidos', tom: 'alerta' });
     }
     if (pode('financeiro')) {
-      const vencidos = await conta(sql`select count(*)::int as n from titulos where tipo = 'receber' and status = 'aberto' and vencimento < ${h}::date`);
+      const vencidos = await conta(sql`select count(*)::int as n from titulos where tipo = 'receber' and status = 'aberto' and vencimento < ${h}::date and coalesce(forma_pagamento, '') not in ('debito', 'credito')`);
       const pagarHoje = await conta(sql`select count(*)::int as n from titulos where tipo = 'pagar' and status = 'aberto' and vencimento <= ${h}::date`);
       if (vencidos) r.push({ chave: 'contas_vencidas', rotulo: 'Contas a receber vencidas', quantidade: vencidos, link: '/financeiro', tom: 'erro' });
       if (pagarHoje) r.push({ chave: 'pagar_hoje', rotulo: 'Contas a pagar até hoje', quantidade: pagarHoje, link: '/financeiro', tom: 'alerta' });

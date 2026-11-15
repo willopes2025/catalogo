@@ -159,6 +159,24 @@ const SECOES: Secao[] = [
     ],
   },
   {
+    id: 'indicadores',
+    titulo: 'Indicadores: os números para decidir',
+    passos: [
+      { t: 'Visão do negócio', d: 'Em Relatórios, a primeira aba mostra faturamento, receita da empresa (já sem a comissão das revendedoras), lucro bruto, margem e dinheiro recebido, sempre comparados com o período anterior. No topo ficam os avisos do que pede decisão.' },
+      { t: 'Rede', d: 'Cada consultora com vendido, tendência, % das peças vendidas, giro da maleta e o que deve. Use os filtros "Em risco", "Paradas" e "Abaixo da meta" para saber com quem falar primeiro.' },
+      { t: 'Produtos', d: 'O que mais fatura e dá margem, a sugestão de reposição (produtos com menos de 30 dias de estoque), o capital parado (90+ dias sem vender) e o que a rede mais devolve.' },
+      { t: 'Financeiro', d: 'Resultado mês a mês (vendas, comissão, custo das peças, despesas), o caixa previsto para as próximas 8 semanas e quem deve, por tempo de atraso.' },
+      { t: 'CRM', d: 'Conversão de cada funil, de onde vêm os leads que fecham, motivos de perda e tempo de espera na fila.' },
+    ],
+    dicas: [
+      'Faturamento é sempre líquido: vendas canceladas não entram e devoluções são descontadas.',
+      'Margem só fica certa com o custo preenchido no cadastro do produto.',
+      'O resultado desconta as despesas que foram lançadas e baixadas no Financeiro. Lance aluguel, folha e fornecedores lá, com categoria.',
+      'Venda no cartão não é inadimplência: o repasse da maquininha aparece à parte, como "cartão para conciliar".',
+      'Toda tabela ordena ao clicar no título da coluna e vai para o Excel.',
+    ],
+  },
+  {
     id: 'implantacao',
     titulo: 'Implantação: o que falta para começar',
     passos: [

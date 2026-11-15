@@ -4,6 +4,7 @@ import { DB, type Db } from '../comum/db.module';
 import { Permissao } from '../comum/auth';
 import { hoje } from '../maletas/maletas.service';
 import { somarDias } from '@aritana/regras';
+import { ITENS_DEVOLVIDOS_REDE, ITENS_VENDIDOS, NAO_E_CARTAO, numeros } from './fontes';
 
 /** Relatórios gerenciais. Todos aceitam ?de=AAAA-MM-DD&ate=AAAA-MM-DD (padrão: últimos 30 dias). */
 @Controller('relatorios')
@@ -17,8 +18,8 @@ export class RelatoriosController {
     return { ini, fim };
   }
 
-  private num<T extends Record<string, unknown>>(rows: T[]) {
-    return rows.map((r) => Object.fromEntries(Object.entries(r).map(([k, v]) => [k, typeof v === 'string' && /^-?\d+(\.\d+)?$/.test(v) ? Number(v) : v])));
+  private num(rows: unknown) {
+    return numeros<Record<string, unknown>>(rows);
   }
 
   /** Desempenho por representante nos acertos do período. */
@@ -29,13 +30,14 @@ export class RelatoriosController {
     const r = await this.db.execute(sql`
       select p.id, p.nome, p.cidade, n.nome as nivel, l.nome as lider,
         count(a.id)::int as acertos,
-        coalesce(sum((a.resultado->'pecas'->>'emMaleta')::int),0)::int as pecas_acertadas,
+        coalesce(sum(((a.resultado->'pecas'->>'emMaleta')::int - coalesce((a.resultado->'pecas'->>'continuam')::int, 0))),0)::int as pecas_acertadas,
         coalesce(sum((a.resultado->'pecas'->>'vendidas')::int),0)::int as pecas_vendidas,
         coalesce(sum((a.resultado->'pecas'->>'perdidas')::int),0)::int as pecas_perdidas,
         coalesce(sum((a.resultado->>'totalVendido')::int),0)::bigint as vendido,
         coalesce(sum((a.resultado->>'comissao')::int),0)::bigint as comissao,
         coalesce(sum(a.total_a_pagar),0)::bigint as devido_matriz,
-        coalesce(round(avg((a.resultado->>'percentualVendidoPb')::int)),0)::int as percentual_medio_pb,
+        -- % vendido em peças, sobre o que foi de fato acertado (acerto parcial não conta duas vezes o que ficou na maleta)
+        coalesce(round(sum((a.resultado->'pecas'->>'vendidas')::int) * 10000.0 / nullif(sum((a.resultado->'pecas'->>'emMaleta')::int - coalesce((a.resultado->'pecas'->>'continuam')::int, 0)), 0)),0)::int as percentual_medio_pb,
         coalesce(round(avg((a.resultado->>'diasAtraso')::int)),0)::int as atraso_medio
       from acertos a
       join maletas m on m.id = a.maleta_id
@@ -73,11 +75,13 @@ export class RelatoriosController {
   @Permissao('relatorios', 'ver')
   async produtos(@Query('de') de?: string, @Query('ate') ate?: string) {
     const { ini, fim } = this.periodo(de, ate);
+    // Vendas reais (rede + loja), pelo preço e custo do momento, sem vendas canceladas e já sem as devoluções.
     const r = await this.db.execute(sql`
       with vend as (
-        select produto_id, sum(quantidade)::int as vendidas from movimentos
-        where tipo = 'venda' and criado_em >= ${ini}::date and criado_em < ${fim}::date + 1
-        group by produto_id
+        select produto_id, sum(qtd)::int as vendidas, sum(valor) as faturamento, sum(custo) as cmv
+        from ${ITENS_VENDIDOS} x where x.dia between ${ini}::date and ${fim}::date group by produto_id
+      ), dev as (
+        select produto_id, sum(qtd)::int as devolvidas from ${ITENS_DEVOLVIDOS_REDE} d where d.dia between ${ini}::date and ${fim}::date group by produto_id
       ), est as (
         select s.produto_id,
           sum(case when l.tipo <> 'maleta' then s.quantidade else 0 end)::int as estoque,
@@ -85,10 +89,11 @@ export class RelatoriosController {
         from saldos s join locais_estoque l on l.id = s.local_id group by s.produto_id
       )
       select p.codigo_barras, p.referencia, p.descricao, c.nome as categoria, p.preco, p.custo,
-        coalesce(v.vendidas,0) as vendidas, coalesce(e.estoque,0) as estoque, coalesce(e.em_maletas,0) as em_maletas,
-        coalesce(v.vendidas,0) * p.preco as faturamento,
+        coalesce(v.vendidas,0) as vendidas, coalesce(d.devolvidas,0) as devolvidas_rede, coalesce(e.estoque,0) as estoque, coalesce(e.em_maletas,0) as em_maletas,
+        coalesce(v.faturamento,0) as faturamento, coalesce(v.cmv,0) as cmv, coalesce(v.faturamento,0) - coalesce(v.cmv,0) as margem,
+        case when coalesce(v.cmv,0) > 0 and v.faturamento > 0 then round((v.faturamento - v.cmv) * 10000 / v.faturamento) else null end as margem_pb,
         case when coalesce(e.estoque,0) + coalesce(e.em_maletas,0) > 0 then round(coalesce(v.vendidas,0)::numeric / (coalesce(e.estoque,0) + coalesce(e.em_maletas,0)), 2) else null end as giro
-      from produtos p left join categorias c on c.id = p.categoria_id left join vend v on v.produto_id = p.id left join est e on e.produto_id = p.id
+      from produtos p left join categorias c on c.id = p.categoria_id left join vend v on v.produto_id = p.id left join dev d on d.produto_id = p.id left join est e on e.produto_id = p.id
       where p.ativo and (coalesce(v.vendidas,0) > 0 or coalesce(e.estoque,0) > 0 or coalesce(e.em_maletas,0) > 0)
       order by faturamento desc nulls last, p.descricao`);
     const linhas = this.num(r.rows) as Record<string, number | string>[];
@@ -111,8 +116,8 @@ export class RelatoriosController {
       with d as (select generate_series(${ini}::date, ${fim}::date, '1 day')::date as dia)
       select d.dia,
         coalesce((select sum((a.resultado->>'totalVendido')::int) from acertos a where a.data = d.dia),0)::bigint as rede,
-        coalesce((select sum(v.total) from vendas v where v.status = 'concluida' and v.tipo = 'balcao' and (v.criado_em at time zone 'America/Sao_Paulo')::date = d.dia),0)::bigint as loja,
-        coalesce((select sum(v.total) from vendas v where v.status = 'concluida' and v.tipo <> 'balcao' and (v.criado_em at time zone 'America/Sao_Paulo')::date = d.dia),0)::bigint as outras
+        coalesce((select sum(v.total - v.devolvido) from vendas v where v.status = 'concluida' and v.tipo = 'balcao' and (v.criado_em at time zone 'America/Sao_Paulo')::date = d.dia),0)::bigint as loja,
+        coalesce((select sum(v.total - v.devolvido) from vendas v where v.status = 'concluida' and v.tipo <> 'balcao' and (v.criado_em at time zone 'America/Sao_Paulo')::date = d.dia),0)::bigint as outras
       from d order by d.dia`);
     const porForma = await this.db.execute(sql`
       select vp.forma, count(*)::int as quantidade, sum(vp.valor)::bigint as valor
@@ -139,7 +144,7 @@ export class RelatoriosController {
     const faixas = await this.db.execute(sql`
       select case when current_date - vencimento <= 15 then '1 a 15 dias' when current_date - vencimento <= 30 then '16 a 30 dias' when current_date - vencimento <= 60 then '31 a 60 dias' else 'Mais de 60 dias' end as faixa,
         count(*)::int as titulos, count(distinct pessoa_id)::int as pessoas, sum(valor)::bigint as valor
-      from titulos where tipo = 'receber' and status = 'aberto' and vencimento < current_date
+      from titulos where tipo = 'receber' and status = 'aberto' and vencimento < current_date and ${NAO_E_CARTAO}
       group by 1 order by min(current_date - vencimento)`);
     const devedores = await this.db.execute(sql`
       select p.nome, p.telefone1 as telefone, count(*)::int as titulos, sum(t.valor)::bigint as valor, max(current_date - t.vencimento)::int as maior_atraso

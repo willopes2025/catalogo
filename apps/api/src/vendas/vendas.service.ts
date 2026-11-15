@@ -302,6 +302,7 @@ export class VendasService {
       }
       // Venda no boleto/crediário ainda em aberto: a devolução primeiro abate as parcelas (da última para a primeira).
       const total = valor;
+      await tx.update(vendas).set({ devolvido: sql`${vendas.devolvido} + ${total}` }).where(eq(vendas.id, id));
       const abertos = await tx
         .select()
         .from(titulos)

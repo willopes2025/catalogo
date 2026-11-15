@@ -99,6 +99,13 @@
       "when": 1794739605224,
       "tag": "0013_campos_no_quadro",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1794740925167,
+      "tag": "0014_venda_devolvido",
+      "breakpoints": true
     }
   ]
 }
