@@ -171,10 +171,11 @@ export class RhService {
 
     return this.db.transaction(async (tx) => {
       // Duas batidas no mesmo minuto (toque duplo, internet lenta): a segunda é recusada.
+      // A trava do NSR vem primeiro: dois toques ao mesmo tempo entram em fila e o segundo já enxerga o primeiro.
+      const { nsr, hashAnterior } = await this.proximoNsr(tx, f.empresaId);
       const [ultima] = await tx.select({ m: rhRegistros.marcadoEm }).from(rhRegistros).where(and(eq(rhRegistros.funcionarioId, f.id), eq(rhRegistros.tipo, 7))).orderBy(desc(rhRegistros.marcadoEm)).limit(1);
       const agora = new Date();
       if (ultima?.m && agora.getTime() - ultima.m.getTime() < 60_000) throw new BadRequestException('Ponto já registrado agora há pouco. Aguarde um minuto para bater de novo.');
-      const { nsr, hashAnterior } = await this.proximoNsr(tx, f.empresaId);
       const base = { nsr, marcadoEm: agora, cpf: f.cpf, gravadoEm: agora, coletor: d.coletor, online: true };
       const hash = hashMarcacao(base, hashAnterior);
       const [r] = await tx
@@ -277,6 +278,12 @@ export class RhService {
         toleranciaMarcacao: escala?.toleranciaMarcacao,
         toleranciaDia: escala?.toleranciaDia,
       });
+      // Hoje ainda não acabou: o que falta trabalhar não é falta nem saída antecipada.
+      if (data === h) {
+        r.falta = 0;
+        r.saidaAntecipada = 0;
+        r.faltaDia = false;
+      }
       if (oc && !oc.abona && turno) {
         r.falta = r.previsto;
         r.faltaDia = true;
@@ -300,6 +307,23 @@ export class RhService {
       totais: somarJornada(linhas),
       fechamento: fech ? { fechadoEm: fech.fechadoEm, cienteEm: fech.cienteEm } : null,
     };
+  }
+
+  /**
+   * Ajuste em mês já fechado: o fechamento (e a confirmação do funcionário) deixa de valer,
+   * porque o espelho mudou. A empresa fecha de novo e o funcionário confirma o espelho corrigido.
+   */
+  async reabrirMeses(funcionarioId: string, datas: (string | Date)[]) {
+    const iso = datas.map((d) => (typeof d === 'string' ? d : ymd(d)));
+    const [de, ate] = [iso.reduce((a, b) => (a < b ? a : b)), iso.reduce((a, b) => (a > b ? a : b))];
+    const meses: string[] = [];
+    for (let m = de.slice(0, 7); m <= ate.slice(0, 7) && meses.length < 36; ) {
+      meses.push(m);
+      const [a, mm] = m.split('-').map(Number);
+      m = new Date(Date.UTC(a, mm, 1)).toISOString().slice(0, 7);
+    }
+    const r = await this.db.delete(rhFechamentos).where(and(eq(rhFechamentos.funcionarioId, funcionarioId), inArray(rhFechamentos.competencia, meses))).returning({ competencia: rhFechamentos.competencia });
+    return r.map((x) => x.competencia);
   }
 
   /** Fecha o mês: guarda a foto do espelho de cada um (o funcionário dá ciência no portal). */
@@ -464,7 +488,7 @@ export class RhService {
   async salvarDocumento(funcionarioId: string, d: { tipo: string; titulo?: string | null; competencia?: string | null; data?: string | null; validade?: string | null; visivelFuncionario?: boolean; nomeArquivo: string; mime: string; conteudo: Buffer }, usuarioId: string) {
     await this.obter(funcionarioId);
     if (!(d.tipo in TIPOS_DOCUMENTO)) throw new BadRequestException('Tipo de documento inválido.');
-    if (d.conteudo.length > 20_000_000) throw new BadRequestException('Arquivo maior que 20 MB.');
+    if (d.conteudo.length > 15_000_000) throw new BadRequestException('Arquivo maior que 15 MB.');
     const arquivo = await this.arquivos.salvarPrivado(d.conteudo, d.mime, 'rh');
     const [doc] = await this.db
       .insert(rhDocumentos)

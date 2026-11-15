@@ -4,7 +4,7 @@ import { existsSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import type { Request, Response } from 'express';
 import bcrypt from 'bcryptjs';
-import { and, asc, desc, eq, ilike, or, sql, type SQL } from 'drizzle-orm';
+import { and, asc, desc, eq, ilike, ne, or, sql, type SQL } from 'drizzle-orm';
 import { z } from 'zod';
 import { DB, type Db } from '../comum/db.module';
 import { Permissao, Usuario, contemPermissoes, invalidarSessoes, temPermissao, type UsuarioLogado } from '../comum/auth';
@@ -190,6 +190,11 @@ export class RhController {
     const senha = randomBytes(6).toString('base64url');
     const email = (d.email || f.email || `${f.cpf}@ponto.local`).toLowerCase();
     if (f.usuarioId) {
+      // Quem já tem login: só mexe quem tem pelo menos o mesmo acesso que a pessoa tem hoje (não se rebaixa nem se toma a conta de um gestor).
+      const [atual] = await this.db.select({ permissoes: grupos.permissoes }).from(usuarios).innerJoin(grupos, eq(grupos.id, usuarios.grupoId)).where(eq(usuarios.id, f.usuarioId));
+      if (atual && !contemPermissoes(u.permissoes, atual.permissoes)) throw new ForbiddenException('Esta pessoa tem um nível de acesso maior que o seu. Peça a um administrador para trocar a senha ou o nível dela.');
+      const [outro] = await this.db.select({ id: usuarios.id }).from(usuarios).where(and(eq(usuarios.email, email), ne(usuarios.id, f.usuarioId)));
+      if (outro) throw new BadRequestException('Este e-mail já é o login de outra pessoa.');
       await this.db.update(usuarios).set({ grupoId: g.id, email, ativo: true, senhaHash: await bcrypt.hash(senha, 10), senhaProvisoria: true }).where(eq(usuarios.id, f.usuarioId));
     } else {
       const [ja] = await this.db.select({ id: usuarios.id }).from(usuarios).where(eq(usuarios.email, email));
@@ -230,11 +235,7 @@ export class RhController {
   async baixar(@Param('id', ParseUUIDPipe) id: string, @Res() res: Response) {
     const { doc, caminho } = await this.rh.arquivoDocumento(id);
     if (!existsSync(caminho)) throw new NotFoundException('Arquivo não encontrado.');
-    res.setHeader('Content-Disposition', `inline; filename*=UTF-8''${encodeURIComponent(doc.nomeArquivo)}`);
-    res.setHeader('Content-Type', doc.mime);
-    res.setHeader('X-Content-Type-Options', 'nosniff');
-    res.setHeader('Cache-Control', 'private, no-store');
-    res.sendFile(caminho);
+    servirDocumento(res, doc, caminho);
   }
 
   @Delete('documentos/:id')
@@ -261,6 +262,7 @@ export class RhController {
     if (d.ate < d.de) throw new BadRequestException('A data final é antes da inicial.');
     await this.rh.obter(id);
     const [o] = await this.db.insert(rhOcorrencias).values({ ...d, funcionarioId: id, abona: TIPOS_OCORRENCIA[d.tipo].abona, usuarioId: u.id }).returning();
+    await this.rh.reabrirMeses(id, [d.de, d.ate]);
     if (d.tipo === 'afastamento') await this.db.update(rhFuncionarios).set({ status: 'afastado' }).where(and(eq(rhFuncionarios.id, id), eq(rhFuncionarios.status, 'ativo')));
     await this.auditoria.registrar({ usuarioId: u.id, acao: 'criar', entidade: 'rh_ocorrencia', entidadeId: o.id, dados: d });
     return o;
@@ -271,6 +273,7 @@ export class RhController {
   async apagarOcorrencia(@Usuario() u: UsuarioLogado, @Param('id', ParseUUIDPipe) id: string) {
     const [o] = await this.db.delete(rhOcorrencias).where(eq(rhOcorrencias.id, id)).returning();
     if (!o) throw new NotFoundException('Ocorrência não encontrada.');
+    await this.rh.reabrirMeses(o.funcionarioId, [o.de, o.ate]);
     await this.auditoria.registrar({ usuarioId: u.id, acao: 'excluir', entidade: 'rh_ocorrencia', entidadeId: id, dados: o });
     return { ok: true };
   }
@@ -301,15 +304,18 @@ export class RhController {
       body,
     );
     await this.rh.obter(d.funcionarioId);
+    let registroDesconsiderado: Date | null = null;
     if (d.tipo === 'desconsiderar') {
       const [r] = await this.db.select().from(rhRegistros).where(and(eq(rhRegistros.id, d.registroId), eq(rhRegistros.funcionarioId, d.funcionarioId), eq(rhRegistros.tipo, 7)));
       if (!r) throw new NotFoundException('Marcação não encontrada.');
       const [ja] = await this.db.select({ id: rhTratamentos.id }).from(rhTratamentos).where(and(eq(rhTratamentos.registroId, d.registroId), eq(rhTratamentos.tipo, 'desconsiderar')));
       if (ja) throw new BadRequestException('Esta marcação já foi desconsiderada.');
+      registroDesconsiderado = r.marcadoEm;
     }
     const marcadoEm = d.tipo === 'inclusao' ? new Date(`${d.data}T${d.hora}:00-03:00`) : null;
     if (marcadoEm && marcadoEm > new Date()) throw new BadRequestException('Não dá para incluir batida no futuro.');
     const [t] = await this.db.insert(rhTratamentos).values({ funcionarioId: d.funcionarioId, tipo: d.tipo, registroId: d.tipo === 'desconsiderar' ? d.registroId : null, marcadoEm, motivo: d.motivo, usuarioId: u.id }).returning();
+    await this.rh.reabrirMeses(d.funcionarioId, [marcadoEm ?? registroDesconsiderado!]);
     await this.auditoria.registrar({ usuarioId: u.id, acao: d.tipo === 'inclusao' ? 'incluir_batida' : 'desconsiderar_batida', entidade: 'rh_ponto', entidadeId: t.id, dados: d });
     return t;
   }
@@ -320,6 +326,9 @@ export class RhController {
   async desfazerTratamento(@Usuario() u: UsuarioLogado, @Param('id', ParseUUIDPipe) id: string) {
     const [t] = await this.db.delete(rhTratamentos).where(eq(rhTratamentos.id, id)).returning();
     if (!t) throw new NotFoundException('Ajuste não encontrado.');
+    const [orig] = t.registroId ? await this.db.select({ m: rhRegistros.marcadoEm }).from(rhRegistros).where(eq(rhRegistros.id, t.registroId)) : [];
+    const quando = t.marcadoEm ?? orig?.m;
+    if (quando) await this.rh.reabrirMeses(t.funcionarioId, [quando]);
     await this.auditoria.registrar({ usuarioId: u.id, acao: 'desfazer_ajuste', entidade: 'rh_ponto', entidadeId: id, dados: t });
     return { ok: true };
   }
@@ -649,11 +658,7 @@ export class PontoController {
     const f = await this.eu(u);
     const { doc, caminho } = await this.rh.arquivoDocumento(id);
     if (doc.funcionarioId !== f.id || !doc.visivelFuncionario || !existsSync(caminho)) throw new NotFoundException('Documento não encontrado.');
-    res.setHeader('Content-Disposition', `inline; filename*=UTF-8''${encodeURIComponent(doc.nomeArquivo)}`);
-    res.setHeader('Content-Type', doc.mime);
-    res.setHeader('X-Content-Type-Options', 'nosniff');
-    res.setHeader('Cache-Control', 'private, no-store');
-    res.sendFile(caminho);
+    servirDocumento(res, doc, caminho);
   }
 
   @Post('documentos/:id/ciente')
@@ -663,4 +668,19 @@ export class PontoController {
     if (!r) throw new BadRequestException('Documento não encontrado ou já confirmado.');
     return { ok: true };
   }
+}
+
+/**
+ * Só PDF e imagem abrem na tela. Qualquer outro tipo (ou um tipo inventado no envio, como HTML ou SVG com script)
+ * é entregue como download, para nunca rodar dentro do sistema com o login de quem abriu.
+ */
+const ABRE_NA_TELA = new Set(['application/pdf', 'image/jpeg', 'image/png', 'image/webp', 'image/gif']);
+function servirDocumento(res: Response, doc: { nomeArquivo: string; mime: string }, caminho: string) {
+  const mime = doc.mime.split(';')[0].trim().toLowerCase();
+  const naTela = ABRE_NA_TELA.has(mime);
+  res.setHeader('Content-Disposition', `${naTela ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeURIComponent(doc.nomeArquivo)}`);
+  res.setHeader('Content-Type', naTela ? mime : 'application/octet-stream');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Cache-Control', 'private, no-store');
+  res.sendFile(caminho);
 }

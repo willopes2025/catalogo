@@ -174,6 +174,8 @@ const SECOES: Secao[] = [
     dicas: [
       'Cadastre os locais de trabalho com "Usar onde estou" (em Configurar) estando na loja: assim a cerca do GPS fica certa.',
       'Para o motoboy, que trabalha na rua, deixe a regra do GPS em "Registrar e sinalizar": a batida fora do local aparece marcada no espelho, sem impedir o registro.',
+      'Ajustou uma batida ou lançou atestado num mês que já estava fechado? O fechamento daquele funcionário é desfeito: feche o mês de novo para ele confirmar o espelho corrigido.',
+      'Na pasta do funcionário, PDF e foto abrem na tela; Word, Excel e outros tipos são baixados.',
       'Para o ponto valer como registro oficial (REP-P), o programa precisa do registro no INPI. Depois de registrado, preencha o número em Configurar.',
       'Envie o certificado A1 (e-CNPJ, .pfx) de cada empresa em RH › Configurar: o AFD e o AEJ passam a sair assinados (.zip com o arquivo e o .p7s), como pede a Portaria 671.',
       'Contracheque: a contabilidade manda o PDF, você guarda na pasta do funcionário com o mês, e ele recebe no celular.',

@@ -35,7 +35,9 @@ interface Arquivo {
 /** CSV que o Excel em português abre direto (ponto e vírgula, com BOM). */
 function csv(cabecalho: string[], linhas: (string | number | null | undefined)[][]) {
   const esc = (v: unknown) => {
-    const s = v === null || v === undefined ? '' : String(v);
+    let s = v === null || v === undefined ? '' : String(v);
+    // Texto que começa com = + - @ viraria fórmula no Excel de quem recebe (números negativos continuam números).
+    if (/^[=+\-@\t\r]/.test(s) && !/^-?\d[\d.,]*$/.test(s)) s = `'${s}`;
     return /[;"\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
   };
   return Buffer.from('﻿' + [cabecalho, ...linhas].map((l) => l.map(esc).join(';')).join('\r\n'), 'utf8');

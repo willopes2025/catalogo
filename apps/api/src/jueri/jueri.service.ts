@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import sharp from 'sharp';
 import { BadRequestException, Inject, Injectable, Logger } from '@nestjs/common';
-import { and, eq, isNull, like, sql } from 'drizzle-orm';
+import { and, eq, inArray, isNull, like, sql } from 'drizzle-orm';
 import { gerarSlug, somarDias } from '@aritana/regras';
 import { DB, type Db } from '../comum/db.module';
 import type { Tx } from '../db/client';
@@ -300,6 +300,8 @@ export class JueriService {
     const revs = await this.mapa(tx, pessoas, 'rev:');
     const reps = await this.mapa(tx, pessoas, 'rep:');
     const prods = await this.mapa(tx, produtos, 'prod:');
+    // Só as que tiveram acerto AQUI; maleta encerrada porque o acerto foi feito no Jueri continua valendo pelo histórico.
+    const naPlataforma = new Set((await tx.select({ idJueri: maletas.idJueri }).from(maletas).where(sql`${maletas.idJueri} is not null and exists (select 1 from ${acertos} a where a.maleta_id = ${maletas.id})`)).map((m) => m.idJueri!));
     let vendido = 0;
     let semPessoa = 0;
     let menor: string | null = null;
@@ -309,6 +311,11 @@ export class JueriService {
       ph.lidos++;
       const numero = txt(pegar(ped, 'codigo_pedido', 'id'));
       try {
+        // Maleta que veio aberta e foi acertada aqui já conta pelos acertos da plataforma: no histórico seria venda em dobro.
+        if (naPlataforma.has(`ped:${ped.id}`)) {
+          ph.ignorados++;
+          continue;
+        }
         const data = dataISO(pegar(ped, 'data_baixa', 'data_acerto', 'data_fechamento', 'data_retorno', 'data_devolucao', 'updated_at', 'data_pedido', 'data', 'created_at'));
         if (!data) throw new Error('sem data');
         const revJ = ped.fk_revendedor_id != null ? String(ped.fk_revendedor_id) : null;
@@ -368,6 +375,11 @@ export class JueriService {
       }
     }
     if (ph.lidos) ph.avisos.push(`Histórico de ${menor ?? '?'} a ${maior ?? '?'}: ${(vendido / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} vendidos pela rede. Só entra nos relatórios; estoque, maletas e financeiro não mudam.`);
+    if (ph.ignorados && naPlataforma.size) {
+      ph.avisos.push(`${ph.ignorados} acerto(s) de maletas que vieram abertas e foram acertadas na plataforma ficaram fora do histórico, para não contar a venda duas vezes.`);
+      // Se algum já tinha entrado numa importação anterior, sai agora.
+      await tx.delete(jueriHistorico).where(inArray(jueriHistorico.idJueri, [...naPlataforma]));
+    }
     if (semPessoa) ph.avisos.push(`${semPessoa} acerto(s) de revendedora que não veio na importação (excluída no Jueri?): entram no total da rede, sem nome.`);
   }
 

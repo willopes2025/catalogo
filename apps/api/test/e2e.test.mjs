@@ -1488,6 +1488,34 @@ test('RH e ponto: cadastro, login pelo CPF, batida com foto e GPS, ajustes, espe
   }
   assert.ok((await ok('GET', '/rh/envios')).length >= 1);
 
+  // Arquivo que não é PDF nem imagem (ou diz ser HTML) nunca abre dentro do sistema: sai como download.
+  const html = await ok('POST', `/rh/funcionarios/${f.id}/documentos`, { tipo: 'outro', nomeArquivo: 'pagina.html', mime: 'text/html', base64: Buffer.from('<script>alert(1)</script>').toString('base64') });
+  const baixado = await fetch(`${API}/rh/documentos/${html.id}/arquivo`, { headers: { authorization: `Bearer ${token}` } });
+  assert.equal(baixado.headers.get('content-type'), 'application/octet-stream');
+  assert.match(baixado.headers.get('content-disposition'), /^attachment/);
+  const pdfAberto = await fetch(`${API}/rh/documentos/${cc.id}/arquivo`, { headers: { authorization: `Bearer ${token}` } });
+  assert.equal(pdfAberto.headers.get('content-type'), 'application/pdf');
+  assert.match(pdfAberto.headers.get('content-disposition'), /^inline/);
+
+  // Ajuste em mês já fechado e confirmado: o fechamento deixa de valer (fecha de novo, confirma de novo).
+  assert.ok((await ok('GET', `/rh/espelho/${f.id}?competencia=${mesPassado}`)).fechamento?.cienteEm, 'estava fechado e confirmado');
+  const aj = await ok('POST', '/rh/tratamentos', { tipo: 'inclusao', funcionarioId: f.id, data: `${mesPassado}-10`, hora: '08:00', motivo: 'Batida esquecida, achada depois do fechamento' });
+  assert.equal((await ok('GET', `/rh/espelho/${f.id}?competencia=${mesPassado}`)).fechamento, null, 'mês reaberto pelo ajuste');
+  await ok('DELETE', `/rh/tratamentos/${aj.id}`);
+  await ok('POST', '/rh/fechar', { competencia: mesPassado, funcionarioIds: [f.id] });
+  assert.equal((await ok('GET', `/rh/espelho/${f.id}?competencia=${mesPassado}`)).fechamento.cienteEm, null, 'precisa confirmar de novo');
+
+  // Quem cuida do RH não troca a senha nem rebaixa o acesso de quem tem mais acesso que ele.
+  const chefe = await ok('POST', '/rh/funcionarios', { ...base, nome: 'Diretora Teste', cpf: '111.444.777-35', cargo: 'Diretora', acesso: { grupoId: grupos.find((g) => g.nome === 'Diretoria').id, email: 'diretora.rh@aritana.local' } });
+  const gRh = await ok('POST', '/grupos', { nome: 'RH teste', permissoes: { rh: ['ver', 'criar', 'editar'] } });
+  const uRh = await ok('POST', '/usuarios', { nome: 'Analista RH', email: 'rh.teste@aritana.local', grupoId: gRh.id });
+  token = (await ok('POST', '/auth/login', { email: 'rh.teste@aritana.local', senha: uRh.senhaProvisoria })).token;
+  await ok('POST', '/auth/trocar-senha', { atual: uRh.senhaProvisoria, nova: 'AnalistaRh2026x' });
+  assert.equal((await chamar('POST', `/rh/funcionarios/${chefe.id}/acesso`, { grupoId: soPonto.id })).status, 403, 'não toma a conta da diretora');
+  assert.equal((await chamar('POST', `/rh/funcionarios/${f.id}/acesso`, { grupoId: soPonto.id, email: 'diretora.rh@aritana.local' })).status, 400, 'e-mail de outra pessoa');
+  assert.ok((await ok('POST', `/rh/funcionarios/${f.id}/acesso`, { grupoId: soPonto.id })).senhaProvisoria.senha, 'do motoboy ela pode refazer');
+  token = gestor;
+
   // Desligamento: o acesso é cortado e o ponto não pode mais ser batido.
   await ok('POST', `/rh/funcionarios/${f.id}/desligar`, { data: hoje, motivo: 'Pedido de demissão' });
   token = '';

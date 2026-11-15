@@ -40,7 +40,15 @@ export async function abrirArquivo(url: string, opcoes: { metodo?: string; corpo
     // AFD/AEJ assinados vêm num .zip (arquivo + .p7s).
     a.download = /zip/.test(r.headers.get('content-type') ?? '') ? opcoes.baixarComo.replace(/\.[a-z0-9]+$/i, '') + '.zip' : opcoes.baixarComo;
     a.click();
-  } else window.open(link, '_blank', 'noopener');
+  } else if (/^(application\/pdf|image\/(jpeg|png|webp|gif))$/.test(blob.type)) window.open(link, '_blank', 'noopener');
+  else {
+    // Outros tipos (Word, Excel…) nunca abrem dentro do sistema: são baixados com o nome original.
+    const a = document.createElement('a');
+    a.href = link;
+    const nome = r.headers.get('content-disposition')?.match(/filename\*=UTF-8''([^;]+)/)?.[1];
+    a.download = nome ? decodeURIComponent(nome) : 'arquivo';
+    a.click();
+  }
   setTimeout(() => URL.revokeObjectURL(link), 60_000);
 }
 
