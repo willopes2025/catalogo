@@ -186,6 +186,7 @@ const SECOES: Secao[] = [
       { t: 'Produtos', d: 'O que mais fatura e dá margem, a sugestão de reposição (produtos com menos de 30 dias de estoque), o capital parado (90+ dias sem vender) e o que a rede mais devolve.' },
       { t: 'Financeiro', d: 'Resultado mês a mês (vendas, comissão, custo das peças, despesas), o caixa previsto para as próximas 8 semanas e quem deve, por tempo de atraso.' },
       { t: 'CRM', d: 'Conversão de cada funil, de onde vêm os leads que fecham, motivos de perda e tempo de espera na fila.' },
+      { t: 'Histórico do Jueri', d: 'Em Configurações › Importar, "Verificar histórico" mostra quantos acertos antigos existem no Jueri, sem gravar nada. Depois marque "Histórico de acertos já baixados", simule e importe. Ele aparece em Relatórios › Rede (venda mês a mês e o que mais vendia) e na aba Maletas de cada consultora. Não mexe em estoque, maletas nem contas.' },
       { t: 'Metas', d: 'Defina no começo do mês o faturamento, a meta da rede, de cada loja ou evento e de novas revendedoras. Todo dia o sistema mostra o realizado, a projeção pelo ritmo e quanto falta vender por dia. "Copiar do mês anterior" agiliza. As metas aparecem também no Início.' },
     ],
     dicas: [

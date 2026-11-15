@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import { HistoricoRede } from './Historico';
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { api } from '../../api';
@@ -81,6 +82,7 @@ export function Rede({ de, ate }: { de: string; ate: string }) {
           : k === 'tendencia_pb' && !l.vendido && !l.vendido_anterior ? <span className="muted">—</span>
           : undefined}
       />
+      <div className="ind-grade k2" style={{ marginTop: 14 }}><HistoricoRede i={9} /></div>
     </>
   );
 }

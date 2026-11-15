@@ -872,7 +872,7 @@ test('Jueri pela API: testa a conexão, simula sem gravar, importa tudo e repeti
     }
     throw new Error('importação não terminou');
   };
-  const todas = ['cadastros', 'produtos', 'pessoas', 'maletas', 'financeiro', 'fotos'];
+  const todas = ['cadastros', 'produtos', 'pessoas', 'maletas', 'financeiro', 'historico', 'fotos'];
   await ok('POST', '/jueri/importar', { simular: true, etapas: todas, localId: local.id });
   assert.equal((await chamar('POST', '/jueri/importar', { simular: true, etapas: todas, localId: local.id })).status, 400, 'uma de cada vez');
   let ex = await esperar();
@@ -888,6 +888,14 @@ test('Jueri pela API: testa a conexão, simula sem gravar, importa tudo e repeti
   assert.ok(ex.partes['Maletas abertas'].motivos['produto(s) não encontrados: #'] === 1, 'problemas agrupados por motivo');
   assert.ok(ex.estruturas.pedidoItem.includes('fk_produto_id'));
   assert.equal((await chamar('GET', '/produtos/codigo/7899990090010')).status, 404, 'simulação não grava');
+  assert.equal(ex.partes['Histórico de acertos'].criados, 3, JSON.stringify(ex.partes['Histórico de acertos']));
+  assert.ok(ex.estruturas.pedidoBaixadoItem.includes('quantidade_vendida'));
+  // Conferência do histórico: contagem e nomes de campos, sem gravar e sem valores pessoais.
+  const ver = await ok('POST', '/jueri/historico/verificar');
+  assert.equal(ver.acertosBaixados, 3);
+  assert.ok(ver.camposDoItem.includes('quantidade_vendida') && ver.temQuantidadeVendida && ver.temPreco);
+  assert.ok(!JSON.stringify(ver).includes('Revendedora API Jueri'), 'não mostra nomes');
+  assert.equal((await ok('GET', '/indicadores/historico')).jueri.acertos, 0, 'simulação não grava o histórico');
 
   await ok('POST', '/jueri/importar', { simular: false, etapas: todas, localId: local.id, comissaoRepresentantePb: 1000 });
   ex = await esperar();
@@ -944,6 +952,20 @@ test('Jueri pela API: testa a conexão, simula sem gravar, importa tudo e repeti
   assert.ok(finLider.titulos.some((t) => t.valor === 10000 && t.vencimento === '2027-01-05'), 'parcela 2/2 ligada pelo nome do contato');
   assert.ok(fin.titulos.some((t) => t.valor === 6000), 'parcela 1/2 ligada pelo id e tipo do contato, com o saldo após pagamento parcial');
 
+  // Histórico: só relatório. Soma por mês, por consultora e por produto; não mexe em estoque nem maletas.
+  const h = await ok('GET', '/indicadores/historico');
+  assert.equal(h.jueri.acertos, 3);
+  assert.equal(h.jueri.vendido, 2 * 5990 + 3 * 3000 + 1000);
+  assert.equal(h.jueri.de, '2026-09-02');
+  assert.equal(h.linhas.find((l) => l.mes === '2026-09').jueri, 2 * 5990);
+  assert.equal(h.linhas.find((l) => l.mes === '2026-09').sell_through_pb, 4000, '2 de 5 peças');
+  assert.equal(h.linhas.find((l) => l.mes === '2026-10').jueri, 3 * 3000 + 1000);
+  assert.equal(h.produtos.find((x) => x.referencia === 'API-01').vendidas, 2);
+  const hp = await ok('GET', `/indicadores/historico/pessoa/${rev.id}`);
+  assert.equal(hp.jueri.acertos, 2, 'o pedido de revendedora não importada fica só no total');
+  assert.equal(hp.linhas.find((l) => l.mes === '2026-10').jueri, 9000);
+  assert.equal((await ok('GET', `/pessoas/${rev.id}`)).maletas.length, 1, 'acerto antigo não vira maleta');
+
   // Repetir: atualiza, não duplica.
   await ok('POST', '/jueri/importar', { simular: false, etapas: todas, localId: local.id });
   ex = await esperar();
@@ -956,6 +978,9 @@ test('Jueri pela API: testa a conexão, simula sem gravar, importa tudo e repeti
   assert.equal(ex.partes['Revendedoras'].criados, 0);
   assert.equal(ex.partes['Maletas abertas'].ignorados, 1);
   assert.equal(ex.partes['Contas a receber'].criados, 0);
+  assert.equal(ex.partes['Histórico de acertos'].criados, 0);
+  assert.equal(ex.partes['Histórico de acertos'].atualizados, 3);
+  assert.equal((await ok('GET', '/indicadores/historico')).jueri.acertos, 3, 'repetir não duplica o histórico');
   assert.equal((await ok('GET', `/pessoas/${rev.id}`)).maletas.length, 1);
   const hist = await ok('GET', '/importacao/historico');
   assert.ok(hist.some((h) => h.tipo === 'jueri:api'));

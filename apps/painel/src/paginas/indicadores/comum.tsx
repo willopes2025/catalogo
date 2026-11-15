@@ -129,10 +129,12 @@ export function Cartao({ titulo, sub, children, i = 0, acao }: { titulo: ReactNo
 }
 
 /** Barras empilhadas por período (mês ou semana), com o valor ao passar o mouse. */
-export function BarrasTempo({ pontos, series, altura = 190, linha }: {
+export function BarrasTempo({ pontos, series, altura = 190, linha, rotuloACada = 1 }: {
   pontos: { rotulo: string; valores: Record<string, number>; extra?: string }[]; series: [chave: string, nome: string, cor: string][]; altura?: number;
   /** Linha por cima das barras (ex.: saldo projetado), na mesma escala. */
   linha?: { chave: string; nome: string; cor: string };
+  /** Com muitas barras, mostra o rótulo só de N em N (sempre o último). */
+  rotuloACada?: number;
 }) {
   const max = Math.max(1, ...pontos.map((p) => Math.max(series.reduce((a, s) => a + Math.max(0, p.valores[s[0]] ?? 0), 0), linha ? p.valores[linha.chave] ?? 0 : 0)));
   return (
@@ -152,7 +154,7 @@ export function BarrasTempo({ pontos, series, altura = 190, linha }: {
               {linha && <div>{linha.nome}: {reais(p.valores[linha.chave] ?? 0)}</div>}
               {p.extra && <div>{p.extra}</div>}
             </div>
-            <em>{p.rotulo}</em>
+            <em>{(pontos.length - 1 - k) % rotuloACada === 0 ? p.rotulo : '\u00a0'}</em>
           </div>
         ))}
       </div>

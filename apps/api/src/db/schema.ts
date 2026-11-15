@@ -7,6 +7,7 @@
 import type { CampoFormulario } from '@aritana/regras';
 import { sql } from 'drizzle-orm';
 import {
+  bigint,
   doublePrecision,
   boolean,
   date,
@@ -1509,4 +1510,45 @@ export const metas = pgTable(
     atualizadoEm: atualizadoEm(),
   },
   (t) => ({ porMes: index('metas_mes_idx').on(t.competencia) }),
+);
+
+/**
+ * Histórico do Jueri (só para relatórios): acertos já baixados lá antes da virada.
+ * Não mexe em estoque, maletas nem financeiro; guarda só números por acerto e por produto.
+ */
+export const jueriHistorico = pgTable(
+  'jueri_historico',
+  {
+    id: id(),
+    /** "ped:123" (pedido baixado no Jueri). */
+    idJueri: text('id_jueri').notNull(),
+    pessoaId: uuid('pessoa_id').references(() => pessoas.id, { onDelete: 'set null' }),
+    revendedorJueri: text('revendedor_jueri'),
+    numero: text('numero'),
+    data: date('data').notNull(),
+    pecasEnviadas: integer('pecas_enviadas').notNull().default(0),
+    pecasVendidas: integer('pecas_vendidas').notNull().default(0),
+    pecasDevolvidas: integer('pecas_devolvidas').notNull().default(0),
+    pecasPerdidas: integer('pecas_perdidas').notNull().default(0),
+    valorEnviado: bigint('valor_enviado', { mode: 'number' }).notNull().default(0),
+    valorVendido: bigint('valor_vendido', { mode: 'number' }).notNull().default(0),
+    comissao: bigint('comissao', { mode: 'number' }),
+    importadoEm: criadoEm(),
+  },
+  (t) => ({ uq: uniqueIndex('jueri_historico_uq').on(t.idJueri), porData: index('jueri_historico_data_idx').on(t.data), porPessoa: index('jueri_historico_pessoa_idx').on(t.pessoaId) }),
+);
+
+export const jueriHistoricoItens = pgTable(
+  'jueri_historico_itens',
+  {
+    id: id(),
+    historicoId: uuid('historico_id').notNull().references(() => jueriHistorico.id, { onDelete: 'cascade' }),
+    produtoId: uuid('produto_id').references(() => produtos.id, { onDelete: 'set null' }),
+    produtoJueri: text('produto_jueri'),
+    enviadas: integer('enviadas').notNull().default(0),
+    vendidas: integer('vendidas').notNull().default(0),
+    devolvidas: integer('devolvidas').notNull().default(0),
+    precoUnitario: integer('preco_unitario'),
+  },
+  (t) => ({ porHist: index('jueri_hist_itens_idx').on(t.historicoId), porProduto: index('jueri_hist_itens_prod_idx').on(t.produtoId) }),
 );

@@ -31,6 +31,12 @@ const jueri = {
     { id: 3001, codigo_pedido: 45, status: 'Aberto', fk_revendedor_id: 502, comissao_porcentagem: 30, data_criacao: '2026-11-01 10:00', data_acerto: '2026-12-01 00:00', observacao_interna: 'Obs interna', itens: [{ id: 1, fk_produto_id: 9001, quantidade: 2, valor_unitario: 59.9 }, { id: 2, fk_produto_id: 9002, quantidade: 1 }, { id: 3, fk_produto_id: 9001, quantidade: 1, quantidade_vendida: 1 }] },
     { id: 3002, codigo_pedido: 46, status: 'Aberto', fk_representante_id: 77, comissao_porcentagem: 10, data_criacao: '2026-11-05 10:00', itens: [{ id: 4, fk_produto_id: 9999, quantidade: 1 }] },
   ],
+  // Acertos já baixados no Jueri (histórico): a listagem vem resumida, o detalhe traz os itens.
+  baixados: [
+    { id: 2001, codigo_pedido: 30, status: 'Baixado', fk_revendedor_id: 502, data_criacao: '2026-08-01 10:00', data_baixa: '2026-09-02 15:00', valor_comissao: '35.94', itens: [{ id: 21, fk_produto_id: 9001, quantidade: 3, quantidade_vendida: 2, quantidade_devolvida: 1, valor_unitario: 59.9 }, { id: 22, fk_produto_id: 9002, quantidade: 2, quantidade_vendida: 0, quantidade_devolvida: 2, valor_unitario: 30 }] },
+    { id: 2002, codigo_pedido: 31, status: 'Baixado', fk_revendedor_id: 502, data_criacao: '2026-09-03 10:00', data_baixa: '2026-10-05 11:00', itens: [{ id: 23, fk_produto_id: 9002, quantidade: 4, quantidade_vendida: 3, quantidade_devolvida: 1, valor_unitario: 30 }] },
+    { id: 2003, codigo_pedido: 12, status: 'Baixado', fk_revendedor_id: 99999, data_baixa: '2026-10-10', itens: [{ id: 24, fk_produto_id: 8888, quantidade: 1, quantidade_vendida: 1, valor_unitario: 10 }] },
+  ],
   contas: [
     { id: 1, descricao: 'Parcela acerto 1/2', valor: '150.00', data_vencimento: '2026-12-10', fk_revendedor_id: 502, numero_parcela: 1 },
     { id: 2, descricao: 'Já paga', valor: 80, data_vencimento: '2026-10-01', data_pagamento: '2026-10-01' },
@@ -174,9 +180,10 @@ http
       if (rota === 'revendedor') return responder(res, 200, lista(J.revendedores));
       if (rota === 'representante') return responder(res, 200, lista(J.representantes));
       if (rota === 'cliente') return responder(res, 200, lista(J.clientes));
+      if (rota === 'pedido' && url.searchParams.get('status') === '2') return responder(res, 200, { ...lista(J.baixados.map((p) => ({ id: p.id, codigo_pedido: p.codigo_pedido, status: 'Baixado' }))), total: J.baixados.length });
       if (rota === 'pedido') return responder(res, 200, lista(J.pedidos.map((p) => ({ id: p.id, codigo_pedido: p.codigo_pedido, status: 'Aberto', itens: [{ id: 1, '...': '...' }] }))));
       const ped = rota.match(/^pedido\/(\d+)$/);
-      if (ped) return responder(res, 200, { data: J.pedidos.find((p) => String(p.id) === ped[1]) });
+      if (ped) return responder(res, 200, { data: [...J.pedidos, ...J.baixados].find((p) => String(p.id) === ped[1]) });
       if (rota === 'financeiro/contas_receber') {
         // A primeira chamada recebe "muitas requisições": o importador deve esperar e tentar de novo.
         if (!J.limitou) {

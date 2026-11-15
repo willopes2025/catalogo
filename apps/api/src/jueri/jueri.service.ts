@@ -11,12 +11,12 @@ import { SegredosService } from '../segredos/segredos.service';
 import { ConfiguracoesService } from '../configuracoes/configuracoes.service';
 import { cnpjValido, cpfValido, soDigitos } from '../comum/documentos';
 import { proximoCodigoInterno } from '../comum/codigos';
-import { acertos, categorias, empresas, importacoes, locaisEstoque, maletaItens, maletas, movimentos, niveis, pessoas, produtos, referencias, titulos } from '../db/schema';
+import { acertos, categorias, empresas, importacoes, jueriHistorico, jueriHistoricoItens, locaisEstoque, maletaItens, maletas, movimentos, niveis, pessoas, produtos, referencias, titulos } from '../db/schema';
 import { hoje } from '../maletas/maletas.service';
 import { ArquivosService } from '../arquivos/arquivos.service';
 import { ativo, centavos, primeiroCampo, extrairLista, umRegistro, contaEmAberto, dataISO, estrutura, inteiro, pb, pedidoAberto, pegar, qtdEmAberto, txt, type Reg } from './mapear';
 
-export const ETAPAS = ['cadastros', 'produtos', 'pessoas', 'maletas', 'financeiro', 'fotos'] as const;
+export const ETAPAS = ['cadastros', 'produtos', 'pessoas', 'maletas', 'financeiro', 'historico', 'fotos'] as const;
 export type Etapa = (typeof ETAPAS)[number];
 
 export interface OpcoesJueri {
@@ -248,6 +248,19 @@ export class JueriService {
       dados.contasTotal = [{ n: todas.length }];
     }
 
+    if (quer('historico')) {
+      const lista = await this.todos('pedido', { status: 2 });
+      dados.historico = [];
+      for (const [i, p] of lista.entries()) {
+        this.checar();
+        ex.fase = `Baixando acertos antigos (histórico)… ${i + 1}/${lista.length}`;
+        const itensLista = extrairLista(p.itens).itens;
+        dados.historico.push(itensLista.length && itensLista.every((it) => Object.keys(it).length > 2) ? p : umRegistro(await this.get<unknown>(`pedido/${p.id}`)));
+      }
+      ex.estruturas.pedidoBaixado = estrutura(dados.historico);
+      ex.estruturas.pedidoBaixadoItem = estrutura(dados.historico.flatMap((p) => extrairLista(p.itens).itens), 10);
+    }
+
     // 2) Grava (ou simula) numa transação só.
     ex.fase = op.simular ? 'Simulando a gravação…' : 'Gravando…';
     try {
@@ -259,6 +272,7 @@ export class JueriService {
         if (quer('pessoas')) await rotular('Pessoas', () => this.gravarPessoas(tx, ex, dados, op));
         if (quer('maletas')) await rotular('Maletas', () => this.gravarMaletas(tx, ex, dados.pedidos, local, usuarioId));
         if (quer('financeiro')) await rotular('Contas a receber', () => this.gravarContas(tx, ex, dados.contas, Number(dados.contasTotal?.[0]?.n ?? 0)));
+        if (quer('historico')) await rotular('Histórico', () => this.gravarHistorico(tx, ex, dados.historico));
         this.checar();
         if (op.simular) throw new Simulacao();
       });
@@ -273,6 +287,124 @@ export class JueriService {
       await this.auditoria.registrar({ usuarioId, acao: 'importar', entidade: 'importacao', entidadeId: imp.id, dados: { origem: 'jueri', etapas: op.etapas, criados: soma.c, atualizados: soma.u, erros: erros.length } });
     }
     if (quer('fotos')) await rotular('Fotos', () => this.fotos(ex, dados.produtos ?? [], op.simular));
+  }
+
+  // ───────────── Histórico (só relatório) ─────────────
+
+  /**
+   * Acertos já baixados no Jueri viram histórico de vendas para os relatórios.
+   * Não cria maleta, acerto, movimento de estoque nem conta: só números por acerto e por produto.
+   */
+  private async gravarHistorico(tx: Tx, ex: Execucao, pedidos: Reg[] = []) {
+    const ph = this.parte(ex, 'Histórico de acertos');
+    const revs = await this.mapa(tx, pessoas, 'rev:');
+    const reps = await this.mapa(tx, pessoas, 'rep:');
+    const prods = await this.mapa(tx, produtos, 'prod:');
+    let vendido = 0;
+    let semPessoa = 0;
+    let menor: string | null = null;
+    let maior: string | null = null;
+    for (const ped of pedidos) {
+      this.checar();
+      ph.lidos++;
+      const numero = txt(pegar(ped, 'codigo_pedido', 'id'));
+      try {
+        const data = dataISO(pegar(ped, 'data_baixa', 'data_acerto', 'data_fechamento', 'data_retorno', 'data_devolucao', 'updated_at', 'data_pedido', 'data', 'created_at'));
+        if (!data) throw new Error('sem data');
+        const revJ = ped.fk_revendedor_id != null ? String(ped.fk_revendedor_id) : null;
+        const repJ = ped.fk_representante_id != null ? String(ped.fk_representante_id) : null;
+        const pessoaId = (revJ ? revs.get(revJ) : undefined) ?? (repJ ? reps.get(repJ) : undefined) ?? null;
+        if (!pessoaId) semPessoa++;
+        const itens: (typeof jueriHistoricoItens.$inferInsert)[] = [];
+        const t = { enviadas: 0, vendidas: 0, devolvidas: 0, perdidas: 0, valorEnviado: 0, valorVendido: 0 };
+        for (const it of extrairLista(ped.itens).itens) {
+          const enviadas = inteiro(pegar(it, 'quantidade', 'quantidade_enviada', 'qtd')) ?? 0;
+          const vendidas = inteiro(pegar(it, 'quantidade_vendida')) ?? 0;
+          const devolvidas = inteiro(pegar(it, 'quantidade_devolvida')) ?? 0;
+          const perdidas = inteiro(pegar(it, 'quantidade_perdida')) ?? 0;
+          const preco = centavos(pegar(it, 'valor_unitario', 'preco', 'valor', 'preco_unitario'));
+          const idProdJ = txt(pegar(it, 'fk_produto_id', 'produto_id', 'produto.id'));
+          t.enviadas += enviadas;
+          t.vendidas += vendidas;
+          t.devolvidas += devolvidas;
+          t.perdidas += perdidas;
+          t.valorEnviado += enviadas * (preco ?? 0);
+          t.valorVendido += vendidas * (preco ?? 0);
+          itens.push({ historicoId: '', produtoId: idProdJ ? (prods.get(idProdJ) ?? null) : null, produtoJueri: idProdJ, enviadas, vendidas, devolvidas, precoUnitario: preco });
+        }
+        // Sem itens detalhados: usa o total do próprio pedido, se vier.
+        if (!itens.length) t.valorVendido = centavos(pegar(ped, 'valor_vendido', 'total_vendido', 'valor_venda', 'total_venda')) ?? 0;
+        const valores = {
+          idJueri: `ped:${ped.id}`,
+          pessoaId,
+          revendedorJueri: revJ ?? (repJ ? `rep:${repJ}` : null),
+          numero,
+          data,
+          pecasEnviadas: t.enviadas,
+          pecasVendidas: t.vendidas,
+          pecasDevolvidas: t.devolvidas,
+          pecasPerdidas: t.perdidas,
+          valorEnviado: t.valorEnviado,
+          valorVendido: t.valorVendido,
+          comissao: centavos(pegar(ped, 'valor_comissao', 'comissao', 'total_comissao')),
+        };
+        const [ja] = await tx.select({ id: jueriHistorico.id }).from(jueriHistorico).where(eq(jueriHistorico.idJueri, valores.idJueri));
+        let hid: string;
+        if (ja) {
+          await tx.update(jueriHistorico).set(valores).where(eq(jueriHistorico.id, ja.id));
+          await tx.delete(jueriHistoricoItens).where(eq(jueriHistoricoItens.historicoId, ja.id));
+          hid = ja.id;
+          ph.atualizados++;
+        } else {
+          [{ id: hid }] = await tx.insert(jueriHistorico).values(valores).returning({ id: jueriHistorico.id });
+          ph.criados++;
+        }
+        for (let i = 0; i < itens.length; i += 500) await tx.insert(jueriHistoricoItens).values(itens.slice(i, i + 500).map((x) => ({ ...x, historicoId: hid })));
+        vendido += t.valorVendido;
+        if (!menor || data < menor) menor = data;
+        if (!maior || data > maior) maior = data;
+      } catch (e) {
+        this.erro(ph, `Pedido ${numero ?? ped.id}`, (e as Error).message);
+      }
+    }
+    if (ph.lidos) ph.avisos.push(`Histórico de ${menor ?? '?'} a ${maior ?? '?'}: ${(vendido / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} vendidos pela rede. Só entra nos relatórios; estoque, maletas e financeiro não mudam.`);
+    if (semPessoa) ph.avisos.push(`${semPessoa} acerto(s) de revendedora que não veio na importação (excluída no Jueri?): entram no total da rede, sem nome.`);
+  }
+
+  /**
+   * Conferência rápida antes de importar o histórico: pede poucas linhas ao Jueri e mostra
+   * quantos acertos e contas antigas existem e os NOMES dos campos (nunca os valores).
+   */
+  async verificarHistorico() {
+    if (!this.configurado) throw new BadRequestException('Configure o Jueri em Configurações › Integrações.');
+    try {
+      const total = (j: unknown) => {
+        const o = (j ?? {}) as Reg;
+        const n = (o.totals as Reg | undefined)?.total ?? o.total ?? (o.meta as Reg | undefined)?.total ?? ((o.data as Reg | undefined)?.total as unknown);
+        return typeof n === 'number' || (typeof n === 'string' && /^\d+$/.test(n)) ? Number(n) : null;
+      };
+      const r = await this.get<unknown>('pedido', { status: 2, per_page: 5, page: 1 });
+      let amostra = extrairLista(r).itens;
+      if (amostra.length && !extrairLista(amostra[0].itens).itens.length) amostra = [umRegistro(await this.get<unknown>(`pedido/${amostra[0].id}`)), ...amostra.slice(1)];
+      const datas = amostra.map((p) => dataISO(pegar(p, 'data_baixa', 'data_acerto', 'data_fechamento', 'data_retorno', 'data_devolucao', 'updated_at', 'data_pedido', 'data', 'created_at'))).filter((x): x is string => !!x).sort();
+      const itens = amostra.flatMap((p) => extrairLista(p.itens).itens);
+      const contas = await this.get<unknown>('financeiro/contas_receber', { per_page: 20, page: 1 });
+      const amostraContas = extrairLista(contas).itens;
+      const camposItem = estrutura(itens, 10);
+      return {
+        acertosBaixados: total(r) ?? (amostra.length ? `${amostra.length}+` : 0),
+        camposDoAcerto: estrutura(amostra),
+        camposDoItem: camposItem,
+        datasDaAmostra: datas,
+        temQuantidadeVendida: camposItem.includes('quantidade_vendida'),
+        temPreco: camposItem.some((c) => ['valor_unitario', 'preco', 'valor', 'preco_unitario'].includes(c)),
+        contasReceber: total(contas),
+        contasPagasNaAmostra: amostraContas.filter((c) => !contaEmAberto(c)).length,
+        amostraContas: amostraContas.length,
+      };
+    } catch (e) {
+      throw new BadRequestException((e as Error).message);
+    }
   }
 
   /** Maleta trazida do Jueri que ninguém usou aqui: sem acerto, sem pré-baixa e sem movimento além da migração. */

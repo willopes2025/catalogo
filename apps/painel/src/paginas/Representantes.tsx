@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { HistoricoRede } from './indicadores/Historico';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { api, ErroApi, pode } from '../api';
 import { centavosParaTexto, data, documento, paraCentavos, reais, telefone } from '../formato';
@@ -245,6 +246,7 @@ export function FichaRepresentante() {
             <p className="muted" style={{ gridColumn: 'span 3' }}>O limite sobe sozinho depois de cada acerto em dia que bate a meta mínima, até o máximo definido nas Configurações. Atraso acima do prazo de bloqueio faz o limite voltar ao inicial.</p>
           </div>
         )}
+        {aba === 'maletas' && pode('relatorios', 'ver') && <div style={{ marginBottom: 14 }}><HistoricoRede pessoaId={id!} /></div>}
         {aba === 'maletas' && (
           f.maletas?.length ? (
             <table className="tabela">

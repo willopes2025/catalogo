@@ -1,4 +1,4 @@
-import { BadRequestException, Controller, Get, Inject, Query } from '@nestjs/common';
+import { BadRequestException, Controller, Get, Inject, Param, ParseUUIDPipe, Query } from '@nestjs/common';
 import { sql } from 'drizzle-orm';
 import { diasEntre, somarDias } from '@aritana/regras';
 import { DB, type Db } from '../comum/db.module';
@@ -582,5 +582,58 @@ export class IndicadoresController {
         from crm_disparos d where d.criado_em::date between ${p.ini}::date and ${p.fim}::date order by d.criado_em desc limit 20`),
     ).map((d) => ({ ...d, resposta_pb: pb(d.responderam, d.enviados) }));
     return { periodo: p, funis, etapas, origens, motivos, atendimento: at, atendentes, disparos };
+  }
+
+  /**
+   * Venda da rede mês a mês somando o histórico trazido do Jueri (acertos baixados antes da virada)
+   * com os acertos feitos na plataforma. Com pessoaId, só daquela consultora.
+   */
+  private async historicoMeses(meses: number, pessoaId?: string) {
+    const n = Math.min(Math.max(meses, 3), 60);
+    const h = hoje();
+    const ini = new Date(Date.UTC(Number(h.slice(0, 4)), Number(h.slice(5, 7)) - n, 1)).toISOString().slice(0, 10);
+    const filtroJ = pessoaId ? sql`and pessoa_id = ${pessoaId}` : sql``;
+    const filtroP = pessoaId ? sql`and m.representante_id = ${pessoaId}` : sql``;
+    const linhas = numeros<Record<string, any>>(
+      await this.db.execute(sql`
+        with meses as (select to_char(g, 'YYYY-MM') as mes from generate_series(${ini}::date, ${h}::date, interval '1 month') g),
+        j as (select to_char(data, 'YYYY-MM') as mes, sum(valor_vendido) as vendido, count(*) as acertos, sum(pecas_vendidas) as vendidas, sum(pecas_enviadas) as enviadas, count(distinct coalesce(pessoa_id::text, revendedor_jueri)) as consultoras
+              from jueri_historico where data >= ${ini}::date ${filtroJ} group by 1),
+        p as (select to_char(a.data, 'YYYY-MM') as mes, sum((a.resultado->>'totalVendido')::bigint) as vendido, count(*) as acertos,
+                sum((a.resultado->'pecas'->>'vendidas')::int) as vendidas,
+                sum((a.resultado->'pecas'->>'emMaleta')::int - coalesce((a.resultado->'pecas'->>'continuam')::int, 0)) as enviadas,
+                count(distinct m.representante_id) as consultoras
+              from acertos a join maletas m on m.id = a.maleta_id where a.data >= ${ini}::date ${filtroP} group by 1)
+        select meses.mes,
+          coalesce(j.vendido, 0) as jueri, coalesce(p.vendido, 0) as plataforma,
+          coalesce(j.acertos, 0) + coalesce(p.acertos, 0) as acertos,
+          coalesce(j.vendidas, 0) + coalesce(p.vendidas, 0) as pecas_vendidas,
+          coalesce(j.enviadas, 0) + coalesce(p.enviadas, 0) as pecas_acertadas,
+          greatest(coalesce(j.consultoras, 0), coalesce(p.consultoras, 0)) as consultoras
+        from meses left join j using (mes) left join p using (mes) order by meses.mes`),
+    ).map((l) => ({ ...l, total: l.jueri + l.plataforma, sell_through_pb: l.pecas_acertadas > 0 ? Math.round((l.pecas_vendidas * 10000) / l.pecas_acertadas) : 0 }));
+    const [ex] = numeros<Record<string, any>>(await this.db.execute(sql`select count(*)::int as acertos, min(data)::text as de, max(data)::text as ate, coalesce(sum(valor_vendido), 0) as vendido from jueri_historico where true ${filtroJ}`));
+    return { linhas, jueri: { acertos: ex.acertos, de: ex.de, ate: ex.ate, vendido: ex.vendido } };
+  }
+
+  @Get('historico')
+  @Permissao('relatorios', 'ver')
+  async historico(@Query('meses') meses = '24') {
+    const r = await this.historicoMeses(Number(meses) || 24);
+    // O que a rede mais vendeu no histórico (12 meses), para comparar a curva de produtos antes e depois.
+    const produtos = numeros<Record<string, any>>(
+      await this.db.execute(sql`
+        select coalesce(p.referencia, i.produto_jueri) as referencia, coalesce(p.descricao, '(produto não importado)') as descricao, p.id,
+          sum(i.vendidas)::int as vendidas, sum(i.enviadas)::int as enviadas, sum(i.vendidas * coalesce(i.preco_unitario, 0)) as vendido
+        from jueri_historico_itens i join jueri_historico h on h.id = i.historico_id left join produtos p on p.id = i.produto_id
+        where h.data >= (current_date - interval '12 months') group by 1, 2, 3 having sum(i.vendidas) > 0 order by vendido desc limit 30`),
+    ).map((x) => ({ ...x, sell_through_pb: x.enviadas ? Math.round((x.vendidas * 10000) / x.enviadas) : 0 }));
+    return { ...r, produtos };
+  }
+
+  @Get('historico/pessoa/:id')
+  @Permissao('relatorios', 'ver')
+  historicoPessoa(@Param('id', ParseUUIDPipe) id: string, @Query('meses') meses = '24') {
+    return this.historicoMeses(Number(meses) || 24, id);
   }
 }

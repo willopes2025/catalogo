@@ -11,6 +11,7 @@ const ETAPAS: [string, string, string][] = [
   ['pessoas', 'Revendedoras, representantes e clientes', 'Com líderes, referências e telefones'],
   ['maletas', 'Maletas abertas', 'Pedidos "Aberto" do Jueri, com as peças que estão com cada uma'],
   ['financeiro', 'Contas a receber em aberto', ''],
+  ['historico', 'Histórico de acertos já baixados', 'Só para os relatórios (venda por mês, por consultora e por produto). Não mexe em estoque, maletas nem contas. Pode demorar.'],
   ['fotos', 'Fotos dos produtos', 'Baixadas do Jueri e guardadas no servidor; na simulação só são contadas'],
 ];
 
@@ -21,7 +22,7 @@ interface Execucao { id: string; simular: boolean; etapas: string[]; inicio: str
 /** Migração direto da API do Jueri: simula, confere o relatório e só então grava. */
 export function ImportarJueri() {
   const qc = useQueryClient();
-  const [etapas, setEtapas] = useState<string[]>(ETAPAS.map(([k]) => k));
+  const [etapas, setEtapas] = useState<string[]>(ETAPAS.map(([k]) => k).filter((k) => k !== 'historico'));
   const [localId, setLocalId] = useState('');
   const [estoque, setEstoque] = useState(true);
   const [comissao, setComissao] = useState('10');
@@ -37,6 +38,7 @@ export function ImportarJueri() {
       api<Execucao>('/jueri/importar', { corpo: { simular, etapas, localId, atualizarEstoque: estoque, comissaoRepresentantePb: Math.round(Number(comissao.replace(',', '.')) * 100) || 0 } }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['jueri'] }),
   });
+  const verificar = useMutation({ mutationFn: () => api<any>('/jueri/historico/verificar', { corpo: {} }) });
   const cancelar = useMutation({ mutationFn: () => api('/jueri/cancelar', { corpo: {} }), onSuccess: () => qc.invalidateQueries({ queryKey: ['jueri'] }) });
   const rodando = ex?.situacao === 'rodando';
   const ultimaSimulacaoOk = ex && ex.simular && ex.situacao === 'concluida';
@@ -74,6 +76,28 @@ export function ImportarJueri() {
         {ultimaSimulacaoOk && <button className="botao" onClick={() => iniciar.mutate(false)} disabled={rodando || !localId || iniciar.isPending}>Importar de verdade</button>}
         {rodando && <button className="botao claro" onClick={() => cancelar.mutate()} disabled={ex?.cancelando || cancelar.isPending} title="Antes de terminar a gravação nada fica gravado; durante as fotos, para entre um produto e outro">{ex?.cancelando ? 'Cancelando…' : 'Cancelar'}</button>}
       </div>
+      <div className="l4 flex" style={{ gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+        <button className="botao claro pequeno" onClick={() => verificar.mutate()} disabled={verificar.isPending || rodando}>{verificar.isPending ? 'Verificando…' : 'Verificar histórico'}</button>
+        <span className="muted" style={{ fontSize: 13 }}>Pergunta ao Jueri quantos acertos antigos existem e quais campos vêm, sem gravar nada e sem mostrar nomes.</span>
+      </div>
+      {verificar.error && <div className="l4"><Erro erro={verificar.error} /></div>}
+      {verificar.data && (
+        <div className={`l4 aviso ${verificar.data.temQuantidadeVendida && verificar.data.temPreco ? 'ok' : 'alerta'}`}>
+          <b>{verificar.data.acertosBaixados} acerto(s) baixado(s) no Jueri</b>
+          {verificar.data.datasDaAmostra.length > 0 && <> · amostra de {verificar.data.datasDaAmostra[0].split('-').reverse().join('/')} a {verificar.data.datasDaAmostra.at(-1).split('-').reverse().join('/')}</>}
+          {verificar.data.contasReceber != null && <> · {verificar.data.contasReceber} conta(s) a receber no total ({verificar.data.contasPagasNaAmostra} de {verificar.data.amostraContas} da amostra já pagas)</>}
+          <div style={{ marginTop: 4 }}>
+            {verificar.data.temQuantidadeVendida && verificar.data.temPreco
+              ? 'Os itens trazem quantidade vendida e preço: dá para montar venda por mês, por consultora e por produto. Marque "Histórico de acertos" e simule.'
+              : 'Os itens não trazem quantidade vendida ou preço; o histórico entra só com os totais que o Jueri informar. Mande esta tela para o suporte conferir.'}
+          </div>
+          <details style={{ marginTop: 6 }}>
+            <summary className="muted">Campos recebidos (só os nomes)</summary>
+            <p className="muted" style={{ fontSize: 12 }}><b>acerto:</b> {verificar.data.camposDoAcerto.join(', ') || '—'}</p>
+            <p className="muted" style={{ fontSize: 12 }}><b>item:</b> {verificar.data.camposDoItem.join(', ') || '—'}</p>
+          </details>
+        </div>
+      )}
       {(iniciar.error || cancelar.error) && <div className="l4"><Erro erro={iniciar.error ?? cancelar.error} /></div>}
       {ex && (
         <div className={`l4 aviso ${ex.situacao === 'falhou' ? 'erro' : ex.situacao === 'cancelada' ? 'alerta' : ex.situacao === 'rodando' ? '' : Object.values(ex.partes).some((p) => falhas(p) > 0) ? 'alerta' : 'ok'}`}>

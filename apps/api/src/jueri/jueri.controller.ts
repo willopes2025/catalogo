@@ -32,6 +32,13 @@ export class JueriController {
     return this.svc.iniciar({ ...d, etapas }, u.id);
   }
 
+  /** Conferência do histórico: poucas linhas, só nomes de campos e contagens. Não grava nada. */
+  @Post('historico/verificar')
+  @Permissao('configuracoes', 'ver')
+  verificarHistorico() {
+    return this.svc.verificarHistorico();
+  }
+
   /** Para no próximo ponto seguro: antes do fim da gravação nada fica; nas fotos, para entre um produto e outro. */
   @Post('cancelar')
   @Permissao('configuracoes', 'editar')

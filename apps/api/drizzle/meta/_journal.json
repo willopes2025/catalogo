@@ -120,6 +120,13 @@
       "when": 1794764564513,
       "tag": "0016_metas",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1794765139323,
+      "tag": "0017_jueri_historico",
+      "breakpoints": true
     }
   ]
 }
