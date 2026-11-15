@@ -33,7 +33,7 @@ export function BlocoAgenda({ filtro, inicial, titulo = 'Agenda' }: { filtro: { 
       ))}
       {!lista.length && !novo && <p className="muted" style={{ fontSize: 13, margin: '4px 0' }}>Nada marcado.</p>}
       {pode('agenda', 'criar') && !novo && <button className="botao claro pequeno" style={{ marginTop: 6, width: '100%' }} onClick={() => setNovo(true)}>Agendar</button>}
-      {novo && <div style={{ marginTop: 8 }}><FormCompromisso inicial={inicial} fechar={() => setNovo(false)} /></div>}
+      {novo && <div style={{ marginTop: 8 }}><FormCompromisso estreito inicial={inicial} fechar={() => setNovo(false)} /></div>}
     </div>
   );
 }

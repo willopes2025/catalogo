@@ -176,6 +176,8 @@ export class AgendaService implements OnModuleInit, OnModuleDestroy {
   async situacao(id: string, status: 'confirmado' | 'realizado' | 'faltou' | 'cancelado', usuarioId: string | null, motivo?: string | null) {
     const c = await this.obter(id);
     if (c.status === 'cancelado') throw new BadRequestException('Este compromisso foi cancelado.');
+    if (c.status === status) return c;
+    if (['realizado', 'faltou'].includes(c.status) && ['confirmado', 'cancelado'].includes(status)) throw new BadRequestException('Este compromisso já foi encerrado.');
     if ((status === 'realizado' || status === 'faltou') && c.inicio.getTime() > Date.now()) throw new BadRequestException('Ainda não chegou a hora deste compromisso.');
     const [n] = await this.db
       .update(agendaCompromissos)
@@ -235,6 +237,11 @@ export class AgendaService implements OnModuleInit, OnModuleDestroy {
     }
     const emUmaHora = await this.db.select().from(agendaCompromissos).where(and(ativos, isNull(agendaCompromissos.lembreteHoraEm), gt(agendaCompromissos.inicio, agora), lte(agendaCompromissos.inicio, new Date(agora.getTime() + 70 * 60_000))));
     for (const c of emUmaHora) {
+      // Marcado em cima da hora: o aviso de "marcado" acabou de sair, não manda outro em seguida.
+      if (c.criadoEm.getTime() > c.inicio.getTime() - 2 * 3600_000) {
+        await this.db.update(agendaCompromissos).set({ lembreteHoraEm: agora }).where(eq(agendaCompromissos.id, c.id));
+        continue;
+      }
       const [trava] = await this.db.update(agendaCompromissos).set({ lembreteHoraEm: agora }).where(and(eq(agendaCompromissos.id, c.id), isNull(agendaCompromissos.lembreteHoraEm))).returning({ id: agendaCompromissos.id });
       if (!trava) continue;
       await this.avisar(c, 'lembrete_hora').then(() => enviados++).catch((e) => this.log.warn(`Lembrete de ${c.titulo}: ${(e as Error).message}`));

@@ -215,7 +215,7 @@ export interface DadosForm {
   pessoaId: string | null; pessoaNome: string | null; leadId: string | null; maletaId: string | null; convidadoNome: string; convidadoTelefone: string; observacao: string; avisar: boolean;
 }
 
-export function FormCompromisso({ inicial, fechar, aoSalvar }: { inicial: Partial<DadosForm>; fechar: () => void; aoSalvar?: () => void }) {
+export function FormCompromisso({ inicial, fechar, aoSalvar, estreito }: { inicial: Partial<DadosForm>; fechar: () => void; aoSalvar?: () => void; estreito?: boolean }) {
   const qc = useQueryClient();
   const tipos = usarTipos();
   const atendentes = useQuery({ queryKey: ['crm', 'atendentes'], queryFn: () => api<{ id: string; nome: string }[]>('/crm/atendentes'), staleTime: 60_000 });
@@ -254,7 +254,7 @@ export function FormCompromisso({ inicial, fechar, aoSalvar }: { inicial: Partia
   const conflito = salvar.error && /Bate com/.test((salvar.error as Error).message);
   const g = tipos.data?.google;
   return (
-    <div className="cartao form ag-form">
+    <div className={`cartao form ag-form ${estreito ? 'estreito' : ''}`}>
       <div className="secao l4" style={{ marginTop: 0 }}>Novo compromisso</div>
       <Campo rotulo="Tipo"><select value={f.tipo} onChange={(e) => mudarTipo(e.target.value)}>{Object.entries(tipos.data?.tipos ?? {}).map(([k, t]) => <option key={k} value={k}>{t.nome}</option>)}</select></Campo>
       <Campo rotulo="Título (opcional)" ajuda="Vazio: tipo + nome de quem vem."><input value={f.titulo} onChange={(e) => setF({ ...f, titulo: e.target.value })} /></Campo>

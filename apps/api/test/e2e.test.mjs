@@ -1671,9 +1671,20 @@ test('agenda: marca, avisa conflito, gera Meet pelo Google, lembra no WhatsApp e
 
     // Lembretes: véspera (para o que foi marcado com antecedência) e uma hora antes; cada um sai uma vez.
     const v = await ok('POST', '/agenda', { tipo: 'retirada', inicio: daqui(20 * 60), duracaoMin: 30, online: false, local: 'Matriz, Vila Velha', pessoaId: rep.id, avisar: true, forcar: true });
-    await banco.query(`update agenda_compromissos set criado_em = now() - interval '3 days' where id = $1`, [v.id]);
     const h = await ok('POST', '/agenda', { tipo: 'entrevista', inicio: daqui(40), duracaoMin: 30, online: true, convidadoNome: 'Candidata Agenda', convidadoTelefone: '27991239999', avisar: true, forcar: true });
     assert.match(h.link, /meet\.google\.com/);
+    // Marcado em cima da hora (40 min antes): o aviso de "marcado" já saiu, o de "daqui a pouco" não sai em seguida.
+    assert.equal((await ok('POST', '/agenda/lembretes')).enviados, 0);
+    assert.ok(!(await textos()).some((x) => x.includes('Daqui a pouco')));
+    const h2 = await ok('POST', '/agenda', { tipo: 'entrevista', inicio: daqui(50), duracaoMin: 30, online: true, convidadoNome: 'Candidata Lembrete', convidadoTelefone: '27991238888', avisar: true, forcar: true });
+    await banco.query(`update agenda_compromissos set criado_em = now() - interval '3 days', lembrete_dia_em = null where id = any($1)`, [[v.id, h2.id]]);
+    // Remarcar um compromisso marcado sem aviso não religa o aviso.
+    const semAviso = await ok('POST', '/agenda', { tipo: 'outro', titulo: 'Sem aviso', inicio: daqui(30 * 60), duracaoMin: 30, online: false, local: 'Sala 2', observacao: 'levar mostruário', pessoaId: rep.id, avisar: false, forcar: true });
+    const remarcado = await ok('PATCH', `/agenda/${semAviso.id}`, { inicio: daqui(31 * 60), forcar: true });
+    assert.equal(remarcado.avisar, false);
+    assert.equal(remarcado.local, 'Sala 2', 'remarcar mantém o local');
+    assert.equal(remarcado.observacao, 'levar mostruário');
+    assert.ok(!(await textos()).some((x) => x.includes('Mudamos o horário') && x.includes('Sem aviso')));
     const l1 = await ok('POST', '/agenda/lembretes');
     assert.ok(l1.enviados >= 2);
     assert.equal((await ok('POST', '/agenda/lembretes')).enviados, 0, 'não repete');

@@ -31,3 +31,9 @@
   .ag-dia.passado:not(:has(.ag-item)) { display: none; }
   .ag-filtro { margin-left: 0; width: 100%; }
 }
+
+/* Dentro do card do CRM e da ficha (coluna estreita): um campo por linha */
+.ag-form.estreito { display: flex; flex-direction: column; gap: 10px; padding: 12px; box-shadow: none; }
+.ag-form.estreito > * { width: 100%; min-width: 0; }
+.ag-form.estreito input, .ag-form.estreito select { width: 100%; }
+.ag-form.estreito input[type=radio], .ag-form.estreito input[type=checkbox] { width: auto; }

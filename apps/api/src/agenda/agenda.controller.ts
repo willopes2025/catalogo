@@ -66,7 +66,8 @@ export class AgendaController {
   @Patch(':id')
   @Permissao('agenda', 'editar')
   async editar(@Usuario() u: UsuarioLogado, @Param('id', ParseUUIDPipe) id: string, @Body() body: unknown) {
-    const d = validar(z.object(base).partial(), body);
+    // Sem o padrão de "avisar": remarcar não pode religar o aviso de quem marcou sem aviso.
+    const d = validar(z.object({ ...base, avisar: z.boolean().optional() }).partial(), body);
     const c = await this.svc.editar(id, d, u.id);
     await this.auditoria.registrar({ usuarioId: u.id, acao: 'editar', entidade: 'agenda', entidadeId: id, dados: { inicio: c.inicio } });
     return c;
