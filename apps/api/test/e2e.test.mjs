@@ -877,6 +877,113 @@ test('marketing: custo por candidata e por aprovada, retorno e investimento vind
   assert.equal((await chamar('POST', '/marketing/sincronizar-meta')).status, 503);
 });
 
+test('Marketing › Meta: configurar pela lista, campanhas, pausar, orçamento, catálogo, públicos, leads e página', async () => {
+  const sim = async (corpo) => (await fetch('http://localhost:3199/__meta', corpo ? { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(corpo) } : undefined)).json();
+  await ok('PUT', '/integracoes/meta_ads', { valores: { META_ADS_CONTA: '', META_ADS_TOKEN: 'token-meta-teste' } });
+  // Sem conta escolhida, o painel pede para configurar.
+  assert.equal((await chamar('GET', '/marketing/meta/painel')).status, 400);
+  // Configuração guiada: o sistema lista o que o token enxerga.
+  const op = await ok('GET', '/marketing/meta/opcoes');
+  assert.deepEqual(op.contas, [{ id: 'act_999', nome: 'Aritana Semijoias', moeda: 'BRL', ativa: true }]);
+  assert.deepEqual(op.paginas, [{ id: '700001', nome: 'Aritana Semijoias' }]);
+  assert.deepEqual(op.catalogos, [{ id: '880001', nome: 'Catálogo Aritana', negocio: 'Aritana' }], 'acha o catálogo pelo portfólio da conta de anúncios');
+  assert.ok(op.permissoes.includes('catalog_management'));
+  const funil = op.funis.find((f) => /client/i.test(f.nome)) ?? op.funis[0];
+  assert.equal((await chamar('PUT', '/marketing/meta/config', { catalogoLink: 'http://sem-https.com' })).status, 400);
+  const est = await ok('PUT', '/marketing/meta/config', { conta: 'act_999', paginaId: '700001', catalogoId: '880001', catalogoLink: 'https://aritanaonline.com.br/loja', leadsFunilId: funil.id, leadsAuto: true });
+  assert.equal(est.conta, 'act_999');
+  assert.equal(est.leadsAuto, true);
+
+  // Painel: resultados do período com status e orçamento.
+  const p = await ok('GET', '/marketing/meta/painel?de=2026-11-01&ate=2026-11-15');
+  assert.equal((await sim()).ultimoPeriodo, '{"since":"2026-11-01","until":"2026-11-15"}');
+  const c1 = p.linhas.find((l) => l.id === '120000001');
+  assert.deepEqual([c1.gasto, c1.cliques, c1.leads, c1.conversas, c1.custoPorLead, c1.custoPorClique, c1.ctr, c1.orcamentoDiario, c1.situacao], [15000, 200, 10, 5, 1500, 75, 2, 5000, 'ACTIVE']);
+  assert.equal(p.linhas.find((l) => l.id === '120000002').gasto, 0, 'pausada sem gasto aparece');
+  assert.equal(p.linhas.find((l) => l.id === '120000009').situacao, 'ARCHIVED', 'apagada que gastou no período entra só com os números');
+  assert.equal(p.totais.gasto, 17000);
+  assert.equal((await ok('GET', '/marketing/meta/painel?nivel=adset&pai=120000001')).linhas[0].nome, 'Mulheres 25-45 ES');
+  assert.equal((await chamar('GET', '/marketing/meta/painel?de=2026-11-20&ate=2026-11-01')).status, 400);
+
+  // Pausar, ativar e orçamento: só na conta escolhida.
+  assert.equal((await ok('POST', '/marketing/meta/itens/120000001/status', { status: 'PAUSED' })).para, 'PAUSED');
+  assert.equal((await sim()).campanhas[0].status, 'PAUSED');
+  await ok('POST', '/marketing/meta/itens/120000001/status', { status: 'ACTIVE' });
+  assert.equal((await ok('POST', '/marketing/meta/itens/120000001/orcamento', { diario: 8000 })).de, 5000);
+  assert.equal((await sim()).campanhas[0].daily_budget, '8000');
+  assert.equal((await chamar('POST', '/marketing/meta/itens/120000002/orcamento', { diario: 8000 })).status, 400, 'orçamento total não muda por aqui');
+  assert.equal((await chamar('POST', '/marketing/meta/itens/120000777/status', { status: 'PAUSED' })).status, 400, 'item de outra conta');
+  assert.equal((await chamar('POST', '/marketing/meta/itens/120000001/orcamento', { diario: 50 })).status, 400);
+  assert.equal((await chamar('POST', '/marketing/meta/itens/abc/status', { status: 'PAUSED' })).status, 400);
+
+  // Catálogo: só produto ativo, do catálogo, com foto https.
+  const prods = (await ok('GET', '/produtos?busca=')).itens ?? [];
+  const alvo = prods[0];
+  {
+    const pg = createRequire(import.meta.url)('pg');
+    const banco = new pg.Client({ connectionString: process.env.DATABASE_URL ?? 'postgres://aritana:aritana@localhost:5432/aritana_teste' });
+    await banco.connect();
+    // Como o sistema guarda (foto enviada pela tela) e uma foto de fora.
+    await banco.query(`update produtos set fotos = '["/api/fotos/peca.jpg","https://cdn.exemplo.com/peca-2.jpg"]'::jsonb, ativo = true, exibe_catalogo = true where id = $1`, [alvo.id]);
+    await banco.end();
+  }
+  const cat = await ok('POST', '/marketing/meta/catalogo/sincronizar');
+  assert.ok(cat.enviados >= 1);
+  const item = (await sim()).catalogo.find((x) => x.data.id === alvo.referencia);
+  assert.equal(item.method, 'UPDATE');
+  assert.equal(item.data.price, `${(alvo.preco / 100).toFixed(2)} BRL`);
+  assert.equal(item.data.link, `https://aritanaonline.com.br/loja?produto=${encodeURIComponent(alvo.referencia)}`);
+  assert.equal(item.data.image_link, 'http://localhost:3100/api/fotos/peca.jpg', 'foto do sistema vai com o endereço completo');
+  assert.deepEqual(item.data.additional_image_link, ['https://cdn.exemplo.com/peca-2.jpg']);
+  assert.ok(['in stock', 'out of stock'].includes(item.data.availability));
+
+  // Públicos: só quem autorizou (LGPD), em SHA-256; menos de 100 o Meta não aceita.
+  const antes = await ok('GET', '/marketing/meta/publicos/previa?origem=clientes');
+  assert.equal((await chamar('POST', '/marketing/meta/publicos', { origem: 'clientes' })).status, 400);
+  for (let i = 0; i < 110; i += 22) await Promise.all(Array.from({ length: 22 }, (_, k) => ok('POST', '/pessoas', { tipo: 'cliente', nome: `Cliente Publico ${i + k}`, telefone1: `2799700${String(1000 + i + k)}`, email: i + k < 5 ? `Publico${i + k}@Exemplo.com ` : null, consentimentoLgpd: i + k < 105 })));
+  const previa = await ok('GET', '/marketing/meta/publicos/previa?origem=clientes');
+  assert.equal(previa.comAutorizacao - antes.comAutorizacao, 105);
+  assert.equal(previa.semAutorizacao - antes.semAutorizacao, 5, 'sem autorização fica de fora');
+  const pub = await ok('POST', '/marketing/meta/publicos', { origem: 'clientes' });
+  assert.equal(pub.enviados, previa.comAutorizacao);
+  const carga = (await sim()).enviados[pub.id];
+  assert.deepEqual(carga.schema, ['PHONE', 'EMAIL']);
+  const { createHash } = await import('node:crypto');
+  const sha = (t) => createHash('sha256').update(t).digest('hex');
+  assert.ok(carga.data.some((l) => l[0] === sha('5527997001000') && l[1] === sha('publico0@exemplo.com')), 'telefone com 55 e e-mail minúsculo, embaralhados');
+  assert.ok(!JSON.stringify(carga).includes('2799700'), 'nenhum telefone sai em claro');
+  const lista = await ok('GET', '/marketing/meta/publicos');
+  assert.equal(lista.find((x) => x.id === pub.id).origem, 'clientes');
+  assert.equal(lista.find((x) => x.id === '600000').tipo, 'outro');
+  assert.equal((await ok('POST', `/marketing/meta/publicos/${pub.id}/atualizar`)).enviados, previa.comAutorizacao);
+  assert.equal((await chamar('POST', '/marketing/meta/publicos/600000/atualizar')).status, 400, 'público que não é do sistema');
+  const sem = await ok('POST', `/marketing/meta/publicos/${pub.id}/semelhante`, { percentual: 2 });
+  assert.equal((await sim()).publicos.find((x) => x.id === sem.id).spec, '{"type":"similarity","ratio":0.02,"country":"BR"}');
+
+  // Leads de formulário: entram no CRM uma vez só; sem telefone não vira card.
+  await sim({ semLeadsRetrieval: true });
+  const negado = await chamar('POST', '/marketing/meta/leads/importar');
+  assert.equal(negado.status, 503);
+  assert.equal(negado.dados.permissaoFaltando, 'leads_retrieval', 'diz qual permissão falta');
+  await sim({ semLeadsRetrieval: false });
+  const imp = await ok('POST', '/marketing/meta/leads/importar');
+  assert.deepEqual([imp.novos, imp.semTelefone, imp.repetidos], [2, 1, 0]);
+  assert.deepEqual(await ok('POST', '/marketing/meta/leads/importar').then((r) => [r.novos, r.semTelefone]), [0, 0], 'repetir não duplica');
+  assert.equal((await ok('GET', '/marketing/meta/leads/formularios'))[0].importados, 3);
+  const quadro = await ok('GET', `/crm/funis/${funil.id}/quadro`).catch(() => null);
+  if (quadro) assert.ok(JSON.stringify(quadro).includes('Lead Do Instagram'));
+
+  // Página.
+  const pg = await ok('GET', '/marketing/meta/pagina');
+  assert.deepEqual([pg.seguidores, pg.publicacoes[0].curtidas, pg.publicacoes[0].comentarios, pg.publicacoes[0].compartilhamentos], [5400, 42, 7, 3]);
+
+  // Token vencido: mensagem clara, sem derrubar a tela.
+  await ok('PUT', '/integracoes/meta_ads', { valores: { META_ADS_TOKEN: 'token-errado-123456' } });
+  const venc = await chamar('GET', '/marketing/meta/painel');
+  assert.equal(venc.status, 503);
+  assert.match(venc.dados.mensagem, /venceu ou foi revogado/);
+});
+
 test('Jueri pela API: testa a conexão, simula sem gravar, importa tudo e repetir não duplica', async () => {
   assert.equal((await ok('GET', '/jueri')).configurado, false);
   const local = (await ok('GET', '/estoque/locais')).find((l) => l.tipo === 'deposito');

@@ -59,10 +59,10 @@ export const INTEGRACOES: Integracao[] = [
   {
     chave: 'meta_ads',
     nome: 'Meta Ads (Facebook e Instagram)',
-    descricao: 'Traz o valor gasto em cada campanha para calcular o custo por candidata em Marketing.',
-    ondeConseguir: 'No Gerenciador de Negócios da Aritana: crie um usuário do sistema com permissão de leitura de anúncios (ads_read), gere o token e copie o número da conta de anúncios (act_...).',
+    descricao: 'Liga a área Marketing › Meta: campanhas e resultados, pausar e orçamento, catálogo de produtos, públicos, leads de formulário e a página. Depois de salvar o token, escolha a conta, a página e o catálogo em Marketing › Meta › Configurar.',
+    ondeConseguir: 'No Gerenciador de Negócios da Aritana: crie um usuário do sistema, atribua a ele a conta de anúncios, a página e o catálogo, e gere o token com as permissões ads_read, ads_management, business_management, catalog_management, pages_show_list, pages_read_engagement e pages_manage_ads (e leads_retrieval, para os leads de formulário). Só com ads_read o sistema mostra os gastos, sem as outras funções.',
     campos: [
-      { nome: 'META_ADS_CONTA', rotulo: 'Conta de anúncios', ajuda: 'Ex.: act_1234567890' },
+      { nome: 'META_ADS_CONTA', rotulo: 'Conta de anúncios', ajuda: 'Ex.: act_1234567890. Também dá para escolher numa lista em Marketing › Meta › Configurar.' },
       { nome: 'META_ADS_TOKEN', rotulo: 'Token de acesso', secreto: true },
     ],
   },

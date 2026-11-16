@@ -1708,3 +1708,16 @@ export const portalDispositivos = pgTable(
   },
   (t) => ({ uq: uniqueIndex('portal_dispositivos_token_uq').on(t.token), porPessoa: index('portal_dispositivos_pessoa_idx').on(t.pessoaId) }),
 );
+
+/** Leads de formulário do Meta já trazidos para o CRM (cada um entra uma vez só). */
+export const metaLeads = pgTable(
+  'meta_leads',
+  {
+    leadgenId: text('leadgen_id').primaryKey(),
+    formId: text('form_id').notNull(),
+    leadId: uuid('lead_id').references(() => crmLeads.id, { onDelete: 'set null' }),
+    recebidoEm: timestamp('recebido_em', { withTimezone: true }).notNull(),
+    criadoEm: criadoEm(),
+  },
+  (t) => ({ porForm: index('meta_leads_form_idx').on(t.formId) }),
+);

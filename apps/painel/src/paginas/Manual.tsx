@@ -166,6 +166,24 @@ const SECOES: Secao[] = [
     ],
   },
   {
+    id: 'meta',
+    titulo: 'Meta (Facebook e Instagram) dentro do sistema',
+    passos: [
+      { t: 'Ligar', d: 'Em Configurações › Integrações › Meta Ads, cole o token do usuário do sistema. Depois, em Marketing › Meta › Configurar, escolha na lista a conta de anúncios, a página, o catálogo e o funil que recebe os leads. A mesma tela mostra quais permissões o token tem e quais faltam.' },
+      { t: 'Anúncios', d: 'Gasto, alcance, cliques, leads e conversas de cada campanha no período. Clique no nome para abrir os conjuntos e os anúncios. Dá para pausar, ativar e mudar o orçamento por dia.' },
+      { t: 'Catálogo', d: '"Enviar produtos para o Meta" manda os produtos ativos do catálogo com foto, preço e estoque. Serve para a loja do Instagram, os anúncios de catálogo e o catálogo do WhatsApp.' },
+      { t: 'Públicos', d: 'Cria no Meta um público com os clientes, as representantes ativas ou as candidatas que autorizaram o uso dos dados. A partir dele, crie um público semelhante (pessoas parecidas, no Brasil).' },
+      { t: 'Leads de formulário', d: 'Quem preenche um formulário de anúncio vira card no funil escolhido, com a campanha de origem. Pode entrar sozinho a cada 10 minutos ou pelo botão "Trazer agora".' },
+      { t: 'Página', d: 'Seguidores e as publicações recentes com curtidas, comentários e compartilhamentos.' },
+    ],
+    dicas: [
+      'Criar campanha e anúncio continua no Gerenciador de Anúncios; o sistema acompanha e ajusta.',
+      'Só entra em público quem tem a autorização de uso dos dados (LGPD) marcada no cadastro. Telefone e e-mail saem embaralhados.',
+      'Para os leads de formulário, o token precisa também da permissão leads_retrieval.',
+      'Toda mudança (pausar, orçamento, público, catálogo) fica registrada na auditoria com quem fez.',
+    ],
+  },
+  {
     id: 'app',
     titulo: 'App da representante (Android e iPhone)',
     passos: [

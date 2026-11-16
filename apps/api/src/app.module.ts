@@ -56,6 +56,8 @@ import { CrmController } from './crm/crm.controller';
 import { PontosController } from './pontos/pontos.controller';
 import { FormulariosController } from './formularios/formularios.controller';
 import { MarketingController } from './marketing/marketing.controller';
+import { MetaController } from './marketing/meta.controller';
+import { MetaService } from './marketing/meta.service';
 import { PontosService } from './pontos/pontos.service';
 import { JueriController } from './jueri/jueri.controller';
 import { AtendimentoController } from './crm/atendimento.controller';
@@ -121,11 +123,13 @@ if (!segredo || (process.env.NODE_ENV === 'production' && segredo.length < 32)) 
     PontosController,
     FormulariosController,
     MarketingController,
+    MetaController,
   ],
   providers: [
     SegredosService,
     JueriService,
     CrmService,
+    MetaService,
     CanaisService,
     AutomacaoService,
     DistribuicaoService,

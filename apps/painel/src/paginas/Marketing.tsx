@@ -5,21 +5,23 @@ import { api, pode } from '../api';
 import { centavosParaTexto, dataHora, paraCentavos, reais } from '../formato';
 import { Abas, Campo, Carregando, Erro, Indicador, Topo } from '../componentes/ui';
 import { BarrasTempo, COR, mesCurto, Tabela } from './indicadores/comum';
+import { MarketingMeta } from './MarketingMeta';
 import './indicadores/indicadores.css';
 
 const CANAIS: Record<string, string> = { meta: 'Meta Ads (Facebook/Instagram)', google: 'Google Ads', instagram: 'Instagram orgânico', whatsapp: 'WhatsApp', evento: 'Evento', outro: 'Outro' };
 const codigo = (s: string) => s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 60);
 
 export function Marketing() {
-  const [aba, setAba] = useState<'resultados' | 'mensal' | 'campanhas' | 'links'>('resultados');
+  const [aba, setAba] = useState<'resultados' | 'mensal' | 'campanhas' | 'links' | 'meta'>('resultados');
   return (
     <>
       <Topo eb="Marketing" titulo="Quanto custa cada nova revendedora" sub="Campanhas, custo por candidata e por aprovada, e quanto as aprovadas já venderam" />
-      <Abas ativa={aba} mudar={setAba} abas={[['resultados', 'Resultados'], ['mensal', 'Mês a mês e gastos'], ['campanhas', 'Campanhas'], ['links', 'Gerar link rastreável']]} />
+      <Abas ativa={aba} mudar={setAba} abas={[['resultados', 'Resultados'], ['mensal', 'Mês a mês e gastos'], ['campanhas', 'Campanhas'], ['links', 'Gerar link rastreável'], ['meta', 'Meta (Facebook e Instagram)']]} />
       {aba === 'resultados' && <Resultados />}
       {aba === 'mensal' && <Mensal />}
       {aba === 'campanhas' && <Campanhas />}
       {aba === 'links' && <Links />}
+      {aba === 'meta' && <MarketingMeta />}
     </>
   );
 }

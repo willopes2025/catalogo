@@ -68,6 +68,19 @@ const jueri = {
 let seq = 0;
 const notas = new Map();
 
+// Estado do simulador do Meta (campanhas mudam de status e orçamento; guarda o que o sistema enviou).
+const metaSim = {
+  campanhas: [
+    { id: '120000001', name: 'Revendedoras novembro', status: 'ACTIVE', effective_status: 'ACTIVE', daily_budget: '5000', objective: 'OUTCOME_LEADS' },
+    { id: '120000002', name: 'Clientes Black Friday', status: 'PAUSED', effective_status: 'PAUSED', lifetime_budget: '90000', objective: 'OUTCOME_SALES' },
+  ],
+  publicos: [{ id: '600000', name: 'Visitantes do site', description: '', subtype: 'WEBSITE', approximate_count_lower_bound: 1000, approximate_count_upper_bound: 2000 }],
+  enviados: {},
+  catalogo: null,
+  semLeadsRetrieval: false,
+  ultimoPeriodo: null,
+};
+
 function responder(res, status, corpo) {
   res.writeHead(status, { 'content-type': 'application/json' });
   res.end(JSON.stringify(corpo));
@@ -294,6 +307,71 @@ http
 
     // ── Asaas ──
     // Meta Ads (Graph API): conta e gasto por campanha, em duas páginas
+    if (url.pathname.startsWith('/meta/') && !(req.method === 'GET' && (url.pathname === '/meta/act_999' || (url.pathname === '/meta/act_999/insights' && !url.searchParams.has('time_range'))))) {
+      // ── Meta: área Marketing › Meta (campanhas, catálogo, públicos, leads, página) ──
+      const auth = req.headers.authorization;
+      if (auth !== 'Bearer token-meta-teste' && auth !== 'Bearer token-da-pagina') return responder(res, 401, { error: { message: 'Invalid OAuth access token', code: 190 } });
+      const r = url.pathname.replace('/meta/', '');
+      const f = new URLSearchParams(req.method === 'POST' ? txt : url.search);
+      const m = metaSim;
+      if (req.method === 'GET') {
+        if (r === 'me/permissions') return responder(res, 200, { data: ['ads_management', 'ads_read', 'business_management', 'catalog_management', 'pages_manage_ads', 'pages_read_engagement', 'pages_show_list'].map((permission) => ({ permission, status: 'granted' })) });
+        if (r === 'me/adaccounts') return responder(res, 200, { data: [{ account_id: '999', name: 'Aritana Semijoias', currency: 'BRL', account_status: 1, business: { id: '5550001', name: 'Aritana' } }] });
+        if (r === 'me/accounts') return responder(res, 200, { data: [{ id: '700001', name: 'Aritana Semijoias' }] });
+        if (r === 'me/businesses') return responder(res, 400, { error: { message: '(#100) Tried accessing nonexisting field (businesses)', code: 100 } });
+        if (r === '5550001/owned_product_catalogs') return responder(res, 200, { data: [{ id: '880001', name: 'Catálogo Aritana' }] });
+        if (r === 'act_999/campaigns') return responder(res, 200, { data: m.campanhas });
+        if (r === '120000001/adsets') return responder(res, 200, { data: [{ id: '130000001', name: 'Mulheres 25-45 ES', status: 'ACTIVE', effective_status: 'ACTIVE', daily_budget: '3000', campaign_id: '120000001' }] });
+        if (r === 'act_999/insights') {
+          const nivel = f.get('level');
+          m.ultimoPeriodo = f.get('time_range');
+          if (nivel === 'campaign') return responder(res, 200, { data: [{ campaign_id: '120000001', campaign_name: 'Revendedoras novembro', spend: '150.00', impressions: '10000', reach: '8000', clicks: '260', inline_link_clicks: '200', actions: [{ action_type: 'lead', value: '10' }, { action_type: 'onsite_conversion.messaging_conversation_started_7d', value: '5' }] }, { campaign_id: '120000009', campaign_name: 'Campanha antiga apagada', spend: '20.00', impressions: '1000', clicks: '10' }] });
+          return responder(res, 200, { data: [{ adset_id: '130000001', adset_name: 'Mulheres 25-45 ES', spend: '150.00', impressions: '10000', inline_link_clicks: '200' }] });
+        }
+        if (r === 'act_999/customaudiences') return responder(res, 200, { data: m.publicos });
+        if (r === '700001' && f.get('fields') === 'access_token') return responder(res, 200, { access_token: 'token-da-pagina', id: '700001' });
+        if (r === '700001') return responder(res, 200, { name: 'Aritana Semijoias', fan_count: 5200, followers_count: 5400, link: 'https://facebook.com/aritana' });
+        if (r === '700001/posts') return responder(res, 200, { data: [{ id: '700001_1', message: 'Coleção nova chegou!', created_time: '2026-11-10T12:00:00+0000', permalink_url: 'https://facebook.com/aritana/posts/1', likes: { summary: { total_count: 42 } }, comments: { summary: { total_count: 7 } }, shares: { count: 3 } }] });
+        if (r === '700001/leadgen_forms') return auth === 'Bearer token-da-pagina' ? responder(res, 200, { data: [{ id: '900001', name: 'Quero revender', status: 'ACTIVE', leads_count: 3, created_time: '2026-11-01T10:00:00+0000' }] }) : responder(res, 403, { error: { message: '(#200) Requires page token', code: 200 } });
+        if (r === '900001/leads') {
+          if (m.semLeadsRetrieval) return responder(res, 403, { error: { message: '(#200) Requires leads_retrieval permission to manage the object', code: 200 } });
+          return responder(res, 200, { data: [
+            { id: '9100001', created_time: '2026-11-15T10:00:00+0000', platform: 'ig', campaign_name: 'Revendedoras novembro', ad_name: 'Vídeo 1', field_data: [{ name: 'full_name', values: ['Lead Do Instagram'] }, { name: 'phone_number', values: ['+5527991112222'] }, { name: 'email', values: ['lead@exemplo.com'] }, { name: 'city', values: ['Vila Velha'] }] },
+            { id: '9100002', created_time: '2026-11-15T11:00:00+0000', platform: 'fb', field_data: [{ name: 'full_name', values: ['Lead Sem Telefone'] }, { name: 'email', values: ['sem@exemplo.com'] }] },
+            { id: '9100003', created_time: '2026-11-15T12:00:00+0000', platform: 'fb', field_data: [{ name: 'full_name', values: ['Lead Do Facebook'] }, { name: 'phone_number', values: ['27 99333-4444'] }] },
+          ] });
+        }
+        const camp = m.campanhas.find((c) => c.id === r);
+        if (camp) return responder(res, 200, { ...camp, account_id: '999' });
+        if (r === '120000777') return responder(res, 200, { id: r, name: 'De outra conta', account_id: '111', status: 'ACTIVE', daily_budget: '1000' });
+        const pub = m.publicos.find((x) => x.id === r);
+        if (pub) return responder(res, 200, { ...pub, account_id: '999' });
+        return responder(res, 404, { error: { message: `Unsupported get request: ${r}`, code: 100 } });
+      }
+      const camp = m.campanhas.find((c) => c.id === r);
+      if (camp) {
+        if (f.get('status')) camp.status = camp.effective_status = f.get('status');
+        if (f.get('daily_budget')) camp.daily_budget = f.get('daily_budget');
+        return responder(res, 200, { success: true });
+      }
+      if (r === '880001/items_batch') {
+        m.catalogo = JSON.parse(f.get('requests'));
+        return responder(res, 200, { handles: ['h1'], validation_status: m.catalogo.filter((x) => x.method === 'UPDATE' && !x.data.image_link).map((x) => ({ retailer_id: x.data.id, errors: [{ message: 'image_link is required' }] })) });
+      }
+      if (r === 'act_999/customaudiences') {
+        const novo = { id: String(600001 + m.publicos.length), name: f.get('name'), description: f.get('description') ?? '', subtype: f.get('subtype'), origem: f.get('origin_audience_id'), spec: f.get('lookalike_spec') };
+        m.publicos.push(novo);
+        return responder(res, 200, { id: novo.id });
+      }
+      const usuarios = r.match(/^(\d+)\/users$/);
+      if (usuarios) {
+        const carga = JSON.parse(f.get('payload'));
+        m.enviados[usuarios[1]] = carga;
+        return responder(res, 200, { audience_id: usuarios[1], num_received: carga.data.length, num_invalid_entries: 0 });
+      }
+      return responder(res, 404, { error: { message: 'not found', code: 100 } });
+    }
+    if (url.pathname === '/__meta') { if (req.method === 'POST') Object.assign(metaSim, corpo); return responder(res, 200, metaSim); }
     if (req.method === 'GET' && url.pathname.startsWith('/meta/')) {
       if (req.headers.authorization !== 'Bearer token-meta-teste') return responder(res, 401, { error: { message: 'Invalid OAuth access token' } });
       if (url.pathname === '/meta/act_999') return responder(res, 200, { name: 'Aritana Semijoias', currency: 'BRL' });
