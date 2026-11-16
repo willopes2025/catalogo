@@ -335,7 +335,7 @@ function Templates() {
   const q = useQuery({ queryKey: ['crm', 'templates', 'todos'], queryFn: () => api<Template[]>('/crm/templates') });
   const canais = usarCanais();
   const [f, setF] = useState({ nome: '', texto: '' });
-  const m = useMutation({ mutationFn: ({ rota, metodo, corpo }: { rota: string; metodo?: string; corpo?: unknown }) => api(rota, { metodo, corpo: corpo ?? {} }), onSuccess: () => qc.invalidateQueries({ queryKey: ['crm', 'templates'] }) });
+  const m = useMutation({ mutationFn: ({ rota, metodo, corpo }: { rota: string; metodo?: string; corpo?: unknown }) => api(rota, { metodo, corpo: metodo === 'DELETE' ? undefined : (corpo ?? {}) }), onSuccess: () => qc.invalidateQueries({ queryKey: ['crm', 'templates'] }) });
   const gestor = pode('crm', 'excluir');
   const campos = usarCampos();
   const FONTES = [...FONTES_FIXAS, ...(campos.data ?? []).map((c) => [variavelDoCampo(c.nome), `Campo: ${c.nome}`])];

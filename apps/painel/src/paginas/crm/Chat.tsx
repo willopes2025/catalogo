@@ -120,6 +120,7 @@ export function Chat({ conversaId, leadId, aoMudar }: { conversaId: string; lead
   });
   const reagir = useMutation({ mutationFn: (v: { id: string; emoji: string }) => api(`/crm/conversas/${conversaId}/mensagens/${v.id}/reagir`, { corpo: { emoji: v.emoji } }), onSuccess: atualizar, onSettled: () => setReagindo(null) });
   const apagar = useMutation({ mutationFn: (id: string) => api(`/crm/conversas/${conversaId}/mensagens/${id}/apagar`, { corpo: {} }), onSuccess: atualizar });
+  const apagarTemplate = useMutation({ mutationFn: (id: string) => api(`/crm/templates/${id}`, { metodo: 'DELETE' }), onSuccess: () => qc.invalidateQueries({ queryKey: ['crm', 'templates'] }) });
   const renomear = useMutation({ mutationFn: (v: { id: string; nome: string }) => api(`/crm/contatos/${v.id}`, { metodo: 'PATCH', corpo: { nome: v.nome } }), onSuccess: () => { setNomeNovo(null); atualizar(); } });
 
   /** Arquivo escolhido, colado (Ctrl+V) ou arrastado para a conversa: fica esperando o "Enviar". */
@@ -186,14 +187,30 @@ export function Chat({ conversaId, leadId, aoMudar }: { conversaId: string; lead
     if (texto.trim() && !enviar.isPending) enviar.mutate({ tipo: 'texto', texto });
   };
 
-  // "/atalho" → respostas rápidas; "@nome" na conversa interna → colegas.
-  const sugestoes = useMemo(() => {
-    const barra = texto.match(/^\/(\S*)$/);
-    if (barra && !interna) return (respostas.data ?? []).filter((r) => r.atalho.startsWith(barra[1].toLowerCase())).slice(0, 8).map((r) => ({ rotulo: `/${r.atalho} — ${r.texto.slice(0, 60)}`, valor: r.texto }));
+  // "/" → respostas rápidas e templates (digitar mais filtra pelo nome); "@nome" na conversa interna → colegas.
+  const cv = q.data?.conversa;
+  const sugestoes = useMemo((): { rotulo: string; valor: string; etiqueta?: string; templateId?: string }[] => {
+    const barra = texto.match(/^\/(.*)$/);
+    if (barra && !interna && !barra[1].includes('\n')) {
+      const termo = barra[1].trim().toLowerCase();
+      const rapidas = (respostas.data ?? []).filter((r) => r.atalho.startsWith(termo) || r.texto.toLowerCase().includes(termo)).map((r) => ({ rotulo: `/${r.atalho} — ${r.texto.slice(0, 60)}`, valor: r.texto, etiqueta: 'Resposta rápida' }));
+      const modelos = (templates.data ?? [])
+        .filter((t) => (t.tipo === 'meta' ? t.status === 'APPROVED' && cv?.canalTipo === 'oficial' : cv?.canalTipo !== 'oficial' || cv?.dentroDaJanela))
+        .filter((t) => t.nome.toLowerCase().includes(termo) || t.texto.toLowerCase().includes(termo))
+        // Modelo livre entra no campo para você ajustar antes de enviar; o da Meta vai como está (é o texto aprovado).
+        .map((t) => (t.tipo === 'meta' ? { rotulo: `${t.nome} — ${t.texto.slice(0, 60)}`, valor: '', etiqueta: 'Template da Meta: envia na hora', templateId: t.id } : { rotulo: `${t.nome} — ${t.texto.slice(0, 60)}`, valor: t.texto, etiqueta: 'Template' }));
+      return [...rapidas, ...modelos].slice(0, 12);
+    }
     const arroba = texto.match(/(^|\s)@(\S*)$/);
     if (arroba && interna) return (atendentes.data ?? []).filter((a) => a.nome.toLowerCase().startsWith(arroba[2].toLowerCase())).slice(0, 6).map((a) => ({ rotulo: `@${a.nome}`, valor: texto.replace(/@(\S*)$/, `@${a.nome.split(' ')[0]} `) }));
     return [];
-  }, [texto, interna, respostas.data, atendentes.data]);
+  }, [texto, interna, respostas.data, atendentes.data, templates.data, cv?.canalTipo, cv?.dentroDaJanela]);
+  const usarSugestao = (sg: { valor: string; templateId?: string }) => {
+    if (sg.templateId) enviar.mutate({ tipo: 'template', templateId: sg.templateId });
+    else setTexto(sg.valor);
+    campoTexto.current?.focus();
+  };
+  const semSugestao = !interna && /^\/[^\n]*$/.test(texto) && !sugestoes.length;
 
   if (q.isLoading) return <div className="chat"><div className="chat-msgs muted">Carregando conversa…</div></div>;
   if (q.error) return <div className="chat"><div style={{ padding: 16 }}><Erro erro={q.error} /></div></div>;
@@ -325,15 +342,20 @@ export function Chat({ conversaId, leadId, aoMudar }: { conversaId: string; lead
       {editar && (
         <div className={`composer ${interna ? 'interna' : ''}`}>
           {c.canalTipo === 'oficial' && !c.dentroDaJanela && !interna && <div className="aviso alerta" style={{ margin: 0, padding: '6px 10px', fontSize: 13 }}>Fora da janela de 24h: no número oficial, só templates aprovados até o contato responder.</div>}
-          {sugestoes.length > 0 && <div className="sugestoes">{sugestoes.map((s) => <button key={s.rotulo} onClick={() => setTexto(s.valor)}>{s.rotulo}</button>)}</div>}
+          {sugestoes.length > 0 && <div className="sugestoes">{sugestoes.map((sg) => <button key={`${sg.etiqueta}-${sg.rotulo}`} onClick={() => usarSugestao(sg)}>{sg.etiqueta && <span className="tag" style={{ marginRight: 6 }}>{sg.etiqueta}</span>}{sg.rotulo}</button>)}</div>}
+          {semSugestao && <div className="sugestoes"><div className="muted" style={{ padding: 8 }}>{texto === '/' ? 'Nenhuma resposta rápida nem template cadastrado. Crie em CRM › Configurar › Templates ou Respostas rápidas.' : 'Nada com esse nome.'}</div></div>}
           {verTemplates && (
             <div className="sugestoes">
               {!usaveis.length && <div className="muted" style={{ padding: 8 }}>Nenhum template disponível para este número.</div>}
               {usaveis.map((t) => (
-                <button key={t.id} onClick={() => enviar.mutate({ tipo: 'template', templateId: t.id })} disabled={enviar.isPending}>
-                  <b>{t.nome}</b> {t.tipo === 'meta' ? <span className="tag">Meta</span> : null} <span className="muted">— {t.texto.slice(0, 80)}</span>
-                </button>
+                <div key={t.id} className="linha-template">
+                  <button onClick={() => enviar.mutate({ tipo: 'template', templateId: t.id })} disabled={enviar.isPending} title="Enviar este template">
+                    <b>{t.nome}</b> {t.tipo === 'meta' ? <span className="tag">Meta</span> : null} <span className="muted">— {t.texto.slice(0, 80)}</span>
+                  </button>
+                  {gestor && t.tipo !== 'meta' && <button className="apagar" title="Apagar este template" aria-label={`Apagar o template ${t.nome}`} disabled={apagarTemplate.isPending} onClick={() => window.confirm(`Apagar o template "${t.nome}"? Ele some para toda a equipe.`) && apagarTemplate.mutate(t.id)}>🗑</button>}
+                </div>
               ))}
+              {apagarTemplate.error && <Erro erro={apagarTemplate.error} />}
             </div>
           )}
           {(enviar.error || anexar.error || reagir.error || apagar.error || renomear.error) && <Erro erro={enviar.error ?? anexar.error ?? reagir.error ?? apagar.error ?? renomear.error} />}
@@ -389,7 +411,9 @@ export function Chat({ conversaId, leadId, aoMudar }: { conversaId: string; lead
               if (e.key === 'Escape' && (citar || painel || pendente)) { setCitar(null); setPainel(null); setPendente(null); }
               if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
-                if (sugestoes.length === 1) return setTexto(sugestoes[0].valor);
+                if (sugestoes.length === 1) return usarSugestao(sugestoes[0]);
+                // "/algo" que não achou nada não vai para o cliente como mensagem.
+                if (semSugestao) return;
                 if (interna) { if (texto.trim() && !enviar.isPending) enviar.mutate({ tipo: 'texto', texto }); } else mandar();
               }
             }}

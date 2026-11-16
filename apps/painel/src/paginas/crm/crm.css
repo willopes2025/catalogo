@@ -168,3 +168,6 @@
   .msg .acoes-msg { display: flex; position: static; margin-top: 4px; box-shadow: none; width: fit-content; }
   .reacoes-rapidas { top: auto; bottom: 30px; }
 }
+.sugestoes .linha-template { display: flex; align-items: stretch; }
+.sugestoes .linha-template > button:first-child { flex: 1; min-width: 0; }
+.sugestoes .linha-template .apagar { width: auto; padding: 7px 12px; color: var(--erro); }
