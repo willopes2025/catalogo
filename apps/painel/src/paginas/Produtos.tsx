@@ -4,6 +4,7 @@ import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { api, ErroApi, pode } from '../api';
 import { centavosParaTexto, paraCentavos, pct, reais } from '../formato';
 import { Campo, Carregando, Erro, Topo } from '../componentes/ui';
+import { BuscaPorFoto, FotosProduto, usarIa } from '../componentes/ia';
 
 interface Linha { id: string; codigoBarras: string; referencia: string; descricao: string; categoria: string | null; cor: string | null; custo: number; preco: number; foto: string | null; estoque: number; emMaletas: number; ativo: boolean }
 
@@ -13,6 +14,8 @@ export function Produtos() {
   const navegar = useNavigate();
   const cats = useQuery({ queryKey: ['categorias'], queryFn: () => api<{ id: string; nome: string; caminho: string }[]>('/produtos/categorias') });
   const q = useQuery({ queryKey: ['produtos', params.toString()], queryFn: () => api<{ itens: Linha[]; total: number }>(`/produtos?${params.toString()}`) });
+  const ia = usarIa();
+  const [porFoto, setPorFoto] = useState(false);
   return (
     <>
       <Topo eb="Produtos" titulo="Catálogo" sub={q.data ? `${q.data.total} produtos ativos` : undefined} acoes={pode('produtos', 'criar') && <Link className="botao" to="/produtos/novo">Novo produto</Link>} />
@@ -23,7 +26,9 @@ export function Produtos() {
           {cats.data?.map((c) => <option key={c.id} value={c.id}>{c.caminho}</option>)}
         </select>
         <button className="botao claro">Buscar</button>
+        {ia.data?.texto && <button type="button" className="botao claro" aria-expanded={porFoto} onClick={() => setPorFoto((v) => !v)}>📷 Buscar por foto</button>}
       </form>
+      {porFoto && <BuscaPorFoto fechar={() => setPorFoto(false)} />}
       {q.isLoading ? <Carregando /> : q.error ? <Erro erro={q.error} /> : (
         <table className="tabela">
           <thead><tr><th></th><th>Código</th><th>Ref.</th><th>Descrição</th><th>Categoria</th><th className="num">Custo</th><th className="num">Preço</th><th className="num">Margem</th><th className="num">Estoque</th><th className="num">Em maletas</th></tr></thead>
@@ -148,11 +153,7 @@ export function FichaProduto() {
           <div className="campo l2"><label>&nbsp;</label><div className="flex"><label className="check"><input type="checkbox" checked={!!f.exibeCatalogo} onChange={(e) => setF({ ...f, exibeCatalogo: e.target.checked })} disabled={!editavel} /> Aparece no catálogo</label><label className="check"><input type="checkbox" checked={!!f.ativo} onChange={(e) => setF({ ...f, ativo: e.target.checked })} disabled={!editavel} /> Ativo</label></div></div>
         </div>
         <div className="cartao">
-          {f.fotos?.length > 0 && (
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 6, marginBottom: 14 }}>
-              {f.fotos.map((u: string) => <a key={u} href={u} target="_blank" rel="noreferrer"><img src={u} alt="" style={{ width: '100%', aspectRatio: '1', objectFit: 'cover', borderRadius: 8 }} /></a>)}
-            </div>
-          )}
+          {novo ? <p className="muted">Salve o produto para colocar as fotos.</p> : <FotosProduto produtoId={f.id} fotos={f.fotos ?? []} mudou={(fotos) => setF((x: any) => ({ ...x, fotos }))} />}
           <h3 style={{ marginBottom: 10 }}>Estoque por local</h3>
           {f.estoque?.length ? f.estoque.map((e: any, i: number) => <div key={i} className="resumo-linha"><span>{e.local}</span><b>{e.quantidade}</b></div>) : <p className="muted">Sem estoque.</p>}
           {!novo && <p style={{ marginTop: 12 }}><Link to={`/estoque?rastreio=${f.codigoBarras}`}>Ver o caminho desta peça</Link></p>}

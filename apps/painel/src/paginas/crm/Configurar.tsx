@@ -490,6 +490,7 @@ function AgenteIa() {
         {salvar.isSuccess && <div className="aviso ok l4">Salvo. {f.ativo ? 'O agente já está atendendo as conversas novas.' : 'O agente está desligado.'}</div>}
         {admin && <div className="l4"><button className="botao" disabled={salvar.isPending} onClick={() => salvar.mutate()}>Salvar</button></div>}
       </div>
+      <UsoIa />
       <div className="cartao">
         <b>No chat</b>
         <ul style={{ margin: '8px 0 0', paddingLeft: 20 }}>
@@ -499,6 +500,24 @@ function AgenteIa() {
           <li>Quando a IA passa a conversa, ela deixa um recado interno dizendo o motivo.</li>
         </ul>
       </div>
+    </div>
+  );
+}
+
+const NOME_RECURSO: Record<string, string> = { agente: 'Agente no WhatsApp', sugestao: 'Sugestão de resposta', reconhecer_peca: 'Reconhecer peça pela foto', maleta: 'Sugestão de maleta', foto: 'Foto de catálogo', teste: 'Teste de conexão' };
+
+/** Quantas vezes a IA foi chamada neste mês (a cobrança é das empresas de IA, pelo consumo). */
+function UsoIa() {
+  const q = useQuery({ queryKey: ['ia', 'uso'], queryFn: () => api<{ recurso: string; chamadas: number; entrada: number; saida: number }[]>('/ia/uso'), enabled: pode('configuracoes', 'ver') });
+  if (!q.data?.length) return null;
+  return (
+    <div className="cartao">
+      <b>Uso da IA neste mês</b>
+      <table className="tabela" style={{ marginTop: 8 }}>
+        <thead><tr><th>Recurso</th><th className="num">Chamadas</th><th className="num">Texto lido (tokens)</th><th className="num">Texto escrito (tokens)</th></tr></thead>
+        <tbody>{q.data.map((r) => <tr key={r.recurso}><td>{NOME_RECURSO[r.recurso] ?? r.recurso}</td><td className="num">{r.chamadas.toLocaleString('pt-BR')}</td><td className="num">{r.entrada.toLocaleString('pt-BR')}</td><td className="num">{r.saida.toLocaleString('pt-BR')}</td></tr>)}</tbody>
+      </table>
+      <p className="muted" style={{ margin: '8px 0 0', fontSize: 13 }}>O valor cobrado aparece no painel da Anthropic (Claude) e da OpenAI; elas cobram pela quantidade de tokens.</p>
     </div>
   );
 }

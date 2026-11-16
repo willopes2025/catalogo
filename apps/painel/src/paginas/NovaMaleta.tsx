@@ -5,6 +5,8 @@ import { api, pode } from '../api';
 import { reais } from '../formato';
 import { Campo, Erro, Topo } from '../componentes/ui';
 import { Leitor, type ItemLido } from '../componentes/Leitor';
+import { usarIa } from '../componentes/ia';
+import { paraCentavos } from '../formato';
 
 interface Situacao {
   representante: { id: string; nome: string; status: string; modeloTrabalho: string | null };
@@ -28,6 +30,15 @@ export function NovaMaleta() {
   useEffect(() => {
     if (!origemId && locais.data?.length) setOrigemId(locais.data.find((l) => l.tipo === 'deposito')?.id ?? locais.data[0].id);
   }, [locais.data, origemId]);
+
+  // Sugestão da IA: escolhe as peças pelo que a representante vende e pelo que tem no estoque de saída.
+  const ia = usarIa();
+  const [alvo, setAlvo] = useState('');
+  const [pedido, setPedido] = useState('');
+  const sugerir = useMutation({
+    mutationFn: () => api<{ itens: ItemLido[]; total: number; pecas: number; alvo: number; resumo: string; semHistorico: boolean }>('/ia/sugerir-maleta', { corpo: { representanteId: repId, origemId, ...(paraCentavos(alvo) > 0 ? { valorAlvo: paraCentavos(alvo) } : {}), ...(pedido.trim() ? { pedido: pedido.trim() } : {}) } }),
+    onSuccess: (r) => setItens(r.itens),
+  });
 
   const valor = itens.reduce((a, i) => a + i.preco * i.quantidade, 0);
   const s = sit.data;
@@ -66,6 +77,24 @@ export function NovaMaleta() {
           </div>
           <div className="cartao">
             <div className="secao" style={{ marginBottom: 12 }}>2. Peças</div>
+            {ia.data?.texto && (
+              <div className="coluna" style={{ gap: 8, border: '1px solid var(--linha)', borderRadius: 8, padding: 10, marginBottom: 12, background: 'var(--creme-2)' }}>
+                <b>✨ Sugerir as peças com IA</b>
+                <span className="muted" style={{ fontSize: 13 }}>A IA olha o que esta representante levou e vendeu, o que mais gira na empresa e o que tem no estoque de saída, e propõe a maleta. Você confere e ajusta antes de criar.</span>
+                <div className="flex" style={{ gap: 8, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+                  <Campo rotulo="Valor da maleta (R$)" ajuda="Em branco: a média das últimas dela"><input inputMode="decimal" placeholder="automático" value={alvo} onChange={(e) => setAlvo(e.target.value)} style={{ width: 150 }} /></Campo>
+                  <Campo rotulo="Pedido (opcional)" ajuda="Ex.: mais colares, peças até R$ 100" className="l2"><input value={pedido} maxLength={500} onChange={(e) => setPedido(e.target.value)} style={{ minWidth: 240 }} /></Campo>
+                  <button className="botao" disabled={!repId || !origemId || sugerir.isPending} title={!repId ? 'Escolha a representante primeiro' : undefined} onClick={() => (!itens.length || window.confirm('Trocar as peças que já estão na lista pela sugestão da IA?')) && sugerir.mutate()}>{sugerir.isPending ? 'Pensando…' : 'Sugerir'}</button>
+                </div>
+                {sugerir.error && <Erro erro={sugerir.error} />}
+                {sugerir.data && (
+                  <div className="aviso ok" style={{ margin: 0 }}>
+                    Sugestão com {sugerir.data.pecas} peça(s), {reais(sugerir.data.total)} (alvo de {reais(sugerir.data.alvo)}). {sugerir.data.resumo}
+                    {sugerir.data.semHistorico && ' Ela ainda não tem histórico de maletas, então é um mix equilibrado.'}
+                  </div>
+                )}
+              </div>
+            )}
             <Leitor itens={itens} mudar={setItens} />
           </div>
         </div>

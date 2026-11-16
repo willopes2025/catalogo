@@ -65,6 +65,7 @@ import { CrmService } from './crm/crm.service';
 import { CanaisService } from './crm/canais.service';
 import { AgenteService } from './crm/agente.service';
 import { IaService } from './ia/ia.service';
+import { IaController } from './ia/ia.controller';
 import { AutomacaoService } from './crm/automacao.service';
 import { DistribuicaoService } from './crm/distribuicao.service';
 import { AgendaService } from './agenda/agenda.service';
@@ -126,6 +127,7 @@ if (!segredo || (process.env.NODE_ENV === 'production' && segredo.length < 32)) 
     FormulariosController,
     MarketingController,
     MetaController,
+    IaController,
   ],
   providers: [
     SegredosService,

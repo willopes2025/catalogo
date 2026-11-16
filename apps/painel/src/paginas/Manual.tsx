@@ -166,6 +166,25 @@ const SECOES: Secao[] = [
     ],
   },
   {
+    id: 'ia',
+    titulo: 'Inteligência artificial',
+    passos: [
+      { t: 'Ligar', d: 'Em Configurações › Integrações › Inteligência artificial, cole a chave do Claude (agente, sugestões, maleta e reconhecer peça) e a da OpenAI (foto de catálogo). Cada uma funciona sozinha; sem a chave, os botões daquele recurso não aparecem.' },
+      { t: 'Agente no WhatsApp', d: 'Em CRM › Configurar › Agente de IA: ligue, escolha os números, escreva como ela deve atender e o que precisa saber da empresa. Ela responde quem escreve enquanto ninguém pegou a conversa, e passa para a equipe (com um recado interno) quando pedem atendente, em reclamação, pagamento ou troca, e quando não sabe.' },
+      { t: 'No chat', d: '"✨ Sugerir" escreve uma resposta para você revisar. No menu ⋮, "Acionar IA" liga a IA só naquela conversa. As mensagens dela aparecem marcadas com "IA". Quando alguém da equipe escreve ou pega a conversa, ela sai.' },
+      { t: 'Buscar a peça pela foto', d: 'Em Produtos, "📷 Buscar por foto": tire ou escolha a foto da peça. A IA descreve, procura no cadastro e compara com as fotos dos produtos, mostrando a mais provável primeiro.' },
+      { t: 'Sugerir a maleta', d: 'Em Maletas › Nova, depois de escolher a representante: "Sugerir". A IA propõe as peças pelo que ela vende, pelo que gira na empresa e pelo estoque de saída. Você ajusta e cria a maleta normalmente.' },
+      { t: 'Foto de catálogo', d: 'Na ficha do produto, "✨ Gerar foto com IA": escolha a foto de base e o estilo (fundo branco, em uma modelo ou em ambiente). A foto só entra no produto quando você aprova.' },
+    ],
+    dicas: [
+      'A IA só afirma sobre a empresa o que estiver escrito em "O que ela precisa saber". Preencha endereço, horário, pagamento e como funciona a revenda.',
+      'Confira a foto gerada com a peça de verdade antes de usar: a IA pode mudar um detalhe.',
+      'Na busca por foto, confira a referência na etiqueta: peças muito parecidas podem confundir.',
+      'O uso é cobrado pela Anthropic e pela OpenAI, pelo consumo. A aba Agente de IA mostra quantas chamadas foram feitas no mês.',
+      'Em "Produtos", agora também dá para enviar e tirar fotos do produto, mesmo sem IA.',
+    ],
+  },
+  {
     id: 'chat',
     titulo: 'Conversas do WhatsApp (chat do CRM)',
     passos: [

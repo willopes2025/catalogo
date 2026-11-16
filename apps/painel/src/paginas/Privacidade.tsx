@@ -33,6 +33,7 @@ export function Privacidade() {
 
       <h2>Com quem compartilhamos</h2>
       <p>Só com os serviços necessários para o funcionamento: hospedagem do sistema, envio de mensagens de WhatsApp e e-mail, cobrança (boleto e Pix), emissão de notas fiscais, notificações (Google Firebase e Apple) e, quando a consultora atende o contato, com a própria consultora. Não vendemos dados pessoais.</p>
+      <p>Parte do atendimento pelo WhatsApp pode ser feita com ajuda de inteligência artificial. Nesse caso, as mensagens da conversa são processadas por um serviço de IA contratado (Anthropic) só para escrever as respostas. A qualquer momento você pode pedir para falar com uma pessoa da equipe.</p>
 
       <h2>Por quanto tempo guardamos</h2>
       <p>Enquanto durar a relação com a Aritana e, depois, pelo prazo exigido por lei para documentos fiscais, contábeis e contratuais.</p>

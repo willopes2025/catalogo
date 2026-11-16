@@ -1683,6 +1683,80 @@ test('agente de IA no WhatsApp: atende a fila, passa para a equipe, sai quando a
   for (const x of [c, c2]) await ok('DELETE', `/crm/canais/${x.id}`);
 });
 
+test('IA fora do chat: reconhecer peça pela foto, sugerir maleta e gerar foto de catálogo', async (t) => {
+  const PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+  const estado = await ok('GET', '/ia/estado');
+  assert.deepEqual([estado.texto, estado.imagem], [true, false], 'Claude ligado no teste anterior; OpenAI ainda não');
+  assert.equal((await ok('POST', '/ia/testar')).ok, true);
+
+  // Reconhecer: a IA descreve, o cadastro acha as candidatas, e a IA compara com as fotos do cadastro.
+  const pg = createRequire(import.meta.url)('pg');
+  const banco = new pg.Client({ connectionString: process.env.DATABASE_URL ?? 'postgres://aritana:aritana@localhost:5432/aritana_teste' });
+  await banco.connect();
+  t.after(() => banco.end());
+  const locais = await ok('GET', '/estoque/locais');
+  const origem = locais.find((l) => l.tipo === 'deposito') ?? locais[0];
+  const cat = (await banco.query(`insert into categorias (nome) values ('Brincos IA') returning id`)).rows[0].id;
+  const ids = [];
+  for (const [ref, desc] of [['IA-ARG-1', 'Brinco argola dourado liso'], ['IA-ARG-2', 'Brinco argola dourado torcido'], ['IA-COL-1', 'Colar ponto de luz']]) {
+    const p = (await banco.query(`insert into produtos (codigo_barras, referencia, descricao, categoria_id, preco, custo) values ($1, $1, $2, $3, 8990, 3000) returning id`, [ref, desc, cat])).rows[0].id;
+    await banco.query(`insert into saldos (produto_id, local_id, quantidade) values ($1, $2, 4)`, [p, origem.id]);
+    ids.push(p);
+  }
+  // As duas argolas ganham foto (enviada do computador), para a comparação.
+  for (const id of ids.slice(0, 2)) assert.equal((await ok('POST', '/ia/foto-produto/usar', { produtoId: id, base64: PNG + (id === ids[0] ? '' : 'AA'), mime: 'image/png' })).fotos.length, 1);
+  const rec = await ok('POST', '/ia/reconhecer-peca', { base64: `data:image/png;base64,${PNG}`, mime: 'image/png' });
+  assert.equal(rec.descricao, 'Brinco de argola dourado, liso');
+  const refs = rec.candidatos.map((c) => c.referencia);
+  assert.ok(refs.includes('IA-ARG-1') && refs.includes('IA-ARG-2'));
+  assert.ok(!refs.includes('IA-COL-1'), 'o colar não entra: não bate com a descrição');
+  assert.equal(rec.candidatos[0].confianca, 92, 'a mais provável vem primeiro, com a confiança');
+  assert.ok(rec.candidatos[0].referencia.startsWith('IA-ARG') && rec.candidatos[0].foto, 'as comparadas são as que têm foto');
+  assert.equal(rec.candidatos[1].confianca, 20);
+  assert.equal(rec.candidatos[0].estoque, 4);
+  const comparacao = (await recebidos()).filter((r) => r.caminho === '/claude/v1/messages').pop().corpo;
+  assert.equal(comparacao.messages[0].content.filter((b) => b.type === 'image').length, 3, 'a foto procurada e as duas do cadastro');
+  assert.equal((await chamar('POST', '/ia/reconhecer-peca', { base64: 'x', mime: 'image/png' })).status, 400);
+
+  // Maleta: a sugestão só usa o que existe e o que tem estoque, sem passar do valor alvo.
+  const rep = await ok('POST', '/pessoas', { tipo: 'representante', nome: 'Revendedora Da IA', telefone1: '27991239999', cidade: 'Vitória', uf: 'ES', limiteCredito: 500000 });
+  const sug = await ok('POST', '/ia/sugerir-maleta', { representanteId: rep.id, origemId: origem.id, valorAlvo: 40000 });
+  assert.ok(sug.itens.length >= 1 && sug.itens.length <= 3);
+  assert.ok(sug.itens.every((i) => i.quantidade >= 1 && i.quantidade <= 4 && i.codigoBarras && i.preco > 0), 'quantidade dentro do estoque');
+  assert.ok(!sug.itens.some((i) => i.referencia === 'NAO-EXISTE'), 'referência inventada pela IA é descartada');
+  assert.equal(new Set(sug.itens.map((i) => i.produtoId)).size, sug.itens.length, 'sem repetir a peça');
+  assert.ok(sug.total <= 40000 * 1.05, 'não passa do valor alvo');
+  assert.equal(sug.total, sug.itens.reduce((t, i) => t + i.preco * i.quantidade, 0));
+  assert.equal(sug.semHistorico, true);
+  assert.equal(sug.resumo, 'Mais brincos, que é o que ela mais vende.');
+  assert.equal((await chamar('POST', '/ia/sugerir-maleta', { representanteId: rep.id, origemId: origem.id, valorAlvo: 500 })).status, 400);
+
+  // Foto de catálogo: sem a chave da OpenAI avisa; com a chave gera, e só entra no produto quando aprovada.
+  const semChave = await chamar('POST', '/ia/foto-produto', { produtoId: ids[2], estilo: 'fundo_branco', base64: PNG, mime: 'image/png' });
+  assert.equal(semChave.status, 503);
+  await ok('PUT', '/integracoes/ia', { valores: { OPENAI_API_KEY: 'chave-openai-teste' } });
+  assert.equal((await chamar('POST', '/ia/foto-produto', { produtoId: ids[2], estilo: 'fundo_branco' })).status, 400, 'sem foto de origem');
+  const gerada = await ok('POST', '/ia/foto-produto', { produtoId: ids[2], estilo: 'modelo', base64: PNG, mime: 'image/png', pedido: 'cabelo preso' });
+  assert.match(gerada.url, /^\/api\/fotos\/[a-f0-9]{40}\.png$/);
+  const pedidoImg = (await recebidos()).filter((r) => r.caminho === '/openai/v1/images/edits').pop().corpo;
+  assert.equal(pedidoImg.size, '1024x1536');
+  assert.ok(pedidoImg.prompt.includes('Colar ponto de luz') && pedidoImg.prompt.includes('cabelo preso') && pedidoImg.prompt.includes('exatamente a da foto'));
+  assert.ok(pedidoImg.images[0].image_url.startsWith('data:image/png;base64,'));
+  assert.equal(pedidoImg.model, undefined, 'sem modelo escolhido, usa o padrão da OpenAI');
+  assert.equal((await fetch(API.replace(/\/api$/, '') + gerada.url)).status, 200, 'a foto gerada abre');
+  assert.deepEqual((await banco.query('select fotos from produtos where id = $1', [ids[2]])).rows[0].fotos, [], 'ainda não entrou no produto');
+  assert.deepEqual((await ok('POST', '/ia/foto-produto/usar', { produtoId: ids[2], url: gerada.url, principal: true })).fotos, [gerada.url]);
+  // Gerar a partir de uma foto que já é do produto, e tirar uma foto.
+  const outra = await ok('POST', '/ia/foto-produto', { produtoId: ids[2], estilo: 'ambiente', fotoAtual: gerada.url });
+  assert.ok(outra.url);
+  assert.equal((await chamar('POST', '/ia/foto-produto', { produtoId: ids[2], estilo: 'ambiente', fotoAtual: '/api/fotos/de-outro-produto.png' })).status, 400);
+  assert.deepEqual((await ok('POST', '/ia/foto-produto/tirar', { produtoId: ids[2], url: gerada.url })).fotos, []);
+
+  // O consumo do mês aparece por recurso.
+  const uso = await ok('GET', '/ia/uso');
+  for (const r of ['agente', 'sugestao', 'reconhecer_peca', 'maleta', 'foto', 'teste']) assert.ok(uso.find((x) => x.recurso === r)?.chamadas >= 1, r);
+});
+
 test('RH e ponto: cadastro, login pelo CPF, batida com foto e GPS, ajustes, espelho, ciência, documentos, AFD/AEJ e contabilidade', async () => {
   const gestor = token;
   const hoje = new Date(Date.now() - 3 * 3600e3).toISOString().slice(0, 10);
