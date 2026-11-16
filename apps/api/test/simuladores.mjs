@@ -227,6 +227,8 @@ http
       if (r === 'instance/delete') { evo.delete(partes[2]); return responder(res, 200, { status: 'SUCCESS' }); }
       if (url.pathname === '/evo/__existe') return responder(res, 200, { existe: evo.has(url.searchParams.get('i')) });
       if (r === 'webhook/set') { inst.webhook = corpo.webhook; return responder(res, 201, { webhook: corpo.webhook }); }
+      if (r === 'message/sendReaction') return responder(res, 201, { key: corpo.key, status: 'PENDING' });
+      if (r === 'chat/deleteMessageForEveryone') return responder(res, 201, { key: { id: corpo.id }, status: 'PENDING' });
       if (r === 'message/sendText' || r === 'message/sendMedia' || r === 'message/sendWhatsAppAudio') {
         if (inst.estado !== 'open') return responder(res, 400, { status: 400, error: 'Bad Request', response: { message: ['Connection Closed'] } });
         if (String(corpo.number).endsWith('0000')) return responder(res, 400, { status: 400, error: 'Bad Request', response: { message: [{ exists: false, jid: `${corpo.number}@s.whatsapp.net`, number: corpo.number }] } });

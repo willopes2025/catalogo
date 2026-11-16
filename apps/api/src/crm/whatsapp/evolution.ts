@@ -1,4 +1,4 @@
-import { ErroCanal, type Conexao, type MensagemEntrada, type MensagemSaida, type StatusEntrada } from './tipos';
+import { ErroCanal, type AlvoMensagem, type Conexao, type MensagemEntrada, type MensagemSaida, type ReacaoEntrada, type StatusEntrada } from './tipos';
 
 /**
  * WhatsApp por QR code no servidor próprio (Evolution API, que roda na mesma VPS, sem porta aberta para a internet).
@@ -37,7 +37,7 @@ export function validarEnderecoEvolution(bruto: string) {
 }
 
 /** Eventos que o sistema precisa ouvir. */
-const EVENTOS = ['MESSAGES_UPSERT', 'MESSAGES_UPDATE', 'CONNECTION_UPDATE'];
+const EVENTOS = ['MESSAGES_UPSERT', 'MESSAGES_UPDATE', 'MESSAGES_DELETE', 'CONNECTION_UPDATE'];
 
 async function chamar<T>(caminho: string, init: RequestInit = {}, fora?: ServidorEvolution): Promise<T> {
   if (!fora && !evolutionDisponivel()) throw new ErroCanal('O servidor de WhatsApp por QR code não está instalado nesta VPS. Rode o instalador de novo para ativá-lo.');
@@ -111,15 +111,18 @@ export class ConexaoEvolution implements Conexao {
   async enviar(m: MensagemSaida) {
     const numero = m.para.replace(/\D/g, '');
     let r: { key?: { id?: string } };
+    // Responder citando: o WhatsApp mostra a mensagem original em cima da resposta.
+    const citar = m.citar ? { quoted: { key: { id: m.citar.idExterno, fromMe: m.citar.minha, remoteJid: `${numero}@s.whatsapp.net` }, message: { conversation: m.citar.texto ?? '' } } } : {};
     if (m.tipo === 'texto' || m.tipo === 'template') {
-      r = await this.chamar(`message/sendText/${this.i}`, { method: 'POST', body: JSON.stringify({ number: numero, text: m.texto ?? '' }) });
+      r = await this.chamar(`message/sendText/${this.i}`, { method: 'POST', body: JSON.stringify({ number: numero, text: m.texto ?? '', ...citar }) });
     } else if (m.tipo === 'audio') {
-      r = await this.chamar(`message/sendWhatsAppAudio/${this.i}`, { method: 'POST', body: JSON.stringify({ number: numero, audio: m.midia!.conteudo.toString('base64') }) });
+      // "encoding": o servidor converte para o formato de áudio de voz do WhatsApp (o navegador grava em outro).
+      r = await this.chamar(`message/sendWhatsAppAudio/${this.i}`, { method: 'POST', body: JSON.stringify({ number: numero, audio: m.midia!.conteudo.toString('base64'), encoding: true, ...citar }) });
     } else {
       const mediatype = m.tipo === 'imagem' ? 'image' : m.tipo === 'video' ? 'video' : 'document';
       r = await this.chamar(`message/sendMedia/${this.i}`, {
         method: 'POST',
-        body: JSON.stringify({ number: numero, mediatype, mimetype: m.midia!.mime, caption: m.texto ?? '', media: m.midia!.conteudo.toString('base64'), fileName: m.midia!.nome }),
+        body: JSON.stringify({ number: numero, mediatype, mimetype: m.midia!.mime, caption: m.texto ?? '', media: m.midia!.conteudo.toString('base64'), fileName: m.midia!.nome, ...citar }),
       });
     }
     const id = r.key?.id;
@@ -130,6 +133,8 @@ export class ConexaoEvolution implements Conexao {
   ler(corpo: unknown) {
     const mensagens: MensagemEntrada[] = [];
     const status: StatusEntrada[] = [];
+    const reacoes: ReacaoEntrada[] = [];
+    const apagadas: string[] = [];
     const b = (corpo ?? {}) as Record<string, any>;
     const evento = String(b.event ?? '').toLowerCase().replace(/_/g, '.');
     const lista = Array.isArray(b.data) ? b.data : b.data ? [b.data] : [];
@@ -142,17 +147,31 @@ export class ConexaoEvolution implements Conexao {
         const telefone = numeroDoJid(jid) || numeroDoJid(k.remoteJidAlt) || numeroDoJid(k.senderPn) || numeroDoJid(d.senderPn);
         if (!telefone) continue;
         const msg = d.message ?? {};
-        const tipo: MensagemEntrada['tipo'] = msg.imageMessage || msg.stickerMessage ? 'imagem' : msg.audioMessage ? 'audio' : msg.videoMessage ? 'video' : msg.documentMessage || msg.documentWithCaptionMessage ? 'documento' : msg.locationMessage ? 'localizacao' : msg.conversation || msg.extendedTextMessage ? 'texto' : 'outro';
+        // Reação a uma mensagem e "apagar para todos" não são mensagens novas.
+        if (msg.reactionMessage) {
+          if (msg.reactionMessage.key?.id) reacoes.push({ idExterno: String(msg.reactionMessage.key.id), emoji: String(msg.reactionMessage.text ?? ''), minha: !!k.fromMe });
+          continue;
+        }
+        if (msg.protocolMessage) {
+          const p = msg.protocolMessage;
+          if ((p.type === 'REVOKE' || p.type === 0) && p.key?.id) apagadas.push(String(p.key.id));
+          continue;
+        }
+        const cartoes = msg.contactMessage ? [msg.contactMessage] : (msg.contactsArrayMessage?.contacts ?? []);
+        const textoContato = cartoes.length ? cartoes.map((c: Record<string, any>) => `👤 ${c.displayName ?? 'Contato'}${/waid=(\d+)/.exec(c.vcard ?? '')?.[1] ? ` · +${/waid=(\d+)/.exec(c.vcard)![1]}` : ''}`).join('\n') : null;
+        const ctx = msg.extendedTextMessage?.contextInfo ?? msg.imageMessage?.contextInfo ?? msg.videoMessage?.contextInfo ?? msg.audioMessage?.contextInfo ?? msg.documentMessage?.contextInfo ?? msg.stickerMessage?.contextInfo ?? d.contextInfo;
+        const tipo: MensagemEntrada['tipo'] = textoContato ? 'texto' : msg.imageMessage || msg.stickerMessage ? 'imagem' : msg.audioMessage ? 'audio' : msg.videoMessage ? 'video' : msg.documentMessage || msg.documentWithCaptionMessage ? 'documento' : msg.locationMessage ? 'localizacao' : msg.conversation || msg.extendedTextMessage ? 'texto' : 'outro';
         const doc = msg.documentMessage ?? msg.documentWithCaptionMessage?.message?.documentMessage;
         const midiaInfo = msg.imageMessage ?? msg.stickerMessage ?? msg.audioMessage ?? msg.videoMessage ?? doc;
-        if (msg.reactionMessage || msg.protocolMessage) continue;
         mensagens.push({
           telefone,
           nome: d.pushName ?? null,
           idExterno: String(k.id),
           minha: !!k.fromMe,
           tipo,
+          citaIdExterno: ctx?.stanzaId ? String(ctx.stanzaId) : undefined,
           texto:
+            textoContato ??
             msg.conversation ?? msg.extendedTextMessage?.text ?? msg.imageMessage?.caption ?? msg.videoMessage?.caption ?? doc?.caption ??
             (msg.locationMessage ? `📍 ${msg.locationMessage.degreesLatitude},${msg.locationMessage.degreesLongitude}` : null) ?? (tipo === 'outro' ? '[mensagem não suportada]' : null),
           // A mídia é baixada mandando a mensagem inteira de volta ao servidor (ele não guarda cópia das mensagens).
@@ -167,9 +186,24 @@ export class ConexaoEvolution implements Conexao {
         const id = d.keyId ?? d.key?.id ?? d.messageId;
         const s = mapa[String(d.status ?? d.update?.status ?? '')];
         if (id && s && d.fromMe !== false) status.push({ idExterno: String(id), status: s });
+        if (id && String(d.status ?? '') === 'DELETED') apagadas.push(String(id));
       }
     }
-    return { mensagens, status };
+    if (evento === 'messages.delete') {
+      for (const d of lista) {
+        const id = d.id ?? d.keyId ?? d.key?.id;
+        if (id) apagadas.push(String(id));
+      }
+    }
+    return { mensagens, status, reacoes, apagadas };
+  }
+
+  async reagir(para: string, alvo: AlvoMensagem, emoji: string) {
+    await this.chamar(`message/sendReaction/${this.i}`, { method: 'POST', body: JSON.stringify({ key: { remoteJid: `${para.replace(/\D/g, '')}@s.whatsapp.net`, fromMe: alvo.minha, id: alvo.idExterno }, reaction: emoji }) });
+  }
+
+  async apagar(para: string, alvo: AlvoMensagem) {
+    await this.chamar(`chat/deleteMessageForEveryone/${this.i}`, { method: 'DELETE', body: JSON.stringify({ id: alvo.idExterno, remoteJid: `${para.replace(/\D/g, '')}@s.whatsapp.net`, fromMe: alvo.minha }) });
   }
 
   async baixarMidia(ref: string) {

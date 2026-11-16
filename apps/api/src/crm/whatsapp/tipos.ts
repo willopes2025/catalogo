@@ -7,6 +7,15 @@ export interface MensagemSaida {
   template?: { nome: string; idioma: string; parametros: string[] };
   /** Mídia: conteúdo e tipo. */
   midia?: { conteudo: Buffer; mime: string; nome: string };
+  /** Responder citando uma mensagem da conversa. */
+  citar?: AlvoMensagem & { texto: string | null };
+}
+
+/** Uma mensagem que já está no WhatsApp (para citar, reagir ou apagar). */
+export interface AlvoMensagem {
+  idExterno: string;
+  /** Foi mandada por este número (e não pelo contato). */
+  minha: boolean;
 }
 
 export interface MensagemEntrada {
@@ -22,6 +31,15 @@ export interface MensagemEntrada {
   quando: Date;
   /** Anúncio "clique para WhatsApp" que trouxe a pessoa (Meta). */
   referencia?: Record<string, string>;
+  /** Mensagem que esta está respondendo (citação). */
+  citaIdExterno?: string;
+}
+
+/** Reação (emoji) a uma mensagem. Emoji vazio = tirou a reação. */
+export interface ReacaoEntrada {
+  idExterno: string;
+  emoji: string;
+  minha: boolean;
 }
 
 export interface StatusEntrada {
@@ -43,7 +61,11 @@ export interface TemplateRemoto {
 export interface Conexao {
   enviar(m: MensagemSaida): Promise<{ idExterno: string }>;
   /** Lê o corpo de um webhook. */
-  ler(corpo: unknown): { mensagens: MensagemEntrada[]; status: StatusEntrada[] };
+  ler(corpo: unknown): { mensagens: MensagemEntrada[]; status: StatusEntrada[]; reacoes?: ReacaoEntrada[]; apagadas?: string[] };
+  /** Reage a uma mensagem (emoji vazio tira a reação). */
+  reagir?(para: string, alvo: AlvoMensagem, emoji: string): Promise<void>;
+  /** Apaga para todos uma mensagem enviada por este número. */
+  apagar?(para: string, alvo: AlvoMensagem): Promise<void>;
   baixarMidia(ref: string): Promise<{ conteudo: Buffer; mime: string }>;
   situacao(): Promise<{ conectado: boolean; detalhe: string; qrcode?: string | null; numero?: string | null }>;
   templates?(): Promise<TemplateRemoto[]>;

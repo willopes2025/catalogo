@@ -190,6 +190,13 @@
       "when": 1794843829804,
       "tag": "0026_meta_leads",
       "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "7",
+      "when": 1794868821780,
+      "tag": "0027_chat_whatsapp",
+      "breakpoints": true
     }
   ]
 }

@@ -1118,6 +1118,8 @@ export const crmCanais = pgTable('crm_canais', {
   ativo: boolean('ativo').notNull().default(true),
   /** Excluído pela equipe: some da tela e não manda nem recebe mais; as conversas antigas continuam no histórico. */
   excluidoEm: timestamp('excluido_em', { withTimezone: true }),
+  /** Última vez que o WhatsApp avisou o sistema de alguma coisa por este número (para conferir se as mensagens estão chegando). */
+  ultimoWebhookEm: timestamp('ultimo_webhook_em', { withTimezone: true }),
   criadoEm: criadoEm(),
 });
 
@@ -1138,6 +1140,8 @@ export const crmConversas = pgTable(
     ultimaMensagemEm: timestamp('ultima_mensagem_em', { withTimezone: true }),
     /** Última mensagem recebida do contato: abre a janela de 24h do WhatsApp oficial. */
     ultimaEntradaEm: timestamp('ultima_entrada_em', { withTimezone: true }),
+    /** Fixada no topo da lista de conversas. */
+    fixada: boolean('fixada').notNull().default(false),
     criadoEm: criadoEm(),
   },
   (t) => ({ unica: uniqueIndex('crm_conversas_contato_canal_idx').on(t.contatoId, t.canalId), recentes: index('crm_conversas_recentes_idx').on(t.ultimaMensagemEm), porStatus: index('crm_conversas_status_idx').on(t.status, t.atendenteId) }),
@@ -1165,6 +1169,12 @@ export const crmMensagens = pgTable(
     /** Origem automática: gatilho ou disparo em massa. */
     gatilhoId: uuid('gatilho_id'),
     disparoId: uuid('disparo_id'),
+    /** Mensagem da mesma conversa que esta responde (citação). */
+    citadaId: uuid('citada_id'),
+    /** Reações: de quem ('contato' ou 'equipe') e o emoji. Uma por lado. */
+    reacoes: jsonb('reacoes').$type<{ de: 'contato' | 'equipe'; emoji: string }[]>().notNull().default([]),
+    /** Apagada para todos (o texto e a mídia somem da tela). */
+    apagadaEm: timestamp('apagada_em', { withTimezone: true }),
     criadoEm: criadoEm(),
   },
   (t) => ({ porConversa: index('crm_mensagens_conversa_idx').on(t.conversaId, t.criadoEm), porExterno: index('crm_mensagens_externo_idx').on(t.idExterno) }),

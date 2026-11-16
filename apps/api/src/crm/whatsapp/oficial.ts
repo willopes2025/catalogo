@@ -1,5 +1,5 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
-import { ErroCanal, type Conexao, type MensagemEntrada, type MensagemSaida, type StatusEntrada, type TemplateRemoto } from './tipos';
+import { ErroCanal, type AlvoMensagem, type Conexao, type MensagemEntrada, type MensagemSaida, type ReacaoEntrada, type StatusEntrada, type TemplateRemoto } from './tipos';
 
 export interface ConfigOficial {
   phoneNumberId: string;
@@ -35,7 +35,7 @@ export class ConexaoOficial implements Conexao {
   }
 
   async enviar(m: MensagemSaida) {
-    const corpo: Record<string, unknown> = { messaging_product: 'whatsapp', recipient_type: 'individual', to: m.para };
+    const corpo: Record<string, unknown> = { messaging_product: 'whatsapp', recipient_type: 'individual', to: m.para, ...(m.citar && m.tipo !== 'template' ? { context: { message_id: m.citar.idExterno } } : {}) };
     if (m.tipo === 'texto') Object.assign(corpo, { type: 'text', text: { body: m.texto ?? '', preview_url: true } });
     else if (m.tipo === 'template') {
       const t = m.template!;
@@ -54,6 +54,10 @@ export class ConexaoOficial implements Conexao {
     return { idExterno: id };
   }
 
+  async reagir(para: string, alvo: AlvoMensagem, emoji: string) {
+    await this.chamar(`${this.c.phoneNumberId}/messages`, { method: 'POST', body: JSON.stringify({ messaging_product: 'whatsapp', recipient_type: 'individual', to: para, type: 'reaction', reaction: { message_id: alvo.idExterno, emoji } }) });
+  }
+
   /** Confere a assinatura X-Hub-Signature-256 (quando o App Secret foi informado). */
   assinaturaValida(bruto: Buffer | undefined, assinatura: string | undefined) {
     if (!this.c.appSecret) return true;
@@ -66,6 +70,7 @@ export class ConexaoOficial implements Conexao {
   ler(corpo: unknown) {
     const mensagens: MensagemEntrada[] = [];
     const status: StatusEntrada[] = [];
+    const reacoes: ReacaoEntrada[] = [];
     const entradas = ((corpo as { entry?: unknown[] })?.entry ?? []) as { changes?: { value?: Record<string, unknown> }[] }[];
     for (const e of entradas) {
       for (const ch of e.changes ?? []) {
@@ -73,9 +78,15 @@ export class ConexaoOficial implements Conexao {
         const nomes = new Map(((v.contacts as { wa_id: string; profile?: { name?: string } }[]) ?? []).map((c) => [c.wa_id, c.profile?.name ?? null]));
         for (const m of (v.messages as Record<string, any>[]) ?? []) {
           const tipo = m.type as string;
+          if (tipo === 'reaction') {
+            if (m.reaction?.message_id) reacoes.push({ idExterno: String(m.reaction.message_id), emoji: String(m.reaction.emoji ?? ''), minha: false });
+            continue;
+          }
+          const cartoes = tipo === 'contacts' ? ((m.contacts as Record<string, any>[]) ?? []).map((c) => `👤 ${c.name?.formatted_name ?? 'Contato'}${c.phones?.[0]?.wa_id || c.phones?.[0]?.phone ? ` · +${String(c.phones[0].wa_id ?? c.phones[0].phone).replace(/\D/g, '')}` : ''}`).join('\n') : null;
           const midiaDe = (o?: Record<string, any>) => (o?.id ? { ref: String(o.id), mime: o.mime_type ?? null, nome: o.filename ?? null } : undefined);
           const mapa: Record<string, MensagemEntrada['tipo']> = { text: 'texto', image: 'imagem', audio: 'audio', voice: 'audio', video: 'video', document: 'documento', sticker: 'imagem', location: 'localizacao', button: 'texto', interactive: 'texto' };
           const texto =
+            cartoes ??
             m.text?.body ??
             m.button?.text ??
             m.interactive?.button_reply?.title ??
@@ -87,7 +98,8 @@ export class ConexaoOficial implements Conexao {
             nome: nomes.get(m.from) ?? null,
             idExterno: String(m.id),
             minha: false,
-            tipo: mapa[tipo] ?? 'outro',
+            tipo: cartoes ? 'texto' : (mapa[tipo] ?? 'outro'),
+            citaIdExterno: m.context?.id ? String(m.context.id) : undefined,
             texto: texto ?? (mapa[tipo] ? null : `[mensagem do tipo ${tipo}]`),
             midia: ['image', 'audio', 'voice', 'video', 'document', 'sticker'].includes(tipo) ? midiaDe(m[tipo]) : undefined,
             quando: new Date(Number(m.timestamp ?? Date.now() / 1000) * 1000),
@@ -113,7 +125,7 @@ export class ConexaoOficial implements Conexao {
         }
       }
     }
-    return { mensagens, status };
+    return { mensagens, status, reacoes };
   }
 
   async baixarMidia(ref: string) {

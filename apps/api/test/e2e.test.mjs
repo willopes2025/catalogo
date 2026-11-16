@@ -1382,7 +1382,7 @@ test('WhatsApp por QR code no servidor próprio: só o nome, QR na tela, recebe 
   // O webhook foi apontado pela rede interna, com o token do canal.
   const criacao = (await recebidos()).filter((r) => r.caminho === '/evo/instance/create').pop();
   assert.ok(criacao.corpo.webhook.url.startsWith(`http://localhost:3100/api/webhooks/whatsapp/${c.id}/`));
-  assert.deepEqual(criacao.corpo.webhook.events.sort(), ['CONNECTION_UPDATE', 'MESSAGES_UPDATE', 'MESSAGES_UPSERT']);
+  assert.deepEqual(criacao.corpo.webhook.events.sort(), ['CONNECTION_UPDATE', 'MESSAGES_DELETE', 'MESSAGES_UPDATE', 'MESSAGES_UPSERT']);
   const hook = criacao.corpo.webhook.url.replace('http://localhost:3100', '');
   const postar = (b) => fetch(API.replace(/\/api$/, '') + hook, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(b) });
   // Mensagem de conta nova (@lid): o número vem no campo alternativo. Grupo é ignorado.
@@ -1467,6 +1467,79 @@ test('Evolution pelo token: liga uma instância que já existe em outro servidor
   assert.ok(depois, 'a instância não foi apagada do servidor de fora');
   assert.equal(depois.webhook.enabled, false);
   assert.equal(depois.estado, 'open', 'nem desconectada');
+});
+
+test('chat do CRM: conversa avulsa, responder citando, reagir, apagar para todos, fixar e não lidas', async () => {
+  const c = await ok('POST', '/crm/canais', { nome: 'Chat completo', tipo: 'evolution' });
+  const inst = c.config.instancia;
+  await fetch(`${SIM}/__evo/conectar?i=${encodeURIComponent(inst)}`);
+  const hook = (await recebidos()).filter((r) => r.caminho === '/evo/instance/create').pop().corpo.webhook.url.replace('http://localhost:3100', '');
+  const postar = (b) => fetch(API.replace(/\/api$/, '') + hook, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(b) });
+  const jid = '5527944443333@s.whatsapp.net';
+  const mensagens = async (id) => (await ok('GET', `/crm/conversas/${id}/mensagens`)).mensagens;
+
+  // Conversa avulsa: telefone que nunca falou com a empresa. Já fica com quem abriu, pronta para escrever.
+  assert.equal((await chamar('POST', '/crm/conversas/nova', { canalId: c.id, telefone: '123' })).status, 400);
+  const nova = await ok('POST', '/crm/conversas/nova', { canalId: c.id, telefone: '(27) 94444-3333', nome: 'Cliente Avulso' });
+  assert.equal(nova.status, 'atendimento');
+  assert.ok((await ok('GET', '/crm/conversas?aba=minhas')).some((x) => x.id === nova.id && x.contato === 'Cliente Avulso'), 'aparece em "Minhas", sem precisar ter card');
+  assert.equal((await ok('POST', '/crm/conversas/nova', { canalId: c.id, telefone: '27944443333' })).id, nova.id, 'o mesmo telefone abre a mesma conversa');
+  const primeira = await ok('POST', `/crm/conversas/${nova.id}/mensagens`, { texto: 'Oi! Aqui é da Aritana.' });
+
+  // O contato responde citando a mensagem; a equipe responde citando a dele.
+  await postar({ event: 'messages.upsert', instance: inst, data: { key: { remoteJid: jid, fromMe: false, id: 'CIT1' }, pushName: 'Cliente Avulso', message: { extendedTextMessage: { text: 'Quero ver o catálogo', contextInfo: { stanzaId: primeira.idExterno } } }, messageTimestamp: Math.floor(Date.now() / 1000) } });
+  let ms = await mensagens(nova.id);
+  const dele = ms.find((m) => m.texto === 'Quero ver o catálogo');
+  assert.equal(dele.citada.texto, 'Oi! Aqui é da Aritana.', 'a resposta mostra a mensagem citada');
+  await ok('POST', `/crm/conversas/${nova.id}/mensagens`, { texto: 'Segue o link!', citarId: dele.id });
+  const envio = (await recebidos()).filter((r) => r.caminho.startsWith('/evo/message/sendText/')).pop();
+  assert.deepEqual(envio.corpo.quoted, { key: { id: 'CIT1', fromMe: false, remoteJid: jid }, message: { conversation: 'Quero ver o catálogo' } });
+  ms = await mensagens(nova.id);
+  assert.equal(ms.find((m) => m.texto === 'Segue o link!').citada.id, dele.id);
+
+  // Reações: a equipe reage, o contato reage, e tirar a reação some.
+  assert.equal((await chamar('POST', `/crm/conversas/${nova.id}/mensagens/${dele.id}/reagir`, { emoji: 'texto' })).status, 400);
+  await ok('POST', `/crm/conversas/${nova.id}/mensagens/${dele.id}/reagir`, { emoji: '❤️' });
+  const reacao = (await recebidos()).filter((r) => r.caminho.startsWith('/evo/message/sendReaction/')).pop();
+  assert.deepEqual(reacao.corpo, { key: { remoteJid: jid, fromMe: false, id: 'CIT1' }, reaction: '❤️' });
+  await postar({ event: 'messages.upsert', instance: inst, data: { key: { remoteJid: jid, fromMe: false, id: 'REAC1' }, message: { reactionMessage: { key: { id: primeira.idExterno, fromMe: true }, text: '👍' } }, messageTimestamp: 1 } });
+  ms = await mensagens(nova.id);
+  assert.deepEqual(ms.find((m) => m.id === dele.id).reacoes, [{ de: 'equipe', emoji: '❤️' }]);
+  assert.deepEqual(ms.find((m) => m.id === primeira.id).reacoes, [{ de: 'contato', emoji: '👍' }]);
+  assert.ok(!ms.some((m) => m.texto?.includes('não suportada')), 'reação não vira mensagem');
+  await ok('POST', `/crm/conversas/${nova.id}/mensagens/${dele.id}/reagir`, { emoji: '' });
+  await postar({ event: 'messages.upsert', instance: inst, data: { key: { remoteJid: jid, fromMe: false, id: 'REAC2' }, message: { reactionMessage: { key: { id: primeira.idExterno, fromMe: true }, text: '' } }, messageTimestamp: 1 } });
+  ms = await mensagens(nova.id);
+  assert.deepEqual([ms.find((m) => m.id === dele.id).reacoes, ms.find((m) => m.id === primeira.id).reacoes], [[], []]);
+
+  // Apagar para todos: só o que a equipe mandou; o contato apagando a dele também some.
+  assert.equal((await chamar('POST', `/crm/conversas/${nova.id}/mensagens/${dele.id}/apagar`)).status, 400);
+  await ok('POST', `/crm/conversas/${nova.id}/mensagens/${primeira.id}/apagar`);
+  const apagar = (await recebidos()).filter((r) => r.caminho.startsWith('/evo/chat/deleteMessageForEveryone/')).pop();
+  assert.equal(apagar.metodo, 'DELETE');
+  assert.deepEqual(apagar.corpo, { id: primeira.idExterno, remoteJid: jid, fromMe: true });
+  await postar({ event: 'messages.upsert', instance: inst, data: { key: { remoteJid: jid, fromMe: false, id: 'REV1' }, message: { protocolMessage: { type: 'REVOKE', key: { id: 'CIT1' } } }, messageTimestamp: 1 } });
+  ms = await mensagens(nova.id);
+  for (const id of [primeira.id, dele.id]) assert.deepEqual([ms.find((m) => m.id === id).apagada, ms.find((m) => m.id === id).texto], [true, null]);
+  assert.equal((await chamar('POST', `/crm/conversas/${nova.id}/mensagens/${primeira.id}/reagir`, { emoji: '👍' })).status, 400, 'apagada não recebe reação');
+
+  // Cartão de contato recebido vira texto legível.
+  await postar({ event: 'messages.upsert', instance: inst, data: { key: { remoteJid: jid, fromMe: false, id: 'CONT1' }, message: { contactMessage: { displayName: 'Maria Vizinha', vcard: 'BEGIN:VCARD\nTEL;waid=5527911112222:+55 27 91111-2222\nEND:VCARD' } }, messageTimestamp: Math.floor(Date.now() / 1000) } });
+  assert.ok((await mensagens(nova.id)).some((m) => m.texto === '👤 Maria Vizinha · +5527911112222'));
+
+  // Fixar no topo, marcar como não lida e filtrar só as não lidas.
+  await ok('POST', `/crm/conversas/${nova.id}/fixar`, { fixada: true });
+  assert.equal((await ok('GET', '/crm/conversas?aba=minhas'))[0].id, nova.id, 'fixada fica em primeiro');
+  assert.ok(!(await ok('GET', '/crm/conversas?aba=minhas&naoLidas=1')).some((x) => x.id === nova.id), 'quem está atendendo já leu');
+  await ok('POST', `/crm/conversas/${nova.id}/nao-lida`);
+  assert.ok((await ok('GET', '/crm/conversas?aba=minhas&naoLidas=1')).some((x) => x.id === nova.id));
+  await ok('POST', `/crm/conversas/${nova.id}/fixar`, { fixada: false });
+
+  // A tela de configuração mostra quando o WhatsApp falou com o sistema pela última vez.
+  const canal = (await ok('GET', '/crm/canais')).find((x) => x.id === c.id);
+  assert.ok(Date.now() - new Date(canal.ultimoWebhookEm).getTime() < 60_000);
+  assert.ok(/^https?:\/\/[^/]+\/api\/webhooks\/whatsapp\//.test(canal.webhook), 'o endereço do webhook sempre tem o domínio');
+  await ok('DELETE', `/crm/canais/${c.id}`);
 });
 
 test('RH e ponto: cadastro, login pelo CPF, batida com foto e GPS, ajustes, espelho, ciência, documentos, AFD/AEJ e contabilidade', async () => {

@@ -391,7 +391,7 @@ export class AtendimentoController {
 
   @Get('crm/conversas')
   @Permissao('crm', 'ver')
-  async conversas(@Usuario() u: UsuarioLogado, @Query('aba') aba = 'fila', @Query('canalId') canalId?: string, @Query('busca') busca?: string) {
+  async conversas(@Usuario() u: UsuarioLogado, @Query('aba') aba = 'fila', @Query('canalId') canalId?: string, @Query('busca') busca?: string, @Query('naoLidas') naoLidas?: string) {
     const g = gestor(u);
     const meus = (await this.canais.canaisDoUsuario(u.id, g)).map((c) => c.id);
     if (!meus.length) return [];
@@ -406,6 +406,7 @@ export class AtendimentoController {
       f.push(eq(crmConversas.status, 'resolvida'));
       if (!g) f.push(sql`(${crmConversas.atendenteId} = ${u.id} or ${crmConversas.atendenteId} is null)`);
     }
+    if (naoLidas === '1') f.push(sql`${crmConversas.naoLidas} > 0`);
     if (busca?.trim()) {
       const dig = busca.replace(/\D/g, '');
       f.push(sql`(${crmContatos.nome} ilike ${'%' + busca.trim() + '%'}${dig.length >= 4 ? sql` or ${crmContatos.telefone} like ${'%' + dig + '%'}` : sql``})`);
@@ -415,6 +416,7 @@ export class AtendimentoController {
         id: crmConversas.id,
         status: crmConversas.status,
         naoLidas: crmConversas.naoLidas,
+        fixada: crmConversas.fixada,
         ultimaMensagem: crmConversas.ultimaMensagem,
         ultimaMensagemEm: crmConversas.ultimaMensagemEm,
         ultimaEntradaEm: crmConversas.ultimaEntradaEm,
@@ -438,7 +440,7 @@ export class AtendimentoController {
       .leftJoin(usuarios, eq(usuarios.id, crmConversas.atendenteId))
       .where(and(...f))
       // Fila: quem espera há mais tempo primeiro. Demais: mais recentes primeiro.
-      .orderBy(aba === 'fila' ? asc(crmConversas.filaDesde) : desc(crmConversas.ultimaMensagemEm))
+      .orderBy(desc(crmConversas.fixada), aba === 'fila' ? asc(crmConversas.filaDesde) : sql`${crmConversas.ultimaMensagemEm} desc nulls last`)
       .limit(300);
   }
 
@@ -468,6 +470,13 @@ export class AtendimentoController {
         autor: usuarios.nome,
         automatica: sql<boolean>`(${crmMensagens.gatilhoId} is not null or ${crmMensagens.disparoId} is not null)`,
         criadoEm: crmMensagens.criadoEm,
+        reacoes: crmMensagens.reacoes,
+        apagada: sql<boolean>`${crmMensagens.apagadaEm} is not null`,
+        noWhatsApp: sql<boolean>`${crmMensagens.idExterno} is not null`,
+        // A mensagem citada (resposta), resumida para aparecer em cima do balão.
+        citada: sql<{ id: string; direcao: string; texto: string | null; tipo: string } | null>`(
+          select json_build_object('id', c.id, 'direcao', c.direcao, 'tipo', c.tipo, 'texto', case when c.apagada_em is not null then null else left(c.texto, 160) end)
+          from crm_mensagens c where c.id = ${crmMensagens.citadaId})`,
       })
       .from(crmMensagens)
       .leftJoin(usuarios, eq(usuarios.id, crmMensagens.usuarioId))
@@ -480,7 +489,10 @@ export class AtendimentoController {
     return {
       conversa: { ...cv, canal: canal.nome, canalTipo: canal.tipo, dentroDaJanela: canal.tipo === 'oficial' ? this.canais.dentroDaJanela(cv) : true },
       contato,
-      mensagens: ms.reverse(),
+      // Apagada para todos: o texto e o arquivo não aparecem mais.
+      mensagens: ms.reverse().map((m) => (m.apagada ? { ...m, texto: null, midia: null, midiaNome: null } : m)),
+      // O que este tipo de número consegue fazer com uma mensagem.
+      recursos: { reagir: true, apagar: canal.tipo !== 'oficial' },
     };
   }
 
@@ -512,22 +524,72 @@ export class AtendimentoController {
   @Post('crm/conversas/:id/mensagens')
   @Permissao('crm', 'editar')
   async enviar(@Usuario() u: UsuarioLogado, @Param('id', ParseUUIDPipe) id: string, @Body() body: unknown) {
-    const d = validar(z.object({ tipo: z.enum(['texto', 'template']).default('texto'), texto: z.string().max(4096).nullable().optional(), templateId: uuid.nullable().optional(), leadId: uuid.nullable().optional() }), body);
+    const d = validar(z.object({ tipo: z.enum(['texto', 'template']).default('texto'), texto: z.string().max(4096).nullable().optional(), templateId: uuid.nullable().optional(), leadId: uuid.nullable().optional(), citarId: uuid.nullable().optional() }), body);
     const { cv } = await this.conversaVisivel(u, id);
     if (cv.status === 'atendimento' && cv.atendenteId && cv.atendenteId !== u.id && !gestor(u)) throw new ForbiddenException('Esta conversa está com outro atendente.');
-    return this.canais.enviar({ conversaId: id, tipo: d.tipo, texto: d.texto, templateId: d.templateId, usuarioId: u.id, leadId: d.leadId ?? (await this.leadPrincipal(cv.contatoId)) });
+    return this.canais.enviar({ conversaId: id, tipo: d.tipo, texto: d.texto, templateId: d.templateId, citarId: d.citarId, usuarioId: u.id, leadId: d.leadId ?? (await this.leadPrincipal(cv.contatoId)) });
   }
 
   @Post('crm/conversas/:id/midia')
   @Permissao('crm', 'editar')
   async enviarMidia(@Usuario() u: UsuarioLogado, @Param('id', ParseUUIDPipe) id: string, @Body() body: unknown) {
-    const d = validar(z.object({ nome: z.string().trim().min(1).max(150), mime: z.string().min(3).max(120), base64: z.string().min(10), texto: z.string().max(1024).nullable().optional() }), body);
+    const d = validar(z.object({ nome: z.string().trim().min(1).max(150), mime: z.string().min(3).max(120), base64: z.string().min(10), texto: z.string().max(1024).nullable().optional(), citarId: uuid.nullable().optional() }), body);
     const { cv } = await this.conversaVisivel(u, id);
     if (cv.status === 'atendimento' && cv.atendenteId && cv.atendenteId !== u.id && !gestor(u)) throw new ForbiddenException('Esta conversa está com outro atendente.');
     const conteudo = Buffer.from(d.base64.replace(/^data:[^,]+,/, ''), 'base64');
     if (conteudo.length > 16_000_000) throw new BadRequestException('Arquivo maior que 16 MB.');
     const tipo = d.mime.startsWith('image/') ? 'imagem' : d.mime.startsWith('audio/') ? 'audio' : d.mime.startsWith('video/') ? 'video' : 'documento';
-    return this.canais.enviar({ conversaId: id, tipo, texto: d.texto, midia: { conteudo, mime: d.mime, nome: d.nome }, usuarioId: u.id, leadId: await this.leadPrincipal(cv.contatoId) });
+    return this.canais.enviar({ conversaId: id, tipo, texto: d.texto, citarId: d.citarId, midia: { conteudo, mime: d.mime, nome: d.nome }, usuarioId: u.id, leadId: await this.leadPrincipal(cv.contatoId) });
+  }
+
+  /** Só quem está atendendo (ou a gestão) mexe nas mensagens da conversa. */
+  private async conversaMinha(u: UsuarioLogado, id: string) {
+    const r = await this.conversaVisivel(u, id);
+    if (r.cv.status === 'atendimento' && r.cv.atendenteId && r.cv.atendenteId !== u.id && !gestor(u)) throw new ForbiddenException('Esta conversa está com outro atendente.');
+    return r;
+  }
+
+  @Post('crm/conversas/:id/mensagens/:mensagemId/reagir')
+  @Permissao('crm', 'editar')
+  async reagir(@Usuario() u: UsuarioLogado, @Param('id', ParseUUIDPipe) id: string, @Param('mensagemId', ParseUUIDPipe) mensagemId: string, @Body() body: unknown) {
+    // Um emoji só (pode ter vários "pedaços", como tom de pele); vazio tira a reação.
+    const { emoji } = validar(z.object({ emoji: z.string().max(16).refine((e) => e === '' || /\p{Extended_Pictographic}/u.test(e), 'Escolha um emoji') }), body);
+    await this.conversaMinha(u, id);
+    return this.canais.reagir(id, mensagemId, emoji);
+  }
+
+  @Post('crm/conversas/:id/mensagens/:mensagemId/apagar')
+  @Permissao('crm', 'editar')
+  async apagarMensagem(@Usuario() u: UsuarioLogado, @Param('id', ParseUUIDPipe) id: string, @Param('mensagemId', ParseUUIDPipe) mensagemId: string) {
+    await this.conversaMinha(u, id);
+    const r = await this.canais.apagarMensagem(id, mensagemId);
+    await this.auditoria.registrar({ usuarioId: u.id, acao: 'apagar_mensagem', entidade: 'crm_mensagem', entidadeId: mensagemId });
+    return r;
+  }
+
+  /** Conversa avulsa: escrever para um telefone que ainda não tem conversa (nem precisa ter card). */
+  @Post('crm/conversas/nova')
+  @Permissao('crm', 'editar')
+  novaConversa(@Usuario() u: UsuarioLogado, @Body() body: unknown) {
+    const d = validar(z.object({ canalId: uuid, telefone: z.string().trim().min(8, 'Informe o telefone com DDD').max(25), nome: z.string().trim().max(120).nullable().optional() }), body);
+    return this.canais.novaConversa({ ...d, usuarioId: u.id, gestor: gestor(u) });
+  }
+
+  @Post('crm/conversas/:id/fixar')
+  @Permissao('crm', 'editar')
+  async fixar(@Usuario() u: UsuarioLogado, @Param('id', ParseUUIDPipe) id: string, @Body() body: unknown) {
+    const { fixada } = validar(z.object({ fixada: z.boolean() }), body);
+    await this.conversaVisivel(u, id);
+    await this.db.update(crmConversas).set({ fixada }).where(eq(crmConversas.id, id));
+    return { ok: true, fixada };
+  }
+
+  @Post('crm/conversas/:id/nao-lida')
+  @Permissao('crm', 'editar')
+  async naoLida(@Usuario() u: UsuarioLogado, @Param('id', ParseUUIDPipe) id: string) {
+    await this.conversaVisivel(u, id);
+    await this.db.update(crmConversas).set({ naoLidas: sql`greatest(${crmConversas.naoLidas}, 1)` }).where(eq(crmConversas.id, id));
+    return { ok: true };
   }
 
   private async leadPrincipal(contatoId: string) {
@@ -797,7 +859,11 @@ export class AtendimentoController {
   @Post('crm/canais/:id/webhook')
   @Permissao('configuracoes', 'editar')
   async webhook(@Param('id', ParseUUIDPipe) id: string) {
-    await this.canais.apontarWebhookZapi(await this.canais.obter(id));
+    try {
+      await this.canais.apontarWebhookZapi(await this.canais.obter(id));
+    } catch (e) {
+      throw new BadRequestException(`Não deu para reapontar: ${(e as Error).message}`);
+    }
     return { ok: true };
   }
 

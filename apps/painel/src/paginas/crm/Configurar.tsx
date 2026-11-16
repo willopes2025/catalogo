@@ -78,11 +78,15 @@ function CartaoCanal({ canal: c, editar, destaque }: { canal: Canal; editar: () 
             {sit.isLoading ? 'Verificando…' : sit.data?.detalhe}
             {c.numero ? ` · ${c.numero}` : ''}
           </div>
+          {/* Para conferir se as mensagens estão chegando. */}
+          <div className="muted" style={{ fontSize: 12 }}>
+            {c.ultimoWebhookEm ? `Último aviso do WhatsApp para o sistema: ${new Date(c.ultimoWebhookEm).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}` : c.tipo === 'oficial' ? 'O WhatsApp ainda não avisou o sistema de nenhuma mensagem por este número: confira o webhook no app da Meta.' : 'O WhatsApp ainda não avisou o sistema de nenhuma mensagem por este número. Se já mandaram mensagem para ele, clique em "Reapontar webhook".'}
+          </div>
         </div>
         {admin && (
           <div className="flex" style={{ gap: 6, flexWrap: 'wrap' }}>
             {c.tipo === 'oficial' && pode('crm', 'excluir') && <button className="botao claro pequeno" disabled={acao.isPending} onClick={() => acao.mutate('templates')}>Sincronizar templates</button>}
-            {c.tipo === 'qrcode' && <button className="botao claro pequeno" disabled={acao.isPending} onClick={() => acao.mutate('webhook')}>Reapontar webhook</button>}
+            {c.tipo !== 'oficial' && <button className="botao claro pequeno" title="Use se as mensagens recebidas pararam de chegar: manda o WhatsApp avisar o sistema neste endereço de novo" disabled={acao.isPending} onClick={() => acao.mutate('webhook')}>Reapontar webhook</button>}
             {c.tipo !== 'oficial' && sit.data?.conectado && <button className="botao claro pequeno" onClick={() => window.confirm('Desconectar este celular do sistema?') && acao.mutate('desconectar')}>Desconectar</button>}
             <button className="botao claro pequeno" onClick={editar}>Editar</button>
             <button className="botao claro pequeno perigo" disabled={excluir.isPending} onClick={confirmarExclusao}>{excluir.isPending ? 'Excluindo…' : 'Excluir'}</button>

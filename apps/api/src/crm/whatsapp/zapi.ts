@@ -1,4 +1,4 @@
-import { ErroCanal, type Conexao, type MensagemEntrada, type MensagemSaida, type StatusEntrada } from './tipos';
+import { ErroCanal, type AlvoMensagem, type Conexao, type MensagemEntrada, type MensagemSaida, type ReacaoEntrada, type StatusEntrada } from './tipos';
 
 export interface ConfigZapi {
   instancia: string;
@@ -26,13 +26,15 @@ export class ConexaoZapi implements Conexao {
   async enviar(m: MensagemSaida) {
     let r: { messageId?: string; id?: string; zaapId?: string };
     const dataUri = m.midia ? `data:${m.midia.mime};base64,${m.midia.conteudo.toString('base64')}` : '';
-    if (m.tipo === 'texto' || m.tipo === 'template') r = await this.chamar('send-text', { method: 'POST', body: JSON.stringify({ phone: m.para, message: m.texto ?? '' }) });
-    else if (m.tipo === 'imagem') r = await this.chamar('send-image', { method: 'POST', body: JSON.stringify({ phone: m.para, image: dataUri, caption: m.texto ?? '' }) });
-    else if (m.tipo === 'audio') r = await this.chamar('send-audio', { method: 'POST', body: JSON.stringify({ phone: m.para, audio: dataUri }) });
-    else if (m.tipo === 'video') r = await this.chamar('send-video', { method: 'POST', body: JSON.stringify({ phone: m.para, video: dataUri, caption: m.texto ?? '' }) });
+    // Responder citando: a Z-API recebe o id da mensagem original.
+    const citar = m.citar ? { messageId: m.citar.idExterno } : {};
+    if (m.tipo === 'texto' || m.tipo === 'template') r = await this.chamar('send-text', { method: 'POST', body: JSON.stringify({ phone: m.para, message: m.texto ?? '', ...citar }) });
+    else if (m.tipo === 'imagem') r = await this.chamar('send-image', { method: 'POST', body: JSON.stringify({ phone: m.para, image: dataUri, caption: m.texto ?? '', ...citar }) });
+    else if (m.tipo === 'audio') r = await this.chamar('send-audio', { method: 'POST', body: JSON.stringify({ phone: m.para, audio: dataUri, ...citar }) });
+    else if (m.tipo === 'video') r = await this.chamar('send-video', { method: 'POST', body: JSON.stringify({ phone: m.para, video: dataUri, caption: m.texto ?? '', ...citar }) });
     else {
       const ext = (m.midia!.nome.split('.').pop() ?? 'pdf').toLowerCase();
-      r = await this.chamar(`send-document/${ext}`, { method: 'POST', body: JSON.stringify({ phone: m.para, document: dataUri, fileName: m.midia!.nome, caption: m.texto ?? '' }) });
+      r = await this.chamar(`send-document/${ext}`, { method: 'POST', body: JSON.stringify({ phone: m.para, document: dataUri, fileName: m.midia!.nome, caption: m.texto ?? '', ...citar }) });
     }
     const id = r.messageId ?? r.id ?? r.zaapId;
     if (!id) throw new ErroCanal('A Z-API não devolveu o id da mensagem.');
@@ -42,9 +44,16 @@ export class ConexaoZapi implements Conexao {
   ler(corpo: unknown) {
     const mensagens: MensagemEntrada[] = [];
     const status: StatusEntrada[] = [];
+    const reacoes: ReacaoEntrada[] = [];
+    const apagadas: string[] = [];
     const b = (corpo ?? {}) as Record<string, any>;
-    if (b.type === 'ReceivedCallback' && !b.isGroup && !b.isNewsletter && b.phone) {
-      const tipo: MensagemEntrada['tipo'] = b.image ? 'imagem' : b.audio ? 'audio' : b.video ? 'video' : b.document ? 'documento' : b.location ? 'localizacao' : b.sticker ? 'imagem' : b.text ? 'texto' : 'outro';
+    if (b.type === 'ReceivedCallback' && b.reaction) {
+      const alvo = b.reaction.referencedMessage?.messageId;
+      if (alvo && !b.isGroup) reacoes.push({ idExterno: String(alvo), emoji: String(b.reaction.value ?? ''), minha: !!b.fromMe });
+    } else if (b.type === 'ReceivedCallback' && !b.isGroup && !b.isNewsletter && b.phone) {
+      const cartoes = b.contact ? [b.contact] : (b.contacts ?? []);
+      const textoContato = cartoes.length ? cartoes.map((c: Record<string, any>) => `👤 ${c.displayName ?? c.name ?? 'Contato'}${c.phones?.[0] ? ` · +${String(c.phones[0]).replace(/\D/g, '')}` : ''}`).join('\n') : null;
+      const tipo: MensagemEntrada['tipo'] = textoContato ? 'texto' : b.image ? 'imagem' : b.audio ? 'audio' : b.video ? 'video' : b.document ? 'documento' : b.location ? 'localizacao' : b.sticker ? 'imagem' : b.text ? 'texto' : 'outro';
       const midia = b.image ? { ref: b.image.imageUrl, mime: b.image.mimeType ?? null, nome: null } : b.audio ? { ref: b.audio.audioUrl, mime: b.audio.mimeType ?? null, nome: null } : b.video ? { ref: b.video.videoUrl, mime: b.video.mimeType ?? null, nome: null } : b.document ? { ref: b.document.documentUrl, mime: b.document.mimeType ?? null, nome: b.document.fileName ?? null } : b.sticker ? { ref: b.sticker.stickerUrl, mime: b.sticker.mimeType ?? 'image/webp', nome: null } : undefined;
       mensagens.push({
         telefone: String(b.phone).replace(/\D/g, ''),
@@ -52,7 +61,8 @@ export class ConexaoZapi implements Conexao {
         idExterno: String(b.messageId),
         minha: !!b.fromMe,
         tipo,
-        texto: b.text?.message ?? b.image?.caption ?? b.video?.caption ?? b.document?.caption ?? (b.location ? `📍 ${b.location.latitude},${b.location.longitude}` : null) ?? (tipo === 'outro' ? '[mensagem não suportada]' : null),
+        citaIdExterno: b.referenceMessageId ? String(b.referenceMessageId) : undefined,
+        texto: textoContato ?? b.text?.message ?? b.image?.caption ?? b.video?.caption ?? b.document?.caption ?? (b.location ? `📍 ${b.location.latitude},${b.location.longitude}` : null) ?? (tipo === 'outro' ? '[mensagem não suportada]' : null),
         midia: midia?.ref ? midia : undefined,
         quando: new Date(Number(b.momment ?? Date.now())),
       });
@@ -60,8 +70,18 @@ export class ConexaoZapi implements Conexao {
     if (b.type === 'MessageStatusCallback') {
       const mapa: Record<string, StatusEntrada['status']> = { SENT: 'enviada', RECEIVED: 'entregue', READ: 'lida', PLAYED: 'lida', FAILED: 'falhou' };
       for (const id of (b.ids as string[]) ?? []) if (mapa[b.status]) status.push({ idExterno: String(id), status: mapa[b.status] });
+      if (b.status === 'DELETED') for (const id of (b.ids as string[]) ?? []) apagadas.push(String(id));
     }
-    return { mensagens, status };
+    return { mensagens, status, reacoes, apagadas };
+  }
+
+  async reagir(para: string, alvo: AlvoMensagem, emoji: string) {
+    if (emoji) await this.chamar('send-reaction', { method: 'POST', body: JSON.stringify({ phone: para, messageId: alvo.idExterno, reaction: emoji }) });
+    else await this.chamar('send-remove-reaction', { method: 'POST', body: JSON.stringify({ phone: para, messageId: alvo.idExterno }) });
+  }
+
+  async apagar(para: string, alvo: AlvoMensagem) {
+    await this.chamar(`messages?messageId=${encodeURIComponent(alvo.idExterno)}&phone=${encodeURIComponent(para)}&owner=${alvo.minha}`, { method: 'DELETE' });
   }
 
   async baixarMidia(ref: string) {

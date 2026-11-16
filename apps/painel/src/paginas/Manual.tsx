@@ -166,6 +166,24 @@ const SECOES: Secao[] = [
     ],
   },
   {
+    id: 'chat',
+    titulo: 'Conversas do WhatsApp (chat do CRM)',
+    passos: [
+      { t: 'Nova conversa', d: 'Em CRM › Conversas, "+ Nova conversa": escolha o número, digite o telefone com DDD e, se quiser, o nome. A conversa abre em "Minhas", pronta para escrever, mesmo que a pessoa não tenha card.' },
+      { t: 'Responder citando', d: 'Passe o mouse na mensagem e clique em ↩. A pessoa vê, no WhatsApp dela, a qual mensagem você respondeu.' },
+      { t: 'Reagir', d: 'No 😀 da mensagem, escolha o emoji. As reações do contato aparecem embaixo do balão.' },
+      { t: 'Áudio, fotos e arquivos', d: '"🎤 Áudio" grava pelo microfone. "📎 Arquivo" anexa; também dá para colar uma imagem (Ctrl+V) ou arrastar o arquivo para a conversa. O que você escrever vai como legenda.' },
+      { t: 'Apagar para todos', d: 'Na 🗑 de uma mensagem enviada por vocês (até 2 dias depois do envio). No número oficial da Meta isso não existe.' },
+      { t: 'Emojis e formulários', d: '😀 abre os emojis. "📋 Formulário" coloca na mensagem o link de um formulário do sistema.' },
+      { t: 'Menu ⋮ da conversa', d: 'Fixar no topo da lista, marcar como não lida, copiar o telefone e exportar a conversa em texto. O lápis ao lado do nome muda o nome do contato.' },
+    ],
+    dicas: [
+      'Mensagens não chegam? Em CRM › Configurar › Números de WhatsApp, cada número mostra o "último aviso do WhatsApp para o sistema". Se estiver vazio ou antigo, clique em "Reapontar webhook".',
+      '"Só não lidas" filtra a lista. A conversa fixada fica sempre em primeiro.',
+      'No celular, os botões de cada mensagem ficam sempre visíveis embaixo do balão.',
+    ],
+  },
+  {
     id: 'meta',
     titulo: 'Meta (Facebook e Instagram) dentro do sistema',
     passos: [

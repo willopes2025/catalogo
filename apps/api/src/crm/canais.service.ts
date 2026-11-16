@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { BadRequestException, ForbiddenException, Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Inject, Injectable, Logger, NotFoundException, OnModuleInit } from '@nestjs/common';
 import { and, desc, eq, gte, inArray, isNull, sql } from 'drizzle-orm';
 import { DB, type Db } from '../comum/db.module';
 import { SegredosService } from '../segredos/segredos.service';
@@ -10,7 +10,8 @@ import { PEDIU_SAIR, preencherTexto, primeiroNome, variaveisDosCampos } from './
 import { ConexaoOficial } from './whatsapp/oficial';
 import { ConexaoZapi } from './whatsapp/zapi';
 import { ConexaoEvolution, apagarInstancia, criarInstancia, evolutionDisponivel, nomeInstancia, validarEnderecoEvolution } from './whatsapp/evolution';
-import { ErroCanal, type Conexao, type MensagemEntrada, type MensagemSaida, type StatusEntrada } from './whatsapp/tipos';
+import { ErroCanal, type Conexao, type MensagemEntrada, type MensagemSaida, type ReacaoEntrada, type StatusEntrada } from './whatsapp/tipos';
+import { urlPublica } from '../comum/url';
 
 type Canal = typeof crmCanais.$inferSelect;
 /** Campos das credenciais que ficam cifrados. */
@@ -27,6 +28,8 @@ export interface EnvioCrm {
   usuarioId?: string | null;
   gatilhoId?: string | null;
   disparoId?: string | null;
+  /** Mensagem da conversa que esta responde (citação). */
+  citarId?: string | null;
   /** Lead para preencher {{nome}}, {{etapa}}… */
   leadId?: string | null;
 }
@@ -36,8 +39,32 @@ export interface EnvioCrm {
  * conversa nova cai na fila do número; um atendente pega; ao resolver, a próxima mensagem do contato volta para a fila.
  */
 @Injectable()
-export class CanaisService {
+export class CanaisService implements OnModuleInit {
   private readonly log = new Logger('WhatsApp');
+
+  /**
+   * Ao subir, reaponta o webhook dos números por QR code / token para o endereço atual do sistema.
+   * Conserta sozinho número que parou de receber (endereço mudou, evento novo passou a ser ouvido).
+   */
+  onModuleInit() {
+    if (process.env.WEBHOOKS_AO_INICIAR === '0') return;
+    setTimeout(() => void this.reapontarTodos(), 20_000).unref();
+  }
+
+  async reapontarTodos() {
+    const lista = await this.db.select().from(crmCanais).where(and(eq(crmCanais.ativo, true), isNull(crmCanais.excluidoEm), inArray(crmCanais.tipo, ['evolution', 'qrcode'])));
+    let ok = 0;
+    for (const c of lista) {
+      try {
+        await this.apontarWebhookZapi(c);
+        ok++;
+      } catch (e) {
+        this.log.warn(`Webhook do número "${c.nome}" não foi reapontado: ${(e as Error).message}`);
+      }
+    }
+    if (lista.length) this.log.log(`Webhooks reapontados: ${ok} de ${lista.length} número(s).`);
+    return { total: lista.length, ok };
+  }
 
   constructor(
     @Inject(DB) private readonly db: Db,
@@ -72,13 +99,14 @@ export class CanaisService {
   }
 
   urlWebhook(c: Canal) {
-    const base = (process.env.API_PUBLICA_URL ?? process.env.PAINEL_URL ?? '').replace(/\/$/, '');
+    // Endereço público do sistema. Sem isso o WhatsApp recebe um endereço sem domínio e nunca avisa das mensagens.
+    const base = (process.env.API_PUBLICA_URL ?? urlPublica()).replace(/\/$/, '');
     return `${base}/api/webhooks/whatsapp/${c.id}/${c.tokenWebhook}`;
   }
 
   /** O servidor de WhatsApp próprio fala com a API pela rede interna da VPS, sem passar pela internet. */
   private urlWebhookInterno(c: Canal) {
-    const base = (process.env.EVOLUTION_WEBHOOK_URL ?? process.env.API_PUBLICA_URL ?? process.env.PAINEL_URL ?? '').replace(/\/$/, '');
+    const base = (process.env.EVOLUTION_WEBHOOK_URL ?? process.env.API_PUBLICA_URL ?? urlPublica()).replace(/\/$/, '');
     return `${base}/api/webhooks/whatsapp/${c.id}/${c.tokenWebhook}`;
   }
 
@@ -355,10 +383,20 @@ export class CanaisService {
       saida = { para: contato.telefone, tipo: e.tipo, texto: textoGuardado ?? undefined, midia: e.midia ?? undefined };
     }
 
+    // Responder citando uma mensagem desta conversa.
+    let citadaId: string | null = null;
+    if (e.citarId) {
+      const [alvo] = await this.db.select().from(crmMensagens).where(and(eq(crmMensagens.id, e.citarId), eq(crmMensagens.conversaId, cv.id)));
+      if (alvo?.idExterno && alvo.direcao !== 'interna' && !alvo.apagadaEm) {
+        citadaId = alvo.id;
+        saida.citar = { idExterno: alvo.idExterno, minha: alvo.direcao === 'saida', texto: alvo.texto ?? (alvo.midia ? `[${alvo.tipo}]` : null) };
+      }
+    }
+
     const midiaNome = e.midia ? await this.arquivos.salvarMidia(e.midia.conteudo, e.midia.mime) : null;
     const [m] = await this.db
       .insert(crmMensagens)
-      .values({ conversaId: cv.id, direcao: 'saida', tipo: e.tipo, texto: textoGuardado, midia: midiaNome, midiaNome: e.midia?.nome ?? null, templateNome, status: 'pendente', usuarioId: e.usuarioId ?? null, gatilhoId: e.gatilhoId ?? null, disparoId: e.disparoId ?? null })
+      .values({ citadaId, conversaId: cv.id, direcao: 'saida', tipo: e.tipo, texto: textoGuardado, midia: midiaNome, midiaNome: e.midia?.nome ?? null, templateNome, status: 'pendente', usuarioId: e.usuarioId ?? null, gatilhoId: e.gatilhoId ?? null, disparoId: e.disparoId ?? null })
       .returning();
     try {
       const r = await this.conexao(canal).enviar(saida);
@@ -389,10 +427,98 @@ export class CanaisService {
     if (!c || c.tokenWebhook !== token) throw new ForbiddenException('Webhook inválido.');
     const con = this.conexao(c);
     if (con instanceof ConexaoOficial && !con.assinaturaValida(bruto, assinatura)) throw new ForbiddenException('Assinatura da Meta inválida.');
-    const { mensagens, status } = con.ler(corpo);
+    const { mensagens, status, reacoes, apagadas }: ReturnType<Conexao['ler']> = con.ler(corpo);
+    // Marca que o WhatsApp falou com o sistema por este número (a tela de configuração mostra, para conferir se está chegando).
+    if (!c.ultimoWebhookEm || Date.now() - c.ultimoWebhookEm.getTime() > 30_000) await this.db.update(crmCanais).set({ ultimoWebhookEm: new Date() }).where(eq(crmCanais.id, c.id));
     for (const m of mensagens) await this.entrada(c, con, m).catch((e) => this.log.error(`Mensagem recebida não gravada: ${(e as Error).message}`));
     for (const s of status) await this.status(s);
+    for (const r of reacoes ?? []) await this.reacaoRecebida(c, r).catch((e) => this.log.warn(`Reação não gravada: ${(e as Error).message}`));
+    for (const id of apagadas ?? []) await this.apagadaNoWhatsApp(c, id).catch((e) => this.log.warn(`Mensagem apagada não marcada: ${(e as Error).message}`));
     return { ok: true };
+  }
+
+  /** Mensagem deste número pelo id do WhatsApp (o id só vale dentro do mesmo número). */
+  private async mensagemDoCanal(canalId: string, idExterno: string) {
+    const [m] = await this.db
+      .select({ m: crmMensagens })
+      .from(crmMensagens)
+      .innerJoin(crmConversas, eq(crmConversas.id, crmMensagens.conversaId))
+      .where(and(eq(crmMensagens.idExterno, idExterno), eq(crmConversas.canalId, canalId)))
+      .orderBy(desc(crmMensagens.criadoEm))
+      .limit(1);
+    return m?.m ?? null;
+  }
+
+  private async reacaoRecebida(c: Canal, r: ReacaoEntrada) {
+    const m = await this.mensagemDoCanal(c.id, r.idExterno);
+    if (!m) return;
+    const de = r.minha ? 'equipe' : 'contato';
+    const reacoes = [...m.reacoes.filter((x) => x.de !== de), ...(r.emoji ? [{ de, emoji: r.emoji.slice(0, 16) } as const] : [])];
+    await this.db.update(crmMensagens).set({ reacoes }).where(eq(crmMensagens.id, m.id));
+  }
+
+  private async apagadaNoWhatsApp(c: Canal, idExterno: string) {
+    const m = await this.mensagemDoCanal(c.id, idExterno);
+    if (m && !m.apagadaEm) await this.db.update(crmMensagens).set({ apagadaEm: new Date() }).where(eq(crmMensagens.id, m.id));
+  }
+
+  // ───────────── Ações numa mensagem ─────────────
+
+  private async alvo(conversaId: string, mensagemId: string) {
+    const [cv] = await this.db.select().from(crmConversas).where(eq(crmConversas.id, conversaId));
+    const [m] = await this.db.select().from(crmMensagens).where(and(eq(crmMensagens.id, mensagemId), eq(crmMensagens.conversaId, conversaId)));
+    if (!cv || !m) throw new NotFoundException('Mensagem não encontrada.');
+    if (m.direcao === 'interna' || !m.idExterno) throw new BadRequestException('Esta mensagem não foi para o WhatsApp.');
+    if (m.apagadaEm) throw new BadRequestException('Esta mensagem foi apagada.');
+    const canal = await this.obter(cv.canalId);
+    if (!canal.ativo) throw new BadRequestException('Este número de WhatsApp está desativado.');
+    const [contato] = await this.db.select().from(crmContatos).where(eq(crmContatos.id, cv.contatoId));
+    return { m, canal, contato };
+  }
+
+  /** Reage com um emoji (vazio tira a reação). */
+  async reagir(conversaId: string, mensagemId: string, emoji: string) {
+    const { m, canal, contato } = await this.alvo(conversaId, mensagemId);
+    const con = this.conexao(canal);
+    if (!con.reagir) throw new BadRequestException('Este tipo de número não manda reação.');
+    try {
+      await con.reagir(contato.telefone, { idExterno: m.idExterno!, minha: m.direcao === 'saida' }, emoji);
+    } catch (e) {
+      throw e instanceof ErroCanal ? new BadRequestException(e.message) : e;
+    }
+    const reacoes = [...m.reacoes.filter((x) => x.de !== 'equipe'), ...(emoji ? [{ de: 'equipe', emoji } as const] : [])];
+    await this.db.update(crmMensagens).set({ reacoes }).where(eq(crmMensagens.id, m.id));
+    return { ok: true, reacoes };
+  }
+
+  /** Apaga para todos uma mensagem que a equipe mandou. */
+  async apagarMensagem(conversaId: string, mensagemId: string) {
+    const { m, canal, contato } = await this.alvo(conversaId, mensagemId);
+    if (m.direcao !== 'saida') throw new BadRequestException('Só dá para apagar mensagens enviadas por vocês.');
+    const con = this.conexao(canal);
+    if (!con.apagar) throw new BadRequestException('O WhatsApp oficial (Meta) não deixa apagar mensagem enviada.');
+    // O WhatsApp só apaga para todos por um tempo (cerca de 2 dias).
+    if (Date.now() - m.criadoEm.getTime() > 48 * 3600_000) throw new BadRequestException('O WhatsApp só deixa apagar para todos até 2 dias depois do envio.');
+    try {
+      await con.apagar(contato.telefone, { idExterno: m.idExterno!, minha: true });
+    } catch (e) {
+      throw e instanceof ErroCanal ? new BadRequestException(e.message) : e;
+    }
+    await this.db.update(crmMensagens).set({ apagadaEm: new Date() }).where(eq(crmMensagens.id, m.id));
+    return { ok: true };
+  }
+
+  /** Conversa nova com um telefone qualquer (que pode nem estar no CRM): já fica com quem abriu. */
+  async novaConversa(d: { canalId: string; telefone: string; nome?: string | null; usuarioId: string; gestor: boolean }) {
+    const canal = await this.obter(d.canalId);
+    if (!canal.ativo || canal.excluidoEm) throw new BadRequestException('Este número de WhatsApp está desativado.');
+    if (!this.podeAtender(canal, d.usuarioId, d.gestor)) throw new ForbiddenException('Você não atende por este número.');
+    const contato = await this.crm.garantirContato({ telefone: d.telefone, nome: d.nome });
+    const cv = await this.garantirConversa(contato.id, canal.id, 'resolvida');
+    // Em atendimento com outra pessoa: não toma a conversa, só abre.
+    if (cv.status === 'atendimento' && cv.atendenteId && cv.atendenteId !== d.usuarioId) return { ...cv, contato: contato.nome, comOutro: true };
+    const [minha] = await this.db.update(crmConversas).set({ status: 'atendimento', atendenteId: d.usuarioId, pegaEm: new Date(), ultimaMensagemEm: cv.ultimaMensagemEm ?? new Date() }).where(eq(crmConversas.id, cv.id)).returning();
+    return { ...minha, contato: contato.nome, comOutro: false };
   }
 
   private async entrada(c: Canal, con: Conexao, m: MensagemEntrada) {
@@ -411,7 +537,9 @@ export class CanaisService {
         texto = [texto, `[mídia não baixada: ${(e as Error).message}]`].filter(Boolean).join(' ');
       }
     }
+    const citada = m.citaIdExterno ? await this.mensagemDoCanal(c.id, m.citaIdExterno) : null;
     await this.db.insert(crmMensagens).values({
+      citadaId: citada && citada.conversaId === cv.id ? citada.id : null,
       conversaId: cv.id,
       direcao: m.minha ? 'saida' : 'entrada',
       tipo: m.tipo,

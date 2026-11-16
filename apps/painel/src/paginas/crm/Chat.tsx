@@ -4,12 +4,24 @@ import { api, pode } from '../../api';
 import { Erro } from '../../componentes/ui';
 import { ha, ligar, meuId, telefoneBonito, useMidia, useRelogio, usarAtendentes, type Template } from './comum';
 
-interface Mensagem { id: string; direcao: 'entrada' | 'saida' | 'interna'; tipo: string; texto: string | null; midia: string | null; midiaNome: string | null; templateNome: string | null; status: string; erro: string | null; autor: string | null; automatica: boolean; criadoEm: string }
+interface Mensagem { id: string; direcao: 'entrada' | 'saida' | 'interna'; tipo: string; texto: string | null; midia: string | null; midiaNome: string | null; templateNome: string | null; status: string; erro: string | null; autor: string | null; automatica: boolean; criadoEm: string; reacoes: { de: 'contato' | 'equipe'; emoji: string }[]; apagada: boolean; noWhatsApp: boolean; citada: { id: string; direcao: string; tipo: string; texto: string | null } | null }
 interface Dados {
-  conversa: { id: string; status: 'fila' | 'atendimento' | 'resolvida'; atendenteId: string | null; canalId: string; canal: string; canalTipo: 'oficial' | 'qrcode' | 'evolution'; dentroDaJanela: boolean; filaDesde: string | null; contatoId: string };
+  conversa: { id: string; status: 'fila' | 'atendimento' | 'resolvida'; atendenteId: string | null; canalId: string; canal: string; canalTipo: 'oficial' | 'qrcode' | 'evolution'; dentroDaJanela: boolean; filaDesde: string | null; contatoId: string; fixada: boolean };
   contato: { id: string; nome: string; telefone: string; descadastrado: boolean };
   mensagens: Mensagem[];
+  recursos: { reagir: boolean; apagar: boolean };
 }
+
+const REACOES_RAPIDAS = ['👍', '❤️', '😂', '😮', '😢', '🙏'];
+const EMOJIS = '😀 😃 😄 😁 😅 😂 🤣 😊 🙂 😉 😍 🥰 😘 😋 😎 🤩 🥳 🤗 🤔 😐 😴 😢 😭 😤 😡 🤯 😱 🙏 👍 👎 👏 🙌 💪 🤝 👋 ✌️ 🤞 👌 ❤️ 🧡 💛 💚 💙 💜 🤎 💔 💖 ✨ ⭐ 🌟 🔥 🎉 🎁 🎂 💎 💍 📿 👑 🌹 🌸 ☀️ 🌙 ✅ ❌ ⚠️ ❓ ❗ 💬 📞 📱 📍 📦 🚚 💰 💳 🧾 🗓️ ⏰ 📷 🎥 📎 🛍️'.split(' ');
+const resumoTipo: Record<string, string> = { imagem: '📷 Foto', audio: '🎤 Áudio', video: '🎥 Vídeo', documento: '📎 Arquivo', localizacao: '📍 Localização' };
+const lerArquivo = (f: Blob) =>
+  new Promise<string>((ok, erro) => {
+    const r = new FileReader();
+    r.onload = () => ok(String(r.result));
+    r.onerror = () => erro(r.error);
+    r.readAsDataURL(f);
+  });
 
 const TICKS: Record<string, string> = { pendente: '🕓', enviada: '✓', entregue: '✓✓', lida: '✓✓', falhou: '⚠️' };
 
@@ -21,6 +33,21 @@ function Midia({ m }: { m: Mensagem }) {
   if (m.tipo === 'audio') return <audio controls src={url} />;
   if (m.tipo === 'video') return <video controls src={url} />;
   return <a href={url} download={m.midiaNome ?? 'arquivo'}>📎 {m.midiaNome ?? 'Abrir arquivo'}</a>;
+}
+
+/** Baixa a conversa carregada como texto, no formato de exportação do WhatsApp. */
+function exportar(contato: { nome: string; telefone: string }, mensagens: Mensagem[]) {
+  const linhas = mensagens.map((m) => {
+    const quem = m.direcao === 'entrada' ? contato.nome : m.direcao === 'interna' ? `[interna] ${m.autor ?? ''}` : (m.autor ?? 'Aritana');
+    const corpo = m.apagada ? '(mensagem apagada)' : [m.midia ? `<${resumoTipo[m.tipo] ?? 'arquivo'}>` : '', m.texto ?? ''].filter(Boolean).join(' ');
+    return `${new Date(m.criadoEm).toLocaleString('pt-BR')} - ${quem}: ${corpo}`;
+  });
+  const url = URL.createObjectURL(new Blob([`Conversa com ${contato.nome} (${contato.telefone})\n\n${linhas.join('\n')}\n`], { type: 'text/plain;charset=utf-8' }));
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `conversa-${contato.telefone}.txt`;
+  a.click();
+  URL.revokeObjectURL(url);
 }
 
 /** Chat de uma conversa: fila, atendimento, mensagens, conversa interna, templates e respostas rápidas. */
@@ -39,8 +66,21 @@ export function Chat({ conversaId, leadId, aoMudar }: { conversaId: string; lead
   const [interna, setInterna] = useState(false);
   const [verTemplates, setVerTemplates] = useState(false);
   const [transferir, setTransferir] = useState(false);
+  // Balão aberto: qual mensagem está com o seletor de reação; qual painel do rodapé (emojis, formulários); menu "⋮" do topo.
+  const [reagindo, setReagindo] = useState<string | null>(null);
+  const [painel, setPainel] = useState<'emoji' | 'form' | null>(null);
+  const [menu, setMenu] = useState(false);
+  const [citar, setCitar] = useState<Mensagem | null>(null);
+  // Arquivo escolhido, colado ou arrastado, esperando o "Enviar" (o texto vira legenda).
+  const [pendente, setPendente] = useState<{ arquivo: Blob; nome: string; previa: string | null } | null>(null);
+  const [gravando, setGravando] = useState<{ desde: number } | null>(null);
+  const [erroLocal, setErroLocal] = useState<string | null>(null);
+  const [nomeNovo, setNomeNovo] = useState<string | null>(null);
+  const gravador = useRef<{ rec: MediaRecorder; cancelado: boolean } | null>(null);
+  const campoTexto = useRef<HTMLTextAreaElement>(null);
   const fim = useRef<HTMLDivElement>(null);
   const arquivo = useRef<HTMLInputElement>(null);
+  const formularios = useQuery({ queryKey: ['formularios-chat'], queryFn: () => api<{ id: string; slug: string; titulo: string; ativo: boolean }[]>('/formularios'), enabled: painel === 'form', staleTime: 60_000 });
   const ultimo = q.data?.mensagens.at(-1)?.id;
 
   useEffect(() => {
@@ -55,29 +95,96 @@ export function Chat({ conversaId, leadId, aoMudar }: { conversaId: string; lead
   };
   const acao = useMutation({ mutationFn: ({ rota, corpo }: { rota: string; corpo?: unknown }) => api(`/crm/conversas/${conversaId}/${rota}`, { corpo: corpo ?? {} }), onSuccess: atualizar });
   const enviar = useMutation({
-    mutationFn: (c: { tipo: 'texto' | 'template'; texto?: string; templateId?: string }) => api(`/crm/conversas/${conversaId}/${interna && c.tipo === 'texto' ? 'interna' : 'mensagens'}`, { corpo: { ...c, leadId } }),
+    mutationFn: (c: { tipo: 'texto' | 'template'; texto?: string; templateId?: string }) => api(`/crm/conversas/${conversaId}/${interna && c.tipo === 'texto' ? 'interna' : 'mensagens'}`, { corpo: { ...c, leadId, ...(citar && !interna ? { citarId: citar.id } : {}) } }),
     onSuccess: () => {
       setTexto('');
       setVerTemplates(false);
+      setCitar(null);
+      setPainel(null);
       atualizar();
     },
   });
   const anexar = useMutation({
-    mutationFn: async (f: File) => {
-      if (f.size > 16_000_000) throw new Error('Arquivo maior que 16 MB.');
-      const base64 = await new Promise<string>((ok, erro) => {
-        const r = new FileReader();
-        r.onload = () => ok(String(r.result));
-        r.onerror = () => erro(r.error);
-        r.readAsDataURL(f);
-      });
-      return api(`/crm/conversas/${conversaId}/midia`, { corpo: { nome: f.name, mime: f.type || 'application/octet-stream', base64, texto: texto || null } });
+    mutationFn: async (a: { arquivo: Blob; nome: string; legenda?: string | null }) => {
+      if (a.arquivo.size > 16_000_000) throw new Error('Arquivo maior que 16 MB.');
+      const base64 = await lerArquivo(a.arquivo);
+      // "audio/webm;codecs=opus" → "audio/webm"
+      return api(`/crm/conversas/${conversaId}/midia`, { corpo: { nome: a.nome, mime: (a.arquivo.type || 'application/octet-stream').split(';')[0], base64, texto: a.legenda || null, ...(citar ? { citarId: citar.id } : {}) } });
     },
     onSuccess: () => {
       setTexto('');
+      setPendente(null);
+      setCitar(null);
       atualizar();
     },
   });
+  const reagir = useMutation({ mutationFn: (v: { id: string; emoji: string }) => api(`/crm/conversas/${conversaId}/mensagens/${v.id}/reagir`, { corpo: { emoji: v.emoji } }), onSuccess: atualizar, onSettled: () => setReagindo(null) });
+  const apagar = useMutation({ mutationFn: (id: string) => api(`/crm/conversas/${conversaId}/mensagens/${id}/apagar`, { corpo: {} }), onSuccess: atualizar });
+  const renomear = useMutation({ mutationFn: (v: { id: string; nome: string }) => api(`/crm/contatos/${v.id}`, { metodo: 'PATCH', corpo: { nome: v.nome } }), onSuccess: () => { setNomeNovo(null); atualizar(); } });
+
+  /** Arquivo escolhido, colado (Ctrl+V) ou arrastado para a conversa: fica esperando o "Enviar". */
+  const escolher = (f: File | Blob, nome?: string) => {
+    setErroLocal(null);
+    if (f.size > 16_000_000) return setErroLocal('Arquivo maior que 16 MB.');
+    setPendente((antes) => {
+      if (antes?.previa) URL.revokeObjectURL(antes.previa);
+      return { arquivo: f, nome: nome ?? (f as File).name ?? 'arquivo', previa: f.type.startsWith('image/') ? URL.createObjectURL(f) : null };
+    });
+    campoTexto.current?.focus();
+  };
+
+  /** Grava um áudio pelo microfone e manda como mensagem de voz. */
+  const gravar = async () => {
+    setErroLocal(null);
+    try {
+      const som = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const tipo = ['audio/ogg;codecs=opus', 'audio/webm;codecs=opus', 'audio/mp4'].find((t) => MediaRecorder.isTypeSupported(t));
+      const rec = new MediaRecorder(som, tipo ? { mimeType: tipo } : undefined);
+      const partes: Blob[] = [];
+      const estado = { rec, cancelado: false };
+      rec.ondataavailable = (e) => { if (e.data.size) partes.push(e.data); };
+      rec.onstop = () => {
+        som.getTracks().forEach((t) => t.stop());
+        setGravando(null);
+        gravador.current = null;
+        if (estado.cancelado || !partes.length) return;
+        const audio = new Blob(partes, { type: rec.mimeType || tipo || 'audio/webm' });
+        const ext = audio.type.includes('ogg') ? 'ogg' : audio.type.includes('mp4') ? 'm4a' : 'webm';
+        anexar.mutate({ arquivo: audio, nome: `audio.${ext}` });
+      };
+      gravador.current = estado;
+      rec.start();
+      setGravando({ desde: Date.now() });
+    } catch {
+      setErroLocal('Não deu para usar o microfone. Libere o microfone para este site no navegador.');
+    }
+  };
+  const pararGravacao = (cancelar: boolean) => {
+    if (!gravador.current) return;
+    gravador.current.cancelado = cancelar;
+    gravador.current.rec.stop();
+  };
+  // Saiu da conversa no meio da gravação: descarta.
+  useEffect(() => () => { if (gravador.current) { gravador.current.cancelado = true; gravador.current.rec.stop(); } }, []);
+  // Relógio da gravação.
+  const [, tique] = useState(0);
+  useEffect(() => {
+    if (!gravando) return;
+    const t = setInterval(() => tique((n) => n + 1), 500);
+    return () => clearInterval(t);
+  }, [gravando]);
+
+  const inserir = (pedaco: string) => {
+    const el = campoTexto.current;
+    const ini = el?.selectionStart ?? texto.length;
+    const fimSel = el?.selectionEnd ?? texto.length;
+    setTexto(texto.slice(0, ini) + pedaco + texto.slice(fimSel));
+    requestAnimationFrame(() => { el?.focus(); el?.setSelectionRange(ini + pedaco.length, ini + pedaco.length); });
+  };
+  const mandar = () => {
+    if (pendente) return anexar.mutate({ arquivo: pendente.arquivo, nome: pendente.nome, legenda: texto });
+    if (texto.trim() && !enviar.isPending) enviar.mutate({ tipo: 'texto', texto });
+  };
 
   // "/atalho" → respostas rápidas; "@nome" na conversa interna → colegas.
   const sugestoes = useMemo(() => {
@@ -103,7 +210,18 @@ export function Chat({ conversaId, leadId, aoMudar }: { conversaId: string; lead
     <div className="chat">
       <div className="chat-topo">
         <div style={{ minWidth: 0 }}>
-          <div style={{ fontWeight: 700 }}>{contato.nome}</div>
+          {nomeNovo === null ? (
+            <div style={{ fontWeight: 700 }}>
+              {c.fixada && <span title="Fixada no topo">📌 </span>}{contato.nome}{' '}
+              {editar && <button className="icone-chat" title="Mudar o nome do contato" aria-label="Mudar o nome do contato" onClick={() => setNomeNovo(contato.nome)}>✎</button>}
+            </div>
+          ) : (
+            <form className="flex" style={{ gap: 6 }} onSubmit={(e) => { e.preventDefault(); if (nomeNovo.trim()) renomear.mutate({ id: contato.id, nome: nomeNovo.trim() }); }}>
+              <input autoFocus aria-label="Nome do contato" value={nomeNovo} maxLength={150} onChange={(e) => setNomeNovo(e.target.value)} style={{ padding: '4px 8px', border: '1px solid var(--linha)', borderRadius: 8, font: 'inherit' }} />
+              <button className="botao pequeno" disabled={!nomeNovo.trim() || renomear.isPending}>Salvar</button>
+              <button type="button" className="botao claro pequeno" onClick={() => setNomeNovo(null)}>Cancelar</button>
+            </form>
+          )}
           <div className="muted" style={{ fontSize: 13 }}>
             {telefoneBonito(contato.telefone)} · {c.canal} {c.canalTipo === 'oficial' ? '(oficial)' : '(QR code)'}
             {contato.descadastrado && <span className="etiqueta erro" style={{ marginLeft: 6 }}>Não quer disparos</span>}
@@ -113,6 +231,17 @@ export function Chat({ conversaId, leadId, aoMudar }: { conversaId: string; lead
           <button className="botao claro pequeno" title="Ligar pelo softphone" onClick={() => ligar(contato.telefone, leadId, contato.nome)}>📞 Ligar</button>
           {editar && c.status !== 'resolvida' && (minha || gestor) && <button className="botao claro pequeno" onClick={() => setTransferir((v) => !v)}>Transferir</button>}
           {editar && c.status !== 'resolvida' && (minha || gestor || c.status === 'fila') && <button className="botao claro pequeno" disabled={acao.isPending} onClick={() => acao.mutate({ rota: 'resolver' })}>✓ Resolver</button>}
+          <div style={{ position: 'relative' }}>
+            <button className="botao claro pequeno" aria-label="Mais opções da conversa" aria-expanded={menu} onClick={() => setMenu((v) => !v)}>⋮</button>
+            {menu && (
+              <div className="menu-chat" role="menu" onClick={() => setMenu(false)}>
+                {editar && <button role="menuitem" onClick={() => acao.mutate({ rota: 'fixar', corpo: { fixada: !c.fixada } })}>{c.fixada ? 'Desafixar do topo' : '📌 Fixar no topo'}</button>}
+                {editar && <button role="menuitem" onClick={() => acao.mutate({ rota: 'nao-lida' })}>Marcar como não lida</button>}
+                <button role="menuitem" onClick={() => void navigator.clipboard?.writeText(contato.telefone)}>Copiar o telefone</button>
+                <button role="menuitem" onClick={() => exportar(contato, mensagens)}>Exportar a conversa (.txt)</button>
+              </div>
+            )}
+          </div>
         </div>
       </div>
       {transferir && (
@@ -139,7 +268,11 @@ export function Chat({ conversaId, leadId, aoMudar }: { conversaId: string; lead
       {c.status === 'resolvida' && <div className="chat-faixa" style={{ background: 'var(--ok-fundo)', color: 'var(--ok)' }}><span>Atendimento resolvido. Se o contato escrever, volta para a fila.</span></div>}
       {acao.error && <div style={{ padding: '6px 12px' }}><Erro erro={acao.error} /></div>}
 
-      <div className="chat-msgs">
+      <div
+        className="chat-msgs"
+        onDragOver={(e) => { if (editar && e.dataTransfer.types.includes('Files')) e.preventDefault(); }}
+        onDrop={(e) => { const f = e.dataTransfer.files?.[0]; if (editar && f) { e.preventDefault(); escolher(f); } }}
+      >
         {!mensagens.length && <div className="muted" style={{ alignSelf: 'center' }}>Nenhuma mensagem ainda.</div>}
         {mensagens.map((m) => {
           const dia = new Date(m.criadoEm).toLocaleDateString('pt-BR', { weekday: 'short', day: '2-digit', month: '2-digit' });
@@ -148,17 +281,40 @@ export function Chat({ conversaId, leadId, aoMudar }: { conversaId: string; lead
           return (
             <div key={m.id} style={{ display: 'contents' }}>
               {sep && <div className="dia">{dia}</div>}
-              <div className={`msg ${m.direcao} ${m.status === 'falhou' ? 'falhou' : ''}`}>
+              <div id={`msg-${m.id}`} className={`msg ${m.direcao} ${m.status === 'falhou' ? 'falhou' : ''} ${m.apagada ? 'apagada' : ''}`}>
                 {m.direcao === 'interna' && <div style={{ fontSize: 12, fontWeight: 700, color: '#8a6d12' }}>🔒 Interna · {m.autor}</div>}
                 {m.templateNome && <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--dourado-t)' }}>Template: {m.templateNome}</div>}
-                <Midia m={m} />
-                {m.texto}
+                {m.citada && !m.apagada && (
+                  <button className="citada" title="Ir para a mensagem respondida" onClick={() => document.getElementById(`msg-${m.citada!.id}`)?.scrollIntoView({ block: 'center', behavior: 'smooth' })}>
+                    <b>{m.citada.direcao === 'saida' ? 'Vocês' : contato.nome}</b>
+                    <span>{m.citada.texto ?? resumoTipo[m.citada.tipo] ?? 'Mensagem apagada'}</span>
+                  </button>
+                )}
+                {m.apagada ? <i className="muted">🚫 Mensagem apagada</i> : <><Midia m={m} />{m.texto}</>}
+                {/* Ações da mensagem: aparecem ao passar o mouse ou ao focar pelo teclado. */}
+                {editar && podeEscrever && !m.apagada && m.direcao !== 'interna' && m.noWhatsApp && (
+                  <div className="acoes-msg">
+                    <button title="Responder citando" aria-label="Responder citando" onClick={() => { setCitar(m); setInterna(false); campoTexto.current?.focus(); }}>↩</button>
+                    {q.data!.recursos.reagir && <button title="Reagir" aria-label="Reagir" aria-expanded={reagindo === m.id} onClick={() => setReagindo(reagindo === m.id ? null : m.id)}>😀</button>}
+                    {m.texto && <button title="Copiar o texto" aria-label="Copiar o texto" onClick={() => void navigator.clipboard?.writeText(m.texto!)}>⧉</button>}
+                    {m.direcao === 'saida' && q.data!.recursos.apagar && Date.now() - new Date(m.criadoEm).getTime() < 48 * 3600_000 && (
+                      <button title="Apagar para todos" aria-label="Apagar para todos" disabled={apagar.isPending} onClick={() => window.confirm('Apagar esta mensagem para todos? O contato também deixa de ver.') && apagar.mutate(m.id)}>🗑</button>
+                    )}
+                    {reagindo === m.id && (
+                      <div className="reacoes-rapidas" role="menu">
+                        {REACOES_RAPIDAS.map((e) => <button key={e} role="menuitem" disabled={reagir.isPending} onClick={() => reagir.mutate({ id: m.id, emoji: e })}>{e}</button>)}
+                        {m.reacoes.some((r) => r.de === 'equipe') && <button role="menuitem" title="Tirar a reação" disabled={reagir.isPending} onClick={() => reagir.mutate({ id: m.id, emoji: '' })}>✕</button>}
+                      </div>
+                    )}
+                  </div>
+                )}
                 <div className="rodape-msg">
                   {m.direcao === 'saida' && (m.automatica ? 'automática' : m.autor ?? 'celular')}
                   <span>{new Date(m.criadoEm).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</span>
                   {m.direcao === 'saida' && <span style={{ color: m.status === 'lida' ? '#2a7fd4' : undefined }} title={m.erro ?? m.status}>{TICKS[m.status] ?? ''}</span>}
                 </div>
                 {m.erro && <div style={{ fontSize: 12, color: 'var(--erro)' }}>{m.erro}</div>}
+                {m.reacoes.length > 0 && !m.apagada && <div className="reacoes">{m.reacoes.map((r) => <span key={r.de} title={r.de === 'equipe' ? 'Reação de vocês' : `Reação de ${contato.nome}`}>{r.emoji}</span>)}</div>}
               </div>
             </div>
           );
@@ -180,28 +336,84 @@ export function Chat({ conversaId, leadId, aoMudar }: { conversaId: string; lead
               ))}
             </div>
           )}
-          {(enviar.error || anexar.error) && <Erro erro={enviar.error ?? anexar.error} />}
+          {(enviar.error || anexar.error || reagir.error || apagar.error || renomear.error) && <Erro erro={enviar.error ?? anexar.error ?? reagir.error ?? apagar.error ?? renomear.error} />}
+          {erroLocal && <div className="aviso erro" role="alert" style={{ margin: 0, padding: '6px 10px', fontSize: 13 }}>{erroLocal}</div>}
+          {painel === 'emoji' && (
+            <div className="emojis" role="group" aria-label="Emojis">
+              {EMOJIS.map((e) => <button key={e} onClick={() => inserir(e)}>{e}</button>)}
+            </div>
+          )}
+          {painel === 'form' && (
+            <div className="sugestoes">
+              {formularios.isLoading && <div className="muted" style={{ padding: 8 }}>Carregando…</div>}
+              {formularios.data && !formularios.data.filter((f) => f.ativo).length && <div className="muted" style={{ padding: 8 }}>Nenhum formulário ativo. Crie um em Formulários.</div>}
+              {formularios.data?.filter((f) => f.ativo).map((f) => (
+                <button key={f.id} onClick={() => { inserir(`${window.location.origin}/f/${f.slug}`); setPainel(null); }}>
+                  <b>{f.titulo}</b> <span className="muted">— coloca o link na mensagem</span>
+                </button>
+              ))}
+            </div>
+          )}
+          {citar && !interna && (
+            <div className="citando">
+              <div style={{ minWidth: 0 }}>
+                <b>Respondendo a {citar.direcao === 'saida' ? 'vocês' : contato.nome}</b>
+                <div className="previa">{citar.texto ?? resumoTipo[citar.tipo] ?? 'Mensagem'}</div>
+              </div>
+              <button className="icone-chat" aria-label="Cancelar a resposta" onClick={() => setCitar(null)}>✕</button>
+            </div>
+          )}
+          {pendente && (
+            <div className="citando">
+              {pendente.previa ? <img src={pendente.previa} alt="" style={{ width: 48, height: 48, objectFit: 'cover', borderRadius: 6 }} /> : <span aria-hidden="true">📎</span>}
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <b>{pendente.nome}</b>
+                <div className="previa">Pronto para enviar. O que você escrever vai como legenda.</div>
+              </div>
+              <button className="icone-chat" aria-label="Tirar o arquivo" onClick={() => setPendente(null)}>✕</button>
+            </div>
+          )}
           <textarea
+            ref={campoTexto}
             rows={2}
             value={texto}
             disabled={!podeEscrever}
             placeholder={interna ? 'Mensagem interna (o cliente não vê). Use @ para chamar um colega.' : c.status === 'fila' ? 'Responder pega a conversa para você. "/" para respostas rápidas.' : 'Escreva… "/" para respostas rápidas. Enter envia, Shift+Enter quebra linha.'}
             onChange={(e) => setTexto(e.target.value)}
+            onPaste={(e) => {
+              // Colar uma imagem (print de tela, foto copiada) anexa em vez de colar texto.
+              const img = [...e.clipboardData.items].find((i) => i.kind === 'file' && i.type.startsWith('image/'))?.getAsFile();
+              if (img && !interna) { e.preventDefault(); escolher(img, `imagem.${img.type.split('/')[1] || 'png'}`); }
+            }}
             onKeyDown={(e) => {
+              if (e.key === 'Escape' && (citar || painel || pendente)) { setCitar(null); setPainel(null); setPendente(null); }
               if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
                 if (sugestoes.length === 1) return setTexto(sugestoes[0].valor);
-                if (texto.trim() && !enviar.isPending) enviar.mutate({ tipo: 'texto', texto });
+                if (interna) { if (texto.trim() && !enviar.isPending) enviar.mutate({ tipo: 'texto', texto }); } else mandar();
               }
             }}
           />
           <div className="acoes">
             <label className="check" style={{ fontSize: 13 }}><input type="checkbox" checked={interna} onChange={(e) => setInterna(e.target.checked)} /> 🔒 Interna</label>
+            <button className="botao claro pequeno" title="Emojis" aria-label="Emojis" aria-expanded={painel === 'emoji'} disabled={!podeEscrever} onClick={() => setPainel(painel === 'emoji' ? null : 'emoji')}>😀</button>
             {!interna && <button className="botao claro pequeno" onClick={() => setVerTemplates((v) => !v)}>Templates</button>}
-            {!interna && <button className="botao claro pequeno" disabled={anexar.isPending || (c.canalTipo === 'oficial' && !c.dentroDaJanela)} onClick={() => arquivo.current?.click()}>{anexar.isPending ? 'Enviando…' : '📎 Arquivo'}</button>}
-            <input ref={arquivo} type="file" hidden accept="image/*,audio/*,video/mp4,application/pdf,.doc,.docx,.xls,.xlsx,.txt" onChange={(e) => { const f = e.target.files?.[0]; if (f) anexar.mutate(f); e.target.value = ''; }} />
+            {!interna && <button className="botao claro pequeno" disabled={!podeEscrever || anexar.isPending || (c.canalTipo === 'oficial' && !c.dentroDaJanela)} onClick={() => arquivo.current?.click()}>{anexar.isPending ? 'Enviando…' : '📎 Arquivo'}</button>}
+            {!interna && pode('formularios', 'ver') && <button className="botao claro pequeno" title="Mandar o link de um formulário" aria-expanded={painel === 'form'} disabled={!podeEscrever} onClick={() => setPainel(painel === 'form' ? null : 'form')}>📋 Formulário</button>}
+            <input ref={arquivo} type="file" hidden accept="image/*,audio/*,video/mp4,application/pdf,.doc,.docx,.xls,.xlsx,.txt" onChange={(e) => { const f = e.target.files?.[0]; if (f) escolher(f); e.target.value = ''; }} />
             <span style={{ flex: 1 }} />
-            <button className="botao pequeno" disabled={!texto.trim() || enviar.isPending || !podeEscrever} onClick={() => enviar.mutate({ tipo: 'texto', texto })}>{interna ? 'Anotar' : 'Enviar'}</button>
+            {gravando ? (
+              <>
+                <span className="gravando" role="status">● Gravando {Math.floor((Date.now() - gravando.desde) / 60000)}:{String(Math.floor((Date.now() - gravando.desde) / 1000) % 60).padStart(2, '0')}</span>
+                <button className="botao claro pequeno" onClick={() => pararGravacao(true)}>Descartar</button>
+                <button className="botao pequeno" onClick={() => pararGravacao(false)}>Enviar áudio</button>
+              </>
+            ) : (
+              <>
+                {!interna && !texto.trim() && !pendente && typeof MediaRecorder !== 'undefined' && <button className="botao claro pequeno" title="Gravar um áudio" aria-label="Gravar um áudio" disabled={!podeEscrever || anexar.isPending || (c.canalTipo === 'oficial' && !c.dentroDaJanela)} onClick={() => void gravar()}>🎤 Áudio</button>}
+                <button className="botao pequeno" disabled={(!texto.trim() && !pendente) || enviar.isPending || anexar.isPending || !podeEscrever} onClick={() => (interna ? enviar.mutate({ tipo: 'texto', texto }) : mandar())}>{interna ? 'Anotar' : anexar.isPending ? 'Enviando…' : 'Enviar'}</button>
+              </>
+            )}
           </div>
         </div>
       )}

@@ -6,7 +6,7 @@ import { Carregando, Erro } from '../../componentes/ui';
 import { Chat } from './Chat';
 import { ha, iniciais, telefoneBonito, usarCampos, usarCanais, usarContadores, usarFunis, useRelogio, ValorCampo } from './comum';
 
-interface Conversa { id: string; status: string; naoLidas: number; ultimaMensagem: string | null; ultimaMensagemEm: string | null; filaDesde: string | null; atendente: string | null; canal: string; canalTipo: string; contatoId: string; contato: string; telefone: string; lead: { id: string; titulo: string; etapa: string; funil: string } | null }
+interface Conversa { id: string; status: string; naoLidas: number; fixada: boolean; ultimaMensagem: string | null; ultimaMensagemEm: string | null; filaDesde: string | null; atendente: string | null; canal: string; canalTipo: string; contatoId: string; contato: string; telefone: string; lead: { id: string; titulo: string; etapa: string; funil: string } | null }
 type Aba = 'fila' | 'minhas' | 'atendimento' | 'resolvidas';
 
 /** Caixa de entrada: fila de espera, minhas conversas, em atendimento (gestão) e resolvidas. */
@@ -19,7 +19,22 @@ export function Conversas({ inicial }: { inicial?: string | null }) {
   const [canalId, setCanalId] = useState('');
   const [busca, setBusca] = useState('');
   const [aberta, setAberta] = useState<string | null>(inicial ?? null);
-  const filtro = `aba=${aba}${canalId ? `&canalId=${canalId}` : ''}${busca.trim() ? `&busca=${encodeURIComponent(busca.trim())}` : ''}`;
+  const [soNaoLidas, setSoNaoLidas] = useState(false);
+  // Conversa avulsa: escrever para um telefone que ainda não tem conversa (nem card).
+  const qc = useQueryClient();
+  const [nova, setNova] = useState<{ canalId: string; telefone: string; nome: string } | null>(null);
+  const criar = useMutation({
+    mutationFn: () => api<{ id: string; comOutro: boolean }>('/crm/conversas/nova', { corpo: { canalId: nova!.canalId, telefone: nova!.telefone, nome: nova!.nome.trim() || null } }),
+    onSuccess: (r) => {
+      setNova(null);
+      setBusca('');
+      setSoNaoLidas(false);
+      setAba(r.comOutro ? 'atendimento' : 'minhas');
+      setAberta(r.id);
+      qc.invalidateQueries({ queryKey: ['crm', 'conversas'] });
+    },
+  });
+  const filtro = `aba=${aba}${canalId ? `&canalId=${canalId}` : ''}${busca.trim() ? `&busca=${encodeURIComponent(busca.trim())}` : ''}${soNaoLidas ? '&naoLidas=1' : ''}`;
   const q = useQuery({ queryKey: ['crm', 'conversas', filtro], queryFn: () => api<Conversa[]>(`/crm/conversas?${filtro}`), refetchInterval: 5000 });
   const atual = q.data?.find((c) => c.id === aberta);
 
@@ -60,6 +75,29 @@ export function Conversas({ inicial }: { inicial?: string | null }) {
             </select>
           )}
         </div>
+        <div style={{ display: 'flex', gap: 8, padding: '6px 8px', borderBottom: '1px solid var(--linha)', alignItems: 'center', justifyContent: 'space-between' }}>
+          <label className="check" style={{ fontSize: 13 }}><input type="checkbox" checked={soNaoLidas} onChange={(e) => setSoNaoLidas(e.target.checked)} /> Só não lidas</label>
+          {pode('crm', 'editar') && !nova && <button className="botao pequeno" onClick={() => setNova({ canalId: canalId || canais.data?.find((c) => c.ativo !== false && c.tipo !== 'oficial')?.id || canais.data?.[0]?.id || '', telefone: '', nome: '' })}>+ Nova conversa</button>}
+        </div>
+        {nova && (
+          <form className="nova-conversa" onSubmit={(e) => { e.preventDefault(); if (nova.canalId && nova.telefone.replace(/\D/g, '').length >= 10) criar.mutate(); }}>
+            <b style={{ fontSize: 13 }}>Nova conversa</b>
+            {(canais.data?.length ?? 0) > 1 && (
+              <select aria-label="Enviar pelo número" value={nova.canalId} onChange={(e) => setNova({ ...nova, canalId: e.target.value })}>
+                {canais.data?.map((c) => <option key={c.id} value={c.id}>Enviar por: {c.nome}</option>)}
+              </select>
+            )}
+            <input autoFocus aria-label="Telefone com DDD" inputMode="tel" placeholder="Telefone com DDD. Ex.: 27 99999-0000" value={nova.telefone} onChange={(e) => setNova({ ...nova, telefone: e.target.value })} />
+            <input aria-label="Nome (opcional)" placeholder="Nome (opcional)" maxLength={120} value={nova.nome} onChange={(e) => setNova({ ...nova, nome: e.target.value })} />
+            {canais.data?.find((c) => c.id === nova.canalId)?.tipo === 'oficial' && <span className="muted" style={{ fontSize: 12 }}>Número oficial: a primeira mensagem precisa ser um template aprovado pela Meta.</span>}
+            <span className="muted" style={{ fontSize: 12 }}>Número de fora do Brasil: escreva com o código do país (ex.: 351 912 345 678).</span>
+            {criar.error && <Erro erro={criar.error} />}
+            <div className="flex" style={{ gap: 6 }}>
+              <button className="botao pequeno" disabled={criar.isPending || !nova.canalId || nova.telefone.replace(/\D/g, '').length < 10}>{criar.isPending ? 'Abrindo…' : 'Abrir conversa'}</button>
+              <button type="button" className="botao claro pequeno" onClick={() => setNova(null)}>Cancelar</button>
+            </div>
+          </form>
+        )}
         <div className="inbox-itens">
           {q.isLoading && <Carregando />}
           {q.error && <Erro erro={q.error} />}
@@ -70,7 +108,7 @@ export function Conversas({ inicial }: { inicial?: string | null }) {
               <div key={c.id} className={`conv ${c.id === aberta ? 'ativa' : ''}`} onClick={() => setAberta(c.id)}>
                 <span className="avatar g">{iniciais(c.contato)}</span>
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div className="nome">{c.contato}</div>
+                  <div className="nome">{c.fixada && <span title="Fixada no topo">📌 </span>}{c.contato}</div>
                   <div className="previa">{c.ultimaMensagem ?? telefoneBonito(c.telefone)}</div>
                   <div className="muted" style={{ fontSize: 11 }}>{c.canal}{c.lead ? ` · ${c.lead.etapa}` : ''}{aba !== 'minhas' && c.atendente ? ` · ${c.atendente}` : ''}</div>
                 </div>
