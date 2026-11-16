@@ -4,6 +4,7 @@ import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { api, ErroApi, pode } from '../api';
 import { documento, telefone } from '../formato';
 import { Abas, Campo, Carregando, Erro, StatusPessoa, Topo } from '../componentes/ui';
+import { soVazios, useConsulta } from '../componentes/consultas';
 import { BotaoAssertiva } from '../componentes/BotaoAssertiva';
 
 type Tipo = 'cliente' | 'fornecedor' | 'transportadora' | 'assistencia';
@@ -66,13 +67,21 @@ export function FichaCadastro() {
     },
     onSuccess: (p) => { qc.invalidateQueries({ queryKey: ['cadastros'] }); if (novo) navegar(`/cadastros/${p.id}`, { replace: true }); },
   });
+  const cep = useConsulta('cep');
+  const cnpj = useConsulta('cnpj');
   const campos = salvar.error instanceof ErroApi ? salvar.error.dados.campos ?? {} : {};
   if (!novo && q.isLoading) return <Carregando />;
   const tipo = f.tipo as Tipo;
   const editavel = novo ? pode('cadastros', 'criar') : pode('cadastros', 'editar');
-  const set = (k: string) => (e: { target: { value: string } }) => setF({ ...f, [k]: e.target.value });
-  const inp = (k: string, r: string, cls = '', extra = {}) => <Campo rotulo={r} erro={campos[k]} className={cls}><input value={f[k] ?? ''} onChange={set(k)} className={campos[k] ? 'invalido' : ''} disabled={!editavel} {...extra} /></Campo>;
   const pj = f.tipoDocumento === 'cnpj';
+  const set = (k: string) => (e: { target: { value: string } }) => {
+    setF({ ...f, [k]: e.target.value });
+    // CEP completo traz o endereço; CNPJ completo traz os dados da empresa (só o que estiver vazio).
+    if (k === 'cep') cep.buscar(e.target.value, (d) => setF((x: any) => ({ ...x, logradouro: d.logradouro ?? x.logradouro, bairro: d.bairro ?? x.bairro, cidade: d.cidade ?? x.cidade, uf: d.uf ?? x.uf })));
+    if (k === 'documento' && pj) cnpj.buscar(e.target.value, (d) => setF((x: any) => soVazios(x, { nome: d.razaoSocial, nomeFantasia: d.nomeFantasia, inscricaoEstadual: d.inscricaoEstadual, telefone1: d.telefone, email: d.email, cep: d.cep, logradouro: d.logradouro, numero: d.numero, complemento: d.complemento, bairro: d.bairro, cidade: d.cidade, uf: d.uf })));
+  };
+  const avisoDe = (k: string) => (k === 'cep' ? cep.aviso : k === 'documento' && pj ? cnpj.aviso : null);
+  const inp = (k: string, r: string, cls = '', extra = {}) => <Campo rotulo={r} erro={campos[k] ?? (avisoDe(k)?.erro ? avisoDe(k)!.texto : undefined)} ajuda={avisoDe(k)?.texto} className={cls}><input value={f[k] ?? ''} onChange={set(k)} className={campos[k] ? 'invalido' : ''} disabled={!editavel} {...extra} /></Campo>;
   return (
     <>
       <Topo eb={`Cadastros · ${NOMES[tipo]?.[0] ?? ''}`} titulo={novo ? `Novo ${NOMES[tipo]?.[1]}` : f.nome} acoes={editavel && <button className="botao" onClick={() => salvar.mutate()} disabled={salvar.isPending}>Salvar</button>} />

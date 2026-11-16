@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { api, pode } from '../../api';
 import { centavosParaTexto, paraCentavos } from '../../formato';
+import { useConsulta } from '../../componentes/consultas';
 import { Abas, Campo, Carregando, Erro, Topo, camposComErro } from '../../componentes/ui';
 import { TabelaEspelho } from './MeuPonto';
 import { abrirArquivo, competenciaAtual, hojeBR, lerArquivo, nomeMes, ultimasCompetencias } from './comum';
@@ -71,8 +72,20 @@ function Dados({ f }: { f?: any }) {
   const editar = f ? pode('rh', 'editar') : pode('rh', 'criar');
   // Campos que o servidor recusou: cada um fica destacado com o motivo embaixo.
   const erros = camposComErro(salvar.error);
+  const cep = useConsulta('cep');
   const campo = (k: string, rotulo: string, props: Record<string, unknown> = {}, cls = '') => (
-    <Campo rotulo={rotulo} className={cls} erro={erros[k] ?? erros[`dadosBancarios.${k}`]}><input disabled={!editar} value={d[k] ?? ''} onChange={(e) => setD({ ...d, [k]: e.target.value })} {...props} /></Campo>
+    <Campo rotulo={rotulo} className={cls} erro={erros[k] ?? erros[`dadosBancarios.${k}`] ?? (k === 'cep' && cep.aviso?.erro ? cep.aviso.texto : undefined)} ajuda={k === 'cep' ? cep.aviso?.texto : undefined}>
+      <input
+        disabled={!editar}
+        value={d[k] ?? ''}
+        onChange={(e) => {
+          setD({ ...d, [k]: e.target.value });
+          // CEP completo traz o endereço (o número a pessoa completa).
+          if (k === 'cep') cep.buscar(e.target.value, (c) => setD((x) => ({ ...x, endereco: [c.logradouro, c.bairro].filter(Boolean).join(', ') || x.endereco, cidade: c.cidade ?? x.cidade, uf: c.uf ?? x.uf })));
+        }}
+        {...props}
+      />
+    </Campo>
   );
   if (criado) {
     return (

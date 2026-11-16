@@ -6,6 +6,7 @@ import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { api, ErroApi, pode } from '../api';
 import { centavosParaTexto, data, documento, paraCentavos, reais, telefone } from '../formato';
 import { Abas, Campo, Carregando, Erro, StatusMaleta, StatusPessoa, Topo } from '../componentes/ui';
+import { useConsulta } from '../componentes/consultas';
 import { BotaoAssertiva } from '../componentes/BotaoAssertiva';
 import { DocumentosPessoa } from '../componentes/DocumentosPessoa';
 
@@ -133,14 +134,19 @@ export function FichaRepresentante() {
     },
   });
   const campos = salvar.error instanceof ErroApi ? salvar.error.dados.campos ?? {} : {};
-  const set = (k: string) => (e: { target: { value: string } }) => setF({ ...f, [k]: e.target.value });
+  const cep = useConsulta('cep');
+  const set = (k: string) => (e: { target: { value: string } }) => {
+    setF({ ...f, [k]: e.target.value });
+    // CEP completo traz rua, bairro, cidade e UF.
+    if (k === 'cep') cep.buscar(e.target.value, (d) => setF((x) => ({ ...x, logradouro: d.logradouro ?? x.logradouro, bairro: d.bairro ?? x.bairro, cidade: d.cidade ?? x.cidade, uf: d.uf ?? x.uf })));
+  };
   const editavel = nova ? pode('rede', 'criar') : pode('rede', 'editar');
 
   if (!nova && q.isLoading) return <Carregando />;
   if (q.error) return <Erro erro={q.error} />;
 
   const inp = (k: string, rotulo: string, extra: Partial<React.InputHTMLAttributes<HTMLInputElement>> = {}, classe = '') => (
-    <Campo rotulo={rotulo} erro={campos[k]} className={classe}>
+    <Campo rotulo={rotulo} erro={campos[k] ?? (k === 'cep' && cep.aviso?.erro ? cep.aviso.texto : undefined)} ajuda={k === 'cep' ? cep.aviso?.texto : undefined} className={classe}>
       <input value={f[k] ?? ''} onChange={set(k)} className={campos[k] ? 'invalido' : ''} disabled={!editavel} {...extra} />
     </Campo>
   );

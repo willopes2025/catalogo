@@ -2076,6 +2076,31 @@ test('app da representante: registra o celular e recebe notificações pelo Fire
   }
 });
 
+test('preenchimento automático: CEP traz o endereço e CNPJ traz os dados da empresa, com segunda fonte', async () => {
+  const c = await ok('GET', '/consultas/cep/29101-010');
+  assert.deepEqual(c, { cep: '29101010', logradouro: 'Avenida Champagnat', bairro: 'Centro', cidade: 'Vila Velha', uf: 'ES' });
+  // Primeira fonte fora do ar: a segunda responde.
+  assert.equal((await ok('GET', '/consultas/cep/29000001')).cidade, 'Vitória');
+  assert.equal((await chamar('GET', '/consultas/cep/00000000')).status, 404);
+  assert.equal((await chamar('GET', '/consultas/cep/123')).status, 400);
+  const e = await ok('GET', '/consultas/cnpj/11.222.333000181');
+  assert.equal(e.razaoSocial, 'Fornecedora de Semijoias do Brasil Ltda', 'tira o TUDO MAIÚSCULO da Receita');
+  assert.equal(e.logradouro, 'Rua das Flores');
+  assert.equal(e.cidade, 'Limeira');
+  assert.equal(e.telefone, '1933334444');
+  assert.equal(e.email, 'contato@brilho.exemplo');
+  const e2 = await ok('GET', '/consultas/cnpj/11444777000161');
+  assert.equal(e2.inscricaoEstadual, '082123456', 'segunda fonte traz a inscrição estadual');
+  assert.equal(e2.situacao, 'Baixada');
+  assert.equal((await chamar('GET', '/consultas/cnpj/11222333000199')).status, 400, 'dígito verificador errado nem consulta');
+  assert.equal((await chamar('GET', '/consultas/cnpj/19131243000197')).status, 404);
+  // Só para a equipe logada.
+  const admin = token;
+  token = '';
+  assert.equal((await chamar('GET', '/consultas/cep/29101010')).status, 401);
+  token = admin;
+});
+
 test('implantação: apagar dados de teste exige APAGAR e mantém o que é configuração', async () => {
   assert.equal((await chamar('POST', '/implantacao/apagar-dados-de-teste', { confirmacao: 'apagar' })).status, 400);
   const bloq = await chamar('POST', '/implantacao/apagar-dados-de-teste', { confirmacao: 'APAGAR', manterProdutos: true });

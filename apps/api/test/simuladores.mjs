@@ -230,6 +230,29 @@ http
       if (r === 'disconnect') { wa.zapiConectado = false; return responder(res, 200, { value: true }); }
       return responder(res, 404, { error: 'not found' });
     }
+    // ── CEP e CNPJ (ViaCEP, BrasilAPI, CNPJ.ws) ──
+    if (url.pathname.startsWith('/viacep/ws/')) {
+      const cep = url.pathname.split('/')[3];
+      if (cep === '29101010') return responder(res, 200, { cep: '29101-010', logradouro: 'Avenida Champagnat', bairro: 'Centro', localidade: 'Vila Velha', uf: 'ES' });
+      if (cep === '29000001') return responder(res, 500, {}); // fora do ar: cai na segunda fonte
+      return responder(res, 200, { erro: 'true' });
+    }
+    if (url.pathname.startsWith('/brasilapi/api/cep/v1/')) {
+      const cep = url.pathname.split('/').pop();
+      if (cep === '29000001') return responder(res, 200, { cep, state: 'ES', city: 'Vitória', neighborhood: 'Centro', street: 'Rua Sete de Setembro' });
+      return responder(res, 404, { message: 'CEP não encontrado' });
+    }
+    if (url.pathname.startsWith('/brasilapi/api/cnpj/v1/')) {
+      const c = url.pathname.split('/').pop();
+      if (c === '11222333000181') return responder(res, 200, { cnpj: c, razao_social: 'FORNECEDORA DE SEMIJOIAS DO BRASIL LTDA', nome_fantasia: 'BRILHO FORNECEDORA', descricao_tipo_de_logradouro: 'RUA', logradouro: 'DAS FLORES', numero: '120', complemento: 'SALA 3', bairro: 'CENTRO', municipio: 'LIMEIRA', uf: 'SP', cep: '13480000', ddd_telefone_1: '1933334444', email: 'CONTATO@BRILHO.EXEMPLO', descricao_situacao_cadastral: 'ATIVA' });
+      if (c === '11444777000161') return responder(res, 429, {}); // limite estourado: cai na segunda fonte
+      return responder(res, 404, { message: 'CNPJ não encontrado' });
+    }
+    if (url.pathname.startsWith('/cnpjws/cnpj/')) {
+      const c = url.pathname.split('/').pop();
+      if (c === '11444777000161') return responder(res, 200, { razao_social: 'OUTRA EMPRESA LTDA', estabelecimento: { nome_fantasia: null, tipo_logradouro: 'AVENIDA', logradouro: 'BRASIL', numero: '10', complemento: null, bairro: 'CENTRO', cep: '29100000', ddd1: '27', telefone1: '33221100', email: null, situacao_cadastral: 'Baixada', cidade: { nome: 'Vila Velha' }, estado: { sigla: 'ES' }, inscricoes_estaduais: [{ inscricao_estadual: '082123456', ativo: true }] } });
+      return responder(res, 404, {});
+    }
     if (url.pathname === '/zapi-arquivo/foto.jpg') { res.writeHead(200, { 'content-type': 'image/jpeg' }); return res.end(Buffer.from('ffd8ffe000104a46494600010100000100010000ffd9', 'hex')); }
 
     // ── Jueri (API v1, cliente 11566) ──

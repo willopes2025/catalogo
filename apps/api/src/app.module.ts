@@ -15,6 +15,7 @@ import { DocumentoPublicoController, DocumentosController } from './documentos/d
 import { DocumentosService } from './documentos/documentos.service';
 import { CatalogoController } from './catalogo/catalogo.controller';
 import { PrivacidadeController } from './catalogo/privacidade.controller';
+import { ConsultasController } from './consultas/consultas.controller';
 import { EmpresasController } from './empresas/empresas.controller';
 import { VendasController } from './vendas/vendas.controller';
 import { VendasService } from './vendas/vendas.service';
@@ -101,6 +102,7 @@ if (!segredo || (process.env.NODE_ENV === 'production' && segredo.length < 32)) 
     DocumentoPublicoController,
     CatalogoController,
     PrivacidadeController,
+    ConsultasController,
     EmpresasController,
     VendasController,
     WebhooksController,

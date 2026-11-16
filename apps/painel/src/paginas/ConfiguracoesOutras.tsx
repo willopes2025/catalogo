@@ -4,6 +4,7 @@ import { ACOES, MODULOS } from '@aritana/regras';
 import { api, pode } from '../api';
 import { dataHora } from '../formato';
 import { Campo, Carregando, Erro } from '../componentes/ui';
+import { soVazios, useConsulta } from '../componentes/consultas';
 
 // ───────────── Usuários ─────────────
 
@@ -285,6 +286,7 @@ export function Empresas() {
   const qc = useQueryClient();
   const q = useQuery({ queryKey: ['empresas'], queryFn: () => api<any[]>('/empresas') });
   const [edit, setEdit] = useState<Record<string, any>>({});
+  const cnpj = useConsulta('cnpj');
   const salvar = useMutation({
     mutationFn: (e: any) => api(`/empresas/${e.id}`, { metodo: 'PATCH', corpo: { nome: e.nome, razaoSocial: e.razaoSocial, cnpj: e.cnpj, inscricaoEstadual: e.inscricaoEstadual, cidade: e.cidade, uf: e.uf } }),
     onSuccess: () => { setEdit({}); qc.invalidateQueries({ queryKey: ['empresas'] }); },
@@ -297,13 +299,18 @@ export function Empresas() {
       {salvar.error && <Erro erro={salvar.error} />}
       {q.data!.map((e0) => {
         const e = edit[e0.id] ?? e0;
-        const set = (k: string) => (ev: { target: { value: string } }) => setEdit({ ...edit, [e0.id]: { ...e, [k]: ev.target.value } });
+        const set = (k: string) => (ev: { target: { value: string } }) => {
+          setEdit({ ...edit, [e0.id]: { ...e, [k]: ev.target.value } });
+          // CNPJ completo traz razão social, inscrição estadual, cidade e UF (só o que estiver vazio).
+          if (k === 'cnpj') cnpj.buscar(ev.target.value, (d) => setEdit((x) => ({ ...x, [e0.id]: soVazios(x[e0.id] ?? e0, { razaoSocial: d.razaoSocial, nome: d.nomeFantasia ?? d.razaoSocial, inscricaoEstadual: d.inscricaoEstadual, cidade: d.cidade, uf: d.uf }) })), e0.id);
+        };
+        const avisoCnpj = cnpj.aviso?.alvo === e0.id ? cnpj.aviso : null;
         return (
           <div key={e0.id} className="cartao form">
             <div className="secao">{e0.tipo === 'matriz' ? 'Matriz' : 'Loja'}</div>
             <Campo rotulo="Nome de exibição" className="l2"><input value={e.nome ?? ''} onChange={set('nome')} disabled={!editavel} /></Campo>
             <Campo rotulo="Razão social" className="l2"><input value={e.razaoSocial ?? ''} onChange={set('razaoSocial')} disabled={!editavel} /></Campo>
-            <Campo rotulo="CNPJ"><input value={e.cnpj ?? ''} onChange={set('cnpj')} disabled={!editavel} /></Campo>
+            <Campo rotulo="CNPJ" erro={avisoCnpj?.erro ? avisoCnpj.texto : undefined} ajuda={avisoCnpj?.texto}><input value={e.cnpj ?? ''} onChange={set('cnpj')} disabled={!editavel} inputMode="numeric" /></Campo>
             <Campo rotulo="Inscrição estadual"><input value={e.inscricaoEstadual ?? ''} onChange={set('inscricaoEstadual')} disabled={!editavel} /></Campo>
             <Campo rotulo="Cidade"><input value={e.cidade ?? ''} onChange={set('cidade')} disabled={!editavel} /></Campo>
             <Campo rotulo="UF"><input value={e.uf ?? ''} maxLength={2} onChange={set('uf')} disabled={!editavel} /></Campo>
