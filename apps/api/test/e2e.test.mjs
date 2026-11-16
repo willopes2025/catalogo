@@ -1424,6 +1424,51 @@ test('WhatsApp por QR code no servidor próprio: só o nome, QR na tela, recebe 
   assert.equal((await chamar('POST', '/crm/canais', { nome: 'Sem dados', tipo: 'qrcode', config: {} })).status, 400);
 });
 
+test('Evolution pelo token: liga uma instância que já existe em outro servidor, sem criar nem apagar nada lá', async () => {
+  const fora = `${SIM}/evofora`;
+  const ver = async () => (await fetch(`${SIM}/__evo/ver?i=loja-centro`)).json();
+  // Faltando dado, token errado, instância que não existe e endereço inválido: recusa com o motivo.
+  assert.equal((await chamar('POST', '/crm/canais', { nome: 'Loja', tipo: 'evolution', config: { servidor: fora, instancia: 'loja-centro' } })).status, 400);
+  const errado = await chamar('POST', '/crm/canais', { nome: 'Loja', tipo: 'evolution', config: { servidor: fora, instancia: 'loja-centro', token: 'token-errado' } });
+  assert.equal(errado.status, 400);
+  assert.match(errado.dados.mensagem ?? errado.dados.message, /recusou o token/);
+  const semInst = await chamar('POST', '/crm/canais', { nome: 'Loja', tipo: 'evolution', config: { servidor: fora, instancia: 'nao-existe', token: 'token-da-instancia-fora' } });
+  assert.match(semInst.dados.mensagem ?? semInst.dados.message, /não existe nesse servidor/);
+  assert.equal((await chamar('POST', '/crm/canais', { nome: 'Loja', tipo: 'evolution', config: { servidor: 'ftp://x', instancia: 'loja-centro', token: 'token-da-instancia-fora' } })).status, 400);
+  const antes = (await ok('GET', '/crm/canais')).length;
+
+  const c = await ok('POST', '/crm/canais', { nome: 'Loja Centro', tipo: 'evolution', config: { servidor: `${fora}/`, instancia: 'loja-centro', token: 'token-da-instancia-fora' } });
+  assert.equal((await ok('GET', '/crm/canais')).length, antes + 1, 'as tentativas recusadas não deixaram número pela metade');
+  assert.equal(c.conectado, true, 'a instância já estava conectada: não precisa de QR');
+  assert.equal(c.config.servidor, fora);
+  assert.equal(c.config.token, '••••fora', 'o token não volta para a tela');
+  // O webhook da instância foi apontado para o endereço público do sistema.
+  const hookUrl = (await ver()).webhook.url;
+  assert.ok(hookUrl.includes(`/api/webhooks/whatsapp/${c.id}/`));
+  assert.equal((await ver()).webhook.enabled, true);
+  const sit = await ok('GET', `/crm/canais/${c.id}/situacao`);
+  assert.deepEqual([sit.conectado, sit.numero], [true, '5527977776666']);
+  // Recebe e responde por essa instância, com o token dela.
+  const hook = new URL(hookUrl).pathname;
+  await fetch(API.replace(/\/api$/, '') + hook, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ event: 'messages.upsert', instance: 'loja-centro', data: { key: { remoteJid: '5527955554444@s.whatsapp.net', fromMe: false, id: 'FORA1' }, pushName: 'Cliente Da Loja', message: { conversation: 'Vocês abrem sábado?' }, messageTimestamp: Math.floor(Date.now() / 1000) } }) });
+  const cv = (await ok('GET', '/crm/conversas?aba=fila')).find((x) => x.telefone === '5527955554444');
+  assert.equal(cv?.canal, 'Loja Centro');
+  await ok('POST', `/crm/conversas/${cv.id}/pegar`);
+  await ok('POST', `/crm/conversas/${cv.id}/mensagens`, { texto: 'Abrimos sim, das 9h às 13h.' });
+  const envio = (await recebidos()).filter((r) => r.caminho === '/evofora/message/sendText/loja-centro').pop();
+  assert.equal(envio.headers.apikey, 'token-da-instancia-fora');
+  // Editar sem mexer no token mantém o token; trocar por um errado é recusado e nada muda.
+  await ok('PATCH', `/crm/canais/${c.id}`, { nome: 'Loja Centro 2', config: { servidor: fora, instancia: 'loja-centro', token: '••••fora' } });
+  assert.equal((await chamar('PATCH', `/crm/canais/${c.id}`, { config: { servidor: fora, instancia: 'loja-centro', token: 'outro-errado' } })).status, 400);
+  assert.equal((await ok('GET', `/crm/canais/${c.id}/situacao`)).conectado, true);
+  // Excluir: o sistema para de receber, mas a instância continua existindo no servidor dela.
+  await ok('DELETE', `/crm/canais/${c.id}`);
+  const depois = await ver();
+  assert.ok(depois, 'a instância não foi apagada do servidor de fora');
+  assert.equal(depois.webhook.enabled, false);
+  assert.equal(depois.estado, 'open', 'nem desconectada');
+});
+
 test('RH e ponto: cadastro, login pelo CPF, batida com foto e GPS, ajustes, espelho, ciência, documentos, AFD/AEJ e contabilidade', async () => {
   const gestor = token;
   const hoje = new Date(Date.now() - 3 * 3600e3).toISOString().slice(0, 10);

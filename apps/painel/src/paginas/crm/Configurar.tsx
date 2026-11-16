@@ -30,7 +30,7 @@ export function Configurar() {
 function Numeros() {
   const canais = usarCanais();
   const opcoes = useQuery({ queryKey: ['crm', 'canais-opcoes'], queryFn: () => api<{ qrcodeProprio: boolean }>('/crm/canais-opcoes'), staleTime: 60_000 });
-  const [novo, setNovo] = useState<TipoCanal | null>(null);
+  const [novo, setNovo] = useState<TipoCanal | 'evolution-token' | null>(null);
   const [editando, setEditando] = useState<string | null>(null);
   const [recemCriado, setRecemCriado] = useState<string | null>(null);
   const admin = pode('configuracoes', 'editar');
@@ -40,15 +40,16 @@ function Numeros() {
     <div className="coluna" style={{ gap: 10 }}>
       {admin && !novo && (
         <div className="flex" style={{ gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-          <button className="botao" disabled={!qrProprio} title={qrProprio ? undefined : 'O servidor de WhatsApp por QR code ainda não foi instalado nesta VPS'} onClick={() => setNovo('evolution')}>+ Conectar WhatsApp por QR code (Evolution API)</button>
+          <button className="botao" disabled={!qrProprio} title={qrProprio ? undefined : 'O servidor de WhatsApp por QR code ainda não foi instalado nesta VPS'} onClick={() => setNovo('evolution')}>+ Evolution API por QR code</button>
+          <button className="botao" title="Para uma instância que já existe no seu servidor Evolution: endereço, nome da instância e token" onClick={() => setNovo('evolution-token')}>+ Evolution API com token</button>
           <button className="botao claro" onClick={() => setNovo('oficial')}>+ WhatsApp oficial (Meta)</button>
           <button className="botao claro" title="Só para quem já tem conta paga na Z-API. O normal é usar o QR code (Evolution API)." onClick={() => setNovo('qrcode')}>+ Z-API (só se já tiver conta)</button>
-          {opcoes.data && !qrProprio && <span className="muted" style={{ fontSize: 13 }}>O QR code (Evolution API) fica disponível depois de rodar o instalador da VPS de novo.</span>}
+          {opcoes.data && !qrProprio && <span className="muted" style={{ fontSize: 13 }}>A Evolution por QR code fica disponível depois de rodar o instalador da VPS de novo. Com token já funciona.</span>}
         </div>
       )}
-      {novo && <FormCanal tipo={novo} fechar={(id) => { setNovo(null); if (id) setRecemCriado(id); }} />}
+      {novo && <FormCanal tipo={novo === 'evolution-token' ? 'evolution' : novo} porToken={novo === 'evolution-token'} fechar={(id) => { setNovo(null); if (id) setRecemCriado(id); }} />}
       {canais.error && <Erro erro={canais.error} />}
-      {!canais.data?.length && !novo && <div className="cartao vazio">Nenhum número ligado. O QR code (Evolution API, já instalada no servidor do sistema) liga qualquer celular (da empresa ou de uma atendente) só lendo o código na tela. O oficial serve para disparos em massa com templates aprovados pela Meta.</div>}
+      {!canais.data?.length && !novo && <div className="cartao vazio">Nenhum número ligado. A Evolution API liga qualquer celular (da empresa ou de uma atendente) de dois jeitos: por QR code, no servidor do próprio sistema, ou com o token de uma instância que você já tem. O oficial serve para disparos em massa com templates aprovados pela Meta.</div>}
       {canais.data?.map((c) => (editando === c.id ? <FormCanal key={c.id} tipo={c.tipo} canal={c} fechar={() => setEditando(null)} /> : <CartaoCanal key={c.id} canal={c} destaque={recemCriado === c.id} editar={() => setEditando(c.id)} />))}
     </div>
   );
@@ -71,7 +72,7 @@ function CartaoCanal({ canal: c, editar, destaque }: { canal: Canal; editar: () 
     <div className="cartao" style={destaque ? { borderColor: 'var(--dourado)', boxShadow: '0 0 0 3px rgba(137,111,75,.15)' } : undefined}>
       <div className="flex entre" style={{ gap: 10, flexWrap: 'wrap' }}>
         <div>
-          <b>{c.nome}</b> <span className="tag">{NOME_TIPO_CANAL[c.tipo] ?? c.tipo}</span> {!c.ativo && <span className="etiqueta erro">Desativado</span>}
+          <b>{c.nome}</b> <span className="tag">{c.tipo === 'evolution' && c.config?.servidor ? 'Evolution (token)' : (NOME_TIPO_CANAL[c.tipo] ?? c.tipo)}</span> {!c.ativo && <span className="etiqueta erro">Desativado</span>}
           <div className="muted" style={{ fontSize: 13 }}>
             <span className={`ponto ${sit.data?.conectado ? 'on' : ''}`} />
             {sit.isLoading ? 'Verificando…' : sit.data?.detalhe}
@@ -112,7 +113,9 @@ function CartaoCanal({ canal: c, editar, destaque }: { canal: Canal; editar: () 
   );
 }
 
-function FormCanal({ tipo, canal, fechar }: { tipo: TipoCanal; canal?: Canal; fechar: (criadoId?: string) => void }) {
+function FormCanal({ tipo, canal, fechar, porToken: novoPorToken }: { tipo: TipoCanal; canal?: Canal; fechar: (criadoId?: string) => void; porToken?: boolean }) {
+  // Evolution ligada pelo token de uma instância que já existe (em vez do QR code criado pelo sistema).
+  const porToken = tipo === 'evolution' && (canal ? !!canal.config?.servidor : !!novoPorToken);
   const qc = useQueryClient();
   const atendentes = usarAtendentes();
   const funis = usarFunis();
@@ -134,8 +137,9 @@ function FormCanal({ tipo, canal, fechar }: { tipo: TipoCanal; canal?: Canal; fe
   );
   return (
     <div className="cartao form">
-      <div className="secao" style={{ gridColumn: '1 / -1', marginTop: 0 }}>{canal ? `Editar ${canal.nome}` : tipo === 'oficial' ? 'Novo WhatsApp oficial (API Cloud da Meta)' : tipo === 'evolution' ? 'Conectar WhatsApp por QR code (Evolution API)' : 'Novo WhatsApp pela Z-API (ID da instância e token)'}</div>
-      {tipo === 'evolution' && !canal && <p className="muted l4" style={{ margin: 0 }}>Só dê um nome ao número e salve. O QR code aparece na hora: é ler com o celular e pronto, sem digitar nenhum código.</p>}
+      <div className="secao" style={{ gridColumn: '1 / -1', marginTop: 0 }}>{canal ? `Editar ${canal.nome}` : tipo === 'oficial' ? 'Novo WhatsApp oficial (API Cloud da Meta)' : porToken ? 'Evolution API com token (instância que já existe)' : tipo === 'evolution' ? 'Evolution API por QR code' : 'Novo WhatsApp pela Z-API (ID da instância e token)'}</div>
+      {porToken && !canal && <p className="muted l4" style={{ margin: 0 }}>Para um número que já está numa instância do seu servidor Evolution. O sistema confere os dados, aponta o webhook da instância para cá e não cria nem apaga nada no seu servidor. Se a instância estiver desconectada, o QR code aparece aqui.</p>}
+      {tipo === 'evolution' && !porToken && !canal && <p className="muted l4" style={{ margin: 0 }}>Só dê um nome ao número e salve. O QR code aparece na hora: é ler com o celular e pronto, sem digitar nenhum código.</p>}
       <Campo rotulo="Nome do número" className="l2"><input value={f.nome} onChange={(e) => setF({ ...f, nome: e.target.value })} placeholder={tipo === 'oficial' ? 'Matriz oficial' : 'Celular da Ana'} /></Campo>
       {tipo === 'oficial' ? (
         <>
@@ -143,6 +147,12 @@ function FormCanal({ tipo, canal, fechar }: { tipo: TipoCanal; canal?: Canal; fe
           {cfg('wabaId', 'WhatsApp Business Account ID (WABA)')}
           {cfg('token', 'Token de acesso permanente', 'Usuário do sistema no Gerenciador de Negócios', true)}
           {cfg('appSecret', 'App Secret (recomendado)', 'Confere que o aviso veio mesmo da Meta', true)}
+        </>
+      ) : porToken ? (
+        <>
+          {cfg('servidor', 'Endereço do servidor Evolution', 'Ex.: https://evolution.suaempresa.com.br')}
+          {cfg('instancia', 'Nome da instância', 'Igual ao do painel da Evolution (maiúsculas e minúsculas contam)')}
+          {cfg('token', 'Token da instância (API key)', 'No painel da Evolution, dentro da instância', true)}
         </>
       ) : tipo === 'evolution' ? null : (
         <>
@@ -168,7 +178,7 @@ function FormCanal({ tipo, canal, fechar }: { tipo: TipoCanal; canal?: Canal; fe
       {canal && <label className="check l4"><input type="checkbox" checked={f.ativo} onChange={(e) => setF({ ...f, ativo: e.target.checked })} /> Número ativo</label>}
       {salvar.error && <div className="l4"><Erro erro={salvar.error} /></div>}
       <div className="flex l4">
-        <button className="botao" disabled={!f.nome.trim() || salvar.isPending} onClick={() => salvar.mutate()}>{salvar.isPending ? 'Preparando…' : tipo === 'evolution' && !canal ? 'Salvar e mostrar o QR code' : 'Salvar'}</button>
+        <button className="botao" disabled={!f.nome.trim() || salvar.isPending || (porToken && !canal && !(f.config.servidor?.trim() && f.config.instancia?.trim() && f.config.token?.trim()))} onClick={() => salvar.mutate()}>{salvar.isPending ? 'Preparando…' : porToken ? (canal ? 'Salvar' : 'Conferir e conectar') : tipo === 'evolution' && !canal ? 'Salvar e mostrar o QR code' : 'Salvar'}</button>
         <button className="botao claro" onClick={() => fechar()}>Voltar</button>
       </div>
     </div>

@@ -196,8 +196,17 @@ http
     }
     if (url.pathname === '/google/__eventos') return responder(res, 200, [...googleEventos.values()]);
 
+    // Servidor Evolution de fora (ligado pelo token da instância): mesma API, outra chave, instância "loja-centro" já existente.
+    let evoFora = false;
+    if (url.pathname.startsWith('/evofora/')) {
+      if (!evo.has('loja-centro')) evo.set('loja-centro', { estado: 'open', webhook: null });
+      if (req.headers.apikey !== 'token-da-instancia-fora') return responder(res, 401, { status: 401, error: 'Unauthorized', response: { message: 'Unauthorized' } });
+      url.pathname = url.pathname.replace('/evofora/', '/evo/');
+      evoFora = true;
+    }
+    if (url.pathname === '/__evo/ver') return responder(res, 200, evo.get(url.searchParams.get('i')) ?? null);
     if (url.pathname.startsWith('/evo/')) {
-      if (req.headers.apikey !== 'chave-evo-teste') return responder(res, 401, { status: 401, error: 'Unauthorized', response: { message: 'Unauthorized' } });
+      if (!evoFora && req.headers.apikey !== 'chave-evo-teste') return responder(res, 401, { status: 401, error: 'Unauthorized', response: { message: 'Unauthorized' } });
       const partes = url.pathname.slice(5).split('/').map(decodeURIComponent);
       const qr = { base64: `data:image/png;base64,iVBORw0KGgoQR${++wa.n}`, code: `2@qr${wa.n}`, count: 1 };
       if (partes[0] === 'instance' && partes[1] === 'create') {

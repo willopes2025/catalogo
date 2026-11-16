@@ -9,7 +9,7 @@ import { CrmService } from './crm.service';
 import { PEDIU_SAIR, preencherTexto, primeiroNome, variaveisDosCampos } from './telefone';
 import { ConexaoOficial } from './whatsapp/oficial';
 import { ConexaoZapi } from './whatsapp/zapi';
-import { ConexaoEvolution, apagarInstancia, criarInstancia, evolutionDisponivel, nomeInstancia } from './whatsapp/evolution';
+import { ConexaoEvolution, apagarInstancia, criarInstancia, evolutionDisponivel, nomeInstancia, validarEnderecoEvolution } from './whatsapp/evolution';
 import { ErroCanal, type Conexao, type MensagemEntrada, type MensagemSaida, type StatusEntrada } from './whatsapp/tipos';
 
 type Canal = typeof crmCanais.$inferSelect;
@@ -100,16 +100,45 @@ export class CanaisService {
   validarConfig(tipo: string, cfg: Record<string, string>) {
     if (tipo === 'oficial' && !(cfg.phoneNumberId && cfg.wabaId && cfg.token)) throw new BadRequestException('Preencha o Phone Number ID, o WABA ID e o token da Meta.');
     if (tipo === 'qrcode' && !(cfg.instancia && cfg.token)) throw new BadRequestException('Preencha a instância e o token da Z-API.');
+    if (tipo === 'evolution' && this.evolutionPorToken(cfg)) {
+      // Instância que já existe em outro servidor Evolution: endereço, nome e token.
+      if (!(cfg.servidor && cfg.instancia && cfg.token)) throw new BadRequestException('Preencha o endereço do servidor Evolution, o nome da instância e o token dela.');
+      try {
+        validarEnderecoEvolution(cfg.servidor);
+      } catch (e) {
+        throw new BadRequestException((e as Error).message);
+      }
+      return;
+    }
     if (tipo === 'evolution' && !evolutionDisponivel()) throw new BadRequestException('O servidor de WhatsApp por QR code não está instalado nesta VPS. Rode o instalador de novo para ativá-lo.');
+  }
+
+  /** Evolution ligada pelo token de uma instância que já existe (em vez do QR code criado pelo sistema). */
+  private evolutionPorToken(cfg: Record<string, unknown>) {
+    return !!(cfg.servidor || cfg.token);
   }
 
   async criar(d: { nome: string; tipo: 'oficial' | 'qrcode' | 'evolution'; config: Record<string, string>; usuarioId?: string | null; atendentes?: string[]; funilEntradaId?: string | null }) {
     this.validarConfig(d.tipo, d.config);
     const [c] = await this.db
       .insert(crmCanais)
-      .values({ nome: d.nome, tipo: d.tipo, config: d.tipo === 'evolution' ? {} : this.cifrarConfig(d.config), tokenWebhook: randomBytes(18).toString('base64url'), usuarioId: d.usuarioId ?? null, atendentes: d.atendentes ?? [], funilEntradaId: d.funilEntradaId ?? null })
+      .values({ nome: d.nome, tipo: d.tipo, config: d.tipo === 'evolution' && !this.evolutionPorToken(d.config) ? {} : this.cifrarConfig(d.tipo === 'evolution' ? { servidor: validarEnderecoEvolution(d.config.servidor), instancia: d.config.instancia.trim(), token: d.config.token.trim() } : d.config), tokenWebhook: randomBytes(18).toString('base64url'), usuarioId: d.usuarioId ?? null, atendentes: d.atendentes ?? [], funilEntradaId: d.funilEntradaId ?? null })
       .returning();
     if (c.tipo === 'qrcode') await this.apontarWebhookZapi(c).catch((e) => this.log.warn(`Webhook da Z-API não configurado: ${(e as Error).message}`));
+    if (c.tipo === 'evolution' && this.evolutionPorToken(c.config)) {
+      // Confere endereço, instância e token antes de guardar, e aponta o webhook da instância para o sistema.
+      try {
+        const con = this.conexao(c) as ConexaoEvolution;
+        await con.testar();
+        await con.configurarWebhooks();
+        const s = await con.situacao();
+        if (s.numero) await this.db.update(crmCanais).set({ numero: s.numero }).where(eq(crmCanais.id, c.id));
+        return { ...this.publico(c), qrcode: s.conectado ? null : (s.qrcode ?? null), conectado: s.conectado };
+      } catch (e) {
+        await this.db.delete(crmCanais).where(eq(crmCanais.id, c.id));
+        throw new BadRequestException((e as Error).message);
+      }
+    }
     if (c.tipo === 'evolution') {
       // Nada para digitar: o sistema cria a instância no servidor próprio, com o webhook já apontado.
       const instancia = nomeInstancia(c.id);
@@ -130,6 +159,18 @@ export class CanaisService {
     if (atual.excluidoEm) throw new BadRequestException('Este número foi excluído. Para usar de novo, conecte como um número novo.');
     const config = d.config ? this.cifrarConfig({ ...Object.fromEntries(Object.entries(atual.config).filter(([k]) => !SECRETOS.includes(k))), ...d.config }, atual.config) : atual.config;
     if (d.config) this.validarConfig(atual.tipo, { ...this.abrirConfig({ ...atual, config }) });
+    const porToken = atual.tipo === 'evolution' && !!d.config && this.evolutionPorToken(config);
+    if (porToken) {
+      // Mudou endereço, instância ou token: só grava se a conexão nova funcionar.
+      config.servidor = validarEnderecoEvolution(config.servidor);
+      const con = this.conexao({ ...atual, config }) as ConexaoEvolution;
+      try {
+        await con.testar();
+        await con.configurarWebhooks();
+      } catch (e) {
+        throw new BadRequestException((e as Error).message);
+      }
+    }
     const [c] = await this.db.update(crmCanais).set({ ...d, config }).where(eq(crmCanais.id, id)).returning();
     return this.publico(c);
   }
@@ -137,6 +178,8 @@ export class CanaisService {
   conexao(c: Canal): Conexao {
     const cfg = this.abrirConfig(c);
     if (c.tipo === 'oficial') return new ConexaoOficial({ phoneNumberId: cfg.phoneNumberId, wabaId: cfg.wabaId, token: cfg.token, appSecret: cfg.appSecret || undefined });
+    // Instância de outro servidor Evolution: ele chega no sistema pela internet (endereço público do webhook).
+    if (c.tipo === 'evolution' && this.evolutionPorToken(cfg)) return new ConexaoEvolution(cfg.instancia, this.urlWebhook(c), { url: cfg.servidor, chave: cfg.token });
     if (c.tipo === 'evolution') return new ConexaoEvolution(cfg.instancia || nomeInstancia(c.id), this.urlWebhookInterno(c));
     return new ConexaoZapi({ instancia: cfg.instancia, token: cfg.token, clientToken: cfg.clientToken || undefined });
   }
@@ -162,7 +205,9 @@ export class CanaisService {
   async excluir(id: string) {
     const c = await this.obter(id);
     if (c.excluidoEm) return { ok: true, apagado: false };
-    if (c.tipo === 'evolution') await apagarInstancia(this.abrirConfig(c).instancia || nomeInstancia(c.id));
+    // Instância de outro servidor: o sistema só para de receber; ela continua existindo lá.
+    if (c.tipo === 'evolution' && this.evolutionPorToken(c.config)) await (this.conexao(c) as ConexaoEvolution).desligarWebhook().catch(() => undefined);
+    else if (c.tipo === 'evolution') await apagarInstancia(this.abrirConfig(c).instancia || nomeInstancia(c.id));
     else if (c.tipo === 'qrcode') await (this.conexao(c) as ConexaoZapi).desconectar().catch(() => undefined);
     const [uso] = await this.db.execute<{ conversas: number; disparos: number }>(sql`
       select (select count(*)::int from crm_conversas where canal_id = ${id}) as conversas, (select count(*)::int from crm_disparos where canal_id = ${id}) as disparos`).then((r) => r.rows);
