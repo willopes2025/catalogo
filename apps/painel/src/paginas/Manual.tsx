@@ -175,7 +175,9 @@ const SECOES: Secao[] = [
       { t: 'Áudio, fotos e arquivos', d: '"🎤 Áudio" grava pelo microfone. "📎 Arquivo" anexa; também dá para colar uma imagem (Ctrl+V) ou arrastar o arquivo para a conversa. O que você escrever vai como legenda.' },
       { t: 'Apagar para todos', d: 'Na 🗑 de uma mensagem enviada por vocês (até 2 dias depois do envio). No número oficial da Meta isso não existe.' },
       { t: 'Emojis e formulários', d: '😀 abre os emojis. "📋 Formulário" coloca na mensagem o link de um formulário do sistema.' },
-      { t: 'Menu ⋮ da conversa', d: 'Fixar no topo da lista, marcar como não lida, copiar o telefone e exportar a conversa em texto. O lápis ao lado do nome muda o nome do contato.' },
+      { t: 'Menu ⋮ da conversa', d: 'Fixar no topo da lista, marcar como não lida, copiar o telefone e exportar a conversa em texto. O lápis ao lado do nome muda o nome do contato. A gestão também pode unificar com outro contato (a mesma pessoa com dois números) e excluir a conversa.' },
+      { t: 'Notas e tarefas', d: 'As abas "Notas" e "Tarefas" em cima da conversa são as mesmas do card da pessoa. Se ela ainda não tem card, a própria aba cria.' },
+      { t: 'Filtros e seleção', d: '"Filtros" mostra só as conversas de uma etiqueta, de um responsável ou de um período. "Selecionar" marca várias conversas para resolver, transferir, devolver para a fila ou marcar como lidas de uma vez.' },
     ],
     dicas: [
       'Mensagens não chegam? Em CRM › Configurar › Números de WhatsApp, cada número mostra o "último aviso do WhatsApp para o sistema". Se estiver vazio ou antigo, clique em "Reapontar webhook".',

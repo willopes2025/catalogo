@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, pode } from '../../api';
 import { Erro } from '../../componentes/ui';
-import { ha, ligar, meuId, telefoneBonito, useMidia, useRelogio, usarAtendentes, type Template } from './comum';
+import { ha, ligar, meuId, telefoneBonito, useMidia, useRelogio, usarAtendentes, usarFunis, type Template } from './comum';
 
 interface Mensagem { id: string; direcao: 'entrada' | 'saida' | 'interna'; tipo: string; texto: string | null; midia: string | null; midiaNome: string | null; templateNome: string | null; status: string; erro: string | null; autor: string | null; automatica: boolean; criadoEm: string; reacoes: { de: 'contato' | 'equipe'; emoji: string }[]; apagada: boolean; noWhatsApp: boolean; citada: { id: string; direcao: string; tipo: string; texto: string | null } | null }
 interface Dados {
@@ -35,6 +35,82 @@ function Midia({ m }: { m: Mensagem }) {
   return <a href={url} download={m.midiaNome ?? 'arquivo'}>📎 {m.midiaNome ?? 'Abrir arquivo'}</a>;
 }
 
+/** Abas "Notas" e "Tarefas" da conversa: as mesmas do card, sem sair do chat. */
+function NotasTarefas({ modo, leadId, contato }: { modo: 'notas' | 'tarefas'; leadId: string | null; contato: { id: string; nome: string; telefone: string } }) {
+  const qc = useQueryClient();
+  const editar = pode('crm', 'editar');
+  const funis = usarFunis();
+  const lead = useQuery({ queryKey: ['crm', 'lead', leadId], queryFn: () => api<{ eventos: { id: string; tipo: string; texto: string; autor: string | null; criadoEm: string }[]; tarefas: { id: string; titulo: string; venceEm: string; feitaEm: string | null; responsavel: string | null }[] }>(`/crm/leads/${leadId}`), enabled: !!leadId });
+  const recarregar = () => qc.invalidateQueries({ queryKey: ['crm'] });
+  const [funilId, setFunilId] = useState('');
+  const criarCard = useMutation({ mutationFn: () => api('/crm/leads', { corpo: { funilId: funilId || funis.data?.[0]?.id, nome: contato.nome.length >= 2 ? contato.nome : contato.telefone, telefone: contato.telefone } }), onSuccess: recarregar });
+  const [nota, setNota] = useState('');
+  const anotar = useMutation({ mutationFn: () => api(`/crm/leads/${leadId}/notas`, { corpo: { texto: nota } }), onSuccess: () => { setNota(''); recarregar(); } });
+  const amanha = () => { const d = new Date(Date.now() + 86400_000); d.setHours(9, 0, 0, 0); return new Date(d.getTime() - d.getTimezoneOffset() * 60_000).toISOString().slice(0, 16); };
+  const [tarefa, setTarefa] = useState({ titulo: '', venceEm: amanha() });
+  const criarTarefa = useMutation({ mutationFn: () => api(`/crm/leads/${leadId}/tarefas`, { corpo: { titulo: tarefa.titulo, venceEm: new Date(tarefa.venceEm).toISOString() } }), onSuccess: () => { setTarefa({ titulo: '', venceEm: amanha() }); recarregar(); } });
+  const concluir = useMutation({ mutationFn: (v: { id: string; feita: boolean }) => api(`/crm/tarefas/${v.id}`, { metodo: 'PATCH', corpo: { feita: v.feita } }), onSuccess: recarregar });
+  const campo = { padding: '7px 9px', border: '1px solid var(--linha)', borderRadius: 8, font: 'inherit', background: '#fff', minWidth: 0 } as const;
+
+  if (!leadId) {
+    return (
+      <div className="chat-painel">
+        <p style={{ marginTop: 0 }}>{modo === 'notas' ? 'As notas' : 'As tarefas'} ficam no card da pessoa, e <b>{contato.nome}</b> ainda não tem card em nenhum funil.</p>
+        {pode('crm', 'criar') ? (
+          <div className="flex" style={{ gap: 6, flexWrap: 'wrap' }}>
+            <select aria-label="Funil" value={funilId || funis.data?.[0]?.id || ''} onChange={(e) => setFunilId(e.target.value)} style={campo}>{funis.data?.map((f) => <option key={f.id} value={f.id}>{f.nome}</option>)}</select>
+            <button className="botao pequeno" disabled={criarCard.isPending || !funis.data?.length} onClick={() => criarCard.mutate()}>Criar card</button>
+          </div>
+        ) : <span className="muted">Peça a quem pode criar cards.</span>}
+        {criarCard.error && <Erro erro={criarCard.error} />}
+      </div>
+    );
+  }
+  if (lead.isLoading) return <div className="chat-painel muted">Carregando…</div>;
+  if (lead.error) return <div className="chat-painel"><Erro erro={lead.error} /></div>;
+  const notas = (lead.data?.eventos ?? []).filter((e) => e.tipo === 'nota');
+  const tarefas = lead.data?.tarefas ?? [];
+  const quando = (d: string) => new Date(d).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+  return (
+    <div className="chat-painel">
+      {modo === 'notas' ? (
+        <>
+          {editar && (
+            <form className="coluna" style={{ gap: 6 }} onSubmit={(e) => { e.preventDefault(); if (nota.trim()) anotar.mutate(); }}>
+              <textarea aria-label="Nova nota" rows={3} placeholder="Anote algo sobre esta pessoa (o cliente não vê)." value={nota} maxLength={4000} onChange={(e) => setNota(e.target.value)} style={{ ...campo, resize: 'vertical' }} />
+              <div><button className="botao pequeno" disabled={!nota.trim() || anotar.isPending}>Salvar nota</button></div>
+              {anotar.error && <Erro erro={anotar.error} />}
+            </form>
+          )}
+          {!notas.length && <p className="muted">Nenhuma nota ainda.</p>}
+          {notas.map((n) => <div key={n.id} className="nota-chat"><div style={{ whiteSpace: 'pre-wrap' }}>{n.texto}</div><div className="muted" style={{ fontSize: 12 }}>{n.autor ?? 'Sistema'} · {quando(n.criadoEm)}</div></div>)}
+        </>
+      ) : (
+        <>
+          {editar && (
+            <form className="flex" style={{ gap: 6, flexWrap: 'wrap', alignItems: 'flex-end' }} onSubmit={(e) => { e.preventDefault(); if (tarefa.titulo.trim().length >= 2 && tarefa.venceEm) criarTarefa.mutate(); }}>
+              <input aria-label="Nova tarefa" placeholder="O que fazer? Ex.: ligar para confirmar" value={tarefa.titulo} maxLength={200} onChange={(e) => setTarefa({ ...tarefa, titulo: e.target.value })} style={{ ...campo, flex: 1, minWidth: 180 }} />
+              <input aria-label="Para quando" type="datetime-local" value={tarefa.venceEm} onChange={(e) => setTarefa({ ...tarefa, venceEm: e.target.value })} style={campo} />
+              <button className="botao pequeno" disabled={tarefa.titulo.trim().length < 2 || !tarefa.venceEm || criarTarefa.isPending}>Criar tarefa</button>
+            </form>
+          )}
+          {(criarTarefa.error || concluir.error) && <Erro erro={criarTarefa.error ?? concluir.error} />}
+          {!tarefas.length && <p className="muted">Nenhuma tarefa ainda.</p>}
+          {tarefas.map((t) => (
+            <label key={t.id} className="nota-chat check" style={{ alignItems: 'flex-start' }}>
+              <input type="checkbox" checked={!!t.feitaEm} disabled={!editar || concluir.isPending} onChange={(e) => concluir.mutate({ id: t.id, feita: e.target.checked })} />
+              <span style={{ flex: 1 }}>
+                <span style={{ textDecoration: t.feitaEm ? 'line-through' : undefined }}>{t.titulo}</span>
+                <span className="muted" style={{ display: 'block', fontSize: 12, color: !t.feitaEm && new Date(t.venceEm) < new Date() ? 'var(--erro)' : undefined }}>{t.feitaEm ? `feita em ${quando(t.feitaEm)}` : `${new Date(t.venceEm) < new Date() ? 'venceu em' : 'para'} ${quando(t.venceEm)}`}{t.responsavel ? ` · ${t.responsavel}` : ''}</span>
+              </span>
+            </label>
+          ))}
+        </>
+      )}
+    </div>
+  );
+}
+
 /** Baixa a conversa carregada como texto, no formato de exportação do WhatsApp. */
 function exportar(contato: { nome: string; telefone: string }, mensagens: Mensagem[]) {
   const linhas = mensagens.map((m) => {
@@ -51,7 +127,7 @@ function exportar(contato: { nome: string; telefone: string }, mensagens: Mensag
 }
 
 /** Chat de uma conversa: fila, atendimento, mensagens, conversa interna, templates e respostas rápidas. */
-export function Chat({ conversaId, leadId, aoMudar }: { conversaId: string; leadId?: string | null; aoMudar?: () => void }) {
+export function Chat({ conversaId, leadId, aoMudar, abas, aoSair }: { conversaId: string; leadId?: string | null; aoMudar?: () => void; /** Mostra as abas Notas e Tarefas (caixa de entrada). */ abas?: boolean; /** A conversa deixou de existir (excluída). */ aoSair?: () => void }) {
   const qc = useQueryClient();
   useRelogio(30);
   const eu = meuId();
@@ -67,6 +143,10 @@ export function Chat({ conversaId, leadId, aoMudar }: { conversaId: string; lead
   const [verTemplates, setVerTemplates] = useState(false);
   const [transferir, setTransferir] = useState(false);
   // Balão aberto: qual mensagem está com o seletor de reação; qual painel do rodapé (emojis, formulários); menu "⋮" do topo.
+  const [aba, setAba] = useState<'chat' | 'notas' | 'tarefas'>('chat');
+  const [unificando, setUnificando] = useState(false);
+  const [buscaUnir, setBuscaUnir] = useState('');
+  const outras = useQuery({ queryKey: ['crm', 'conversas', 'unir', buscaUnir], queryFn: () => api<{ id: string; contato: string; telefone: string; canal: string; contatoId: string }[]>(`/crm/conversas?aba=todas&busca=${encodeURIComponent(buscaUnir.trim())}`), enabled: unificando && buscaUnir.trim().length >= 3 });
   const [reagindo, setReagindo] = useState<string | null>(null);
   const [painel, setPainel] = useState<'emoji' | 'form' | null>(null);
   const [menu, setMenu] = useState(false);
@@ -120,6 +200,8 @@ export function Chat({ conversaId, leadId, aoMudar }: { conversaId: string; lead
   });
   const reagir = useMutation({ mutationFn: (v: { id: string; emoji: string }) => api(`/crm/conversas/${conversaId}/mensagens/${v.id}/reagir`, { corpo: { emoji: v.emoji } }), onSuccess: atualizar, onSettled: () => setReagindo(null) });
   const apagar = useMutation({ mutationFn: (id: string) => api(`/crm/conversas/${conversaId}/mensagens/${id}/apagar`, { corpo: {} }), onSuccess: atualizar });
+  const unificar = useMutation({ mutationFn: (comConversaId: string) => api<{ juntadas: number; cards: number }>(`/crm/conversas/${conversaId}/unificar`, { corpo: { comConversaId } }), onSuccess: () => { setUnificando(false); setBuscaUnir(''); atualizar(); } });
+  const excluirConversa = useMutation({ mutationFn: () => api(`/crm/conversas/${conversaId}`, { metodo: 'DELETE' }), onSuccess: () => { qc.invalidateQueries({ queryKey: ['crm', 'conversas'] }); qc.invalidateQueries({ queryKey: ['crm', 'contadores'] }); aoSair?.(); } });
   const apagarTemplate = useMutation({ mutationFn: (id: string) => api(`/crm/templates/${id}`, { metodo: 'DELETE' }), onSuccess: () => qc.invalidateQueries({ queryKey: ['crm', 'templates'] }) });
   const renomear = useMutation({ mutationFn: (v: { id: string; nome: string }) => api(`/crm/contatos/${v.id}`, { metodo: 'PATCH', corpo: { nome: v.nome } }), onSuccess: () => { setNomeNovo(null); atualizar(); } });
 
@@ -256,6 +338,8 @@ export function Chat({ conversaId, leadId, aoMudar }: { conversaId: string; lead
                 {editar && <button role="menuitem" onClick={() => acao.mutate({ rota: 'nao-lida' })}>Marcar como não lida</button>}
                 <button role="menuitem" onClick={() => void navigator.clipboard?.writeText(contato.telefone)}>Copiar o telefone</button>
                 <button role="menuitem" onClick={() => exportar(contato, mensagens)}>Exportar a conversa (.txt)</button>
+                {gestor && <button role="menuitem" onClick={() => setUnificando(true)}>Unificar com outro contato</button>}
+                {gestor && aoSair && <button role="menuitem" style={{ color: 'var(--erro)' }} onClick={() => window.confirm(`Excluir a conversa com ${contato.nome}? As mensagens são apagadas do sistema e não voltam. O contato e os cards continuam.`) && excluirConversa.mutate()}>Excluir a conversa</button>}
               </div>
             )}
           </div>
@@ -270,7 +354,33 @@ export function Chat({ conversaId, leadId, aoMudar }: { conversaId: string; lead
           </div>
         </div>
       )}
-      {c.status === 'fila' && (
+      {unificando && (
+        <div className="chat-faixa" style={{ background: 'var(--creme-2)', color: 'var(--tinta)', flexDirection: 'column', alignItems: 'stretch' }}>
+          <div className="flex entre">
+            <b>Unificar: qual outra conversa é desta mesma pessoa?</b>
+            <button className="icone-chat" aria-label="Fechar" onClick={() => setUnificando(false)}>✕</button>
+          </div>
+          <span style={{ fontSize: 13 }}>As mensagens e os cards da outra conversa passam para {contato.nome}, e o contato repetido some. Não dá para desfazer.</span>
+          <input autoFocus aria-label="Buscar a outra conversa" placeholder="Nome ou telefone (3 letras ou mais)" value={buscaUnir} onChange={(e) => setBuscaUnir(e.target.value)} style={{ padding: '6px 8px', border: '1px solid var(--linha)', borderRadius: 8, font: 'inherit' }} />
+          <div className="sugestoes" style={{ maxHeight: 150 }}>
+            {outras.data?.filter((o) => o.contatoId !== contato.id).map((o) => (
+              <button key={o.id} disabled={unificar.isPending} onClick={() => window.confirm(`Unificar ${o.contato} (${telefoneBonito(o.telefone)}) com ${contato.nome}? Não dá para desfazer.`) && unificar.mutate(o.id)}>
+                <b>{o.contato}</b> · {telefoneBonito(o.telefone)} <span className="muted">· {o.canal}</span>
+              </button>
+            ))}
+            {outras.data && !outras.data.filter((o) => o.contatoId !== contato.id).length && <div className="muted" style={{ padding: 8 }}>Nenhuma outra conversa com esse nome ou telefone.</div>}
+          </div>
+          {unificar.error && <Erro erro={unificar.error} />}
+        </div>
+      )}
+      {excluirConversa.error && <div style={{ padding: '6px 12px' }}><Erro erro={excluirConversa.error} /></div>}
+      {abas && (
+        <div className="chat-abas" role="tablist" aria-label="Conversa">
+          {([['chat', 'Chat'], ['notas', 'Notas'], ['tarefas', 'Tarefas']] as const).map(([k, nome]) => <button key={k} role="tab" aria-selected={aba === k} className={aba === k ? 'ativa' : ''} onClick={() => setAba(k)}>{nome}</button>)}
+        </div>
+      )}
+      {abas && aba !== 'chat' && <NotasTarefas modo={aba} leadId={leadId ?? null} contato={contato} />}
+      {c.status === 'fila' && aba === 'chat' && (
         <div className="chat-faixa fila">
           <span>⏳ Na fila de espera {c.filaDesde ? `há ${ha(c.filaDesde)}` : ''}{esperaMin > 15 ? ' — esperando bastante' : ''}.</span>
           {editar && <button className="botao pequeno" disabled={acao.isPending} onClick={() => acao.mutate({ rota: 'pegar' })}>Pegar conversa</button>}
@@ -287,6 +397,7 @@ export function Chat({ conversaId, leadId, aoMudar }: { conversaId: string; lead
 
       <div
         className="chat-msgs"
+        hidden={aba !== 'chat'}
         onDragOver={(e) => { if (editar && e.dataTransfer.types.includes('Files')) e.preventDefault(); }}
         onDrop={(e) => { const f = e.dataTransfer.files?.[0]; if (editar && f) { e.preventDefault(); escolher(f); } }}
       >
@@ -339,7 +450,7 @@ export function Chat({ conversaId, leadId, aoMudar }: { conversaId: string; lead
         <div ref={fim} />
       </div>
 
-      {editar && (
+      {editar && aba === 'chat' && (
         <div className={`composer ${interna ? 'interna' : ''}`}>
           {c.canalTipo === 'oficial' && !c.dentroDaJanela && !interna && <div className="aviso alerta" style={{ margin: 0, padding: '6px 10px', fontSize: 13 }}>Fora da janela de 24h: no número oficial, só templates aprovados até o contato responder.</div>}
           {sugestoes.length > 0 && <div className="sugestoes">{sugestoes.map((sg) => <button key={`${sg.etiqueta}-${sg.rotulo}`} onClick={() => usarSugestao(sg)}>{sg.etiqueta && <span className="tag" style={{ marginRight: 6 }}>{sg.etiqueta}</span>}{sg.rotulo}</button>)}</div>}

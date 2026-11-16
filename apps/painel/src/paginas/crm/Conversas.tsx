@@ -4,7 +4,7 @@ import { Link } from 'react-router-dom';
 import { api, pode } from '../../api';
 import { Carregando, Erro } from '../../componentes/ui';
 import { Chat } from './Chat';
-import { ha, iniciais, telefoneBonito, usarCampos, usarCanais, usarContadores, usarFunis, useRelogio, ValorCampo } from './comum';
+import { ha, iniciais, telefoneBonito, usarAtendentes, usarCampos, usarCanais, usarContadores, usarFunis, useRelogio, ValorCampo } from './comum';
 
 interface Conversa { id: string; status: string; naoLidas: number; fixada: boolean; ultimaMensagem: string | null; ultimaMensagemEm: string | null; filaDesde: string | null; atendente: string | null; canal: string; canalTipo: string; contatoId: string; contato: string; telefone: string; lead: { id: string; titulo: string; etapa: string; funil: string } | null }
 type Aba = 'fila' | 'minhas' | 'atendimento' | 'resolvidas';
@@ -34,7 +34,20 @@ export function Conversas({ inicial }: { inicial?: string | null }) {
       qc.invalidateQueries({ queryKey: ['crm', 'conversas'] });
     },
   });
-  const filtro = `aba=${aba}${canalId ? `&canalId=${canalId}` : ''}${busca.trim() ? `&busca=${encodeURIComponent(busca.trim())}` : ''}${soNaoLidas ? '&naoLidas=1' : ''}`;
+  // Filtros avançados: etiqueta, responsável (gestão) e período da última mensagem.
+  const [verFiltros, setVerFiltros] = useState(false);
+  const [fl, setFl] = useState({ etiqueta: '', atendenteId: '', de: '', ate: '' });
+  const filtrosAtivos = Object.values(fl).filter(Boolean).length;
+  const etiquetas = useQuery({ queryKey: ['crm', 'etiquetas'], queryFn: () => api<string[]>('/crm/etiquetas'), enabled: verFiltros, staleTime: 60_000 });
+  const atendentes = usarAtendentes();
+  // Seleção de várias conversas para agir de uma vez.
+  const [sel, setSel] = useState<string[] | null>(null);
+  const [paraQuem, setParaQuem] = useState('');
+  const lote = useMutation({
+    mutationFn: (v: { acao: string; usuarioId?: string }) => api<{ feitas: number; falhas: number; motivos: string[] }>('/crm/conversas/lote', { corpo: { ids: sel, ...v } }),
+    onSuccess: () => { setSel(null); qc.invalidateQueries({ queryKey: ['crm'] }); },
+  });
+  const filtro = `aba=${aba}${canalId ? `&canalId=${canalId}` : ''}${busca.trim() ? `&busca=${encodeURIComponent(busca.trim())}` : ''}${soNaoLidas ? '&naoLidas=1' : ''}${fl.etiqueta ? `&etiqueta=${encodeURIComponent(fl.etiqueta)}` : ''}${fl.atendenteId ? `&atendenteId=${fl.atendenteId}` : ''}${fl.de ? `&de=${fl.de}` : ''}${fl.ate ? `&ate=${fl.ate}` : ''}`;
   const q = useQuery({ queryKey: ['crm', 'conversas', filtro], queryFn: () => api<Conversa[]>(`/crm/conversas?${filtro}`), refetchInterval: 5000 });
   const atual = q.data?.find((c) => c.id === aberta);
 
@@ -77,6 +90,57 @@ export function Conversas({ inicial }: { inicial?: string | null }) {
         </div>
         <div style={{ display: 'flex', gap: 8, padding: '6px 8px', borderBottom: '1px solid var(--linha)', alignItems: 'center', justifyContent: 'space-between' }}>
           <label className="check" style={{ fontSize: 13 }}><input type="checkbox" checked={soNaoLidas} onChange={(e) => setSoNaoLidas(e.target.checked)} /> Só não lidas</label>
+          <span className="flex" style={{ gap: 6 }}>
+            <button className={`botao pequeno ${verFiltros || filtrosAtivos ? '' : 'claro'}`} aria-expanded={verFiltros} onClick={() => setVerFiltros((v) => !v)}>Filtros{filtrosAtivos ? ` (${filtrosAtivos})` : ''}</button>
+            {pode('crm', 'editar') && <button className={`botao pequeno ${sel ? '' : 'claro'}`} aria-pressed={!!sel} onClick={() => setSel(sel ? null : [])}>{sel ? 'Cancelar seleção' : 'Selecionar'}</button>}
+          </span>
+        </div>
+        {verFiltros && (
+          <div className="nova-conversa">
+            <select aria-label="Etiqueta" value={fl.etiqueta} onChange={(e) => setFl({ ...fl, etiqueta: e.target.value })}>
+              <option value="">Todas as etiquetas</option>
+              {etiquetas.data?.map((e) => <option key={e} value={e}>{e}</option>)}
+            </select>
+            {gestor && (
+              <select aria-label="Responsável" value={fl.atendenteId} onChange={(e) => setFl({ ...fl, atendenteId: e.target.value })}>
+                <option value="">Qualquer responsável</option>
+                {atendentes.data?.map((a) => <option key={a.id} value={a.id}>{a.nome}</option>)}
+              </select>
+            )}
+            <div className="flex" style={{ gap: 6 }}>
+              <label style={{ flex: 1, fontSize: 12 }} className="muted">Última mensagem de<input type="date" value={fl.de} max={fl.ate || undefined} onChange={(e) => setFl({ ...fl, de: e.target.value })} style={{ width: '100%' }} /></label>
+              <label style={{ flex: 1, fontSize: 12 }} className="muted">até<input type="date" value={fl.ate} min={fl.de || undefined} onChange={(e) => setFl({ ...fl, ate: e.target.value })} style={{ width: '100%' }} /></label>
+            </div>
+            {fl.atendenteId && (aba === 'fila' || aba === 'minhas') && <span className="muted" style={{ fontSize: 12 }}>O filtro por responsável vale nas abas "Em atendimento" e "Resolvidas".</span>}
+            {filtrosAtivos > 0 && <div><button className="botao claro pequeno" onClick={() => setFl({ etiqueta: '', atendenteId: '', de: '', ate: '' })}>Limpar filtros</button></div>}
+          </div>
+        )}
+        {sel && (
+          <div className="nova-conversa">
+            <b style={{ fontSize: 13 }}>{sel.length} selecionada(s)</b>
+            <div className="flex" style={{ gap: 6, flexWrap: 'wrap' }}>
+              <button className="botao claro pequeno" disabled={!q.data?.length} onClick={() => setSel(sel.length === q.data?.length ? [] : (q.data ?? []).map((c) => c.id))}>{sel.length && sel.length === q.data?.length ? 'Desmarcar todas' : 'Marcar todas'}</button>
+              <button className="botao claro pequeno" disabled={!sel.length || lote.isPending} onClick={() => lote.mutate({ acao: 'lida' })}>Marcar como lidas</button>
+              <button className="botao claro pequeno" disabled={!sel.length || lote.isPending} onClick={() => lote.mutate({ acao: 'nao_lida' })}>Não lidas</button>
+              <button className="botao claro pequeno" disabled={!sel.length || lote.isPending} onClick={() => window.confirm(`Resolver ${sel.length} conversa(s)?`) && lote.mutate({ acao: 'resolver' })}>✓ Resolver</button>
+              <button className="botao claro pequeno" disabled={!sel.length || lote.isPending} onClick={() => lote.mutate({ acao: 'fila' })}>Devolver para a fila</button>
+            </div>
+            <div className="flex" style={{ gap: 6 }}>
+              <select aria-label="Transferir para" value={paraQuem} onChange={(e) => setParaQuem(e.target.value)} style={{ flex: 1 }}>
+                <option value="">Transferir para…</option>
+                {atendentes.data?.map((a) => <option key={a.id} value={a.id}>{a.nome}</option>)}
+              </select>
+              <button className="botao pequeno" disabled={!sel.length || !paraQuem || lote.isPending} onClick={() => lote.mutate({ acao: 'transferir', usuarioId: paraQuem })}>Transferir</button>
+            </div>
+            {lote.error && <Erro erro={lote.error} />}
+          </div>
+        )}
+        {lote.data && !sel && (
+          <div className={`aviso ${lote.data.falhas ? 'alerta' : 'ok'}`} style={{ margin: 8, padding: '6px 10px', fontSize: 13 }}>
+            {lote.data.feitas} conversa(s) atualizada(s){lote.data.falhas ? `; ${lote.data.falhas} ficaram de fora: ${lote.data.motivos.join(' ')}` : ''}.
+          </div>
+        )}
+        <div style={{ display: 'flex', padding: '0 8px 6px', justifyContent: 'flex-end', borderBottom: '1px solid var(--linha)' }}>
           {pode('crm', 'editar') && !nova && <button className="botao pequeno" onClick={() => setNova({ canalId: canalId || canais.data?.find((c) => c.ativo !== false && c.tipo !== 'oficial')?.id || canais.data?.[0]?.id || '', telefone: '', nome: '' })}>+ Nova conversa</button>}
         </div>
         {nova && (
@@ -105,7 +169,8 @@ export function Conversas({ inicial }: { inicial?: string | null }) {
           {q.data?.map((c) => {
             const espera = aba === 'fila' && c.filaDesde ? (Date.now() - new Date(c.filaDesde).getTime()) / 60000 : 0;
             return (
-              <div key={c.id} className={`conv ${c.id === aberta ? 'ativa' : ''}`} onClick={() => setAberta(c.id)}>
+              <div key={c.id} className={`conv ${c.id === aberta ? 'ativa' : ''}`} onClick={() => (sel ? setSel(sel.includes(c.id) ? sel.filter((x) => x !== c.id) : [...sel, c.id]) : setAberta(c.id))}>
+                {sel && <input type="checkbox" aria-label={`Selecionar a conversa com ${c.contato}`} checked={sel.includes(c.id)} readOnly style={{ marginTop: 10, width: 'auto', flex: 'none' }} />}
                 <span className="avatar g">{iniciais(c.contato)}</span>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div className="nome">{c.fixada && <span title="Fixada no topo">📌 </span>}{c.contato}</div>
@@ -122,7 +187,7 @@ export function Conversas({ inicial }: { inicial?: string | null }) {
         </div>
       </div>
       <div style={{ minWidth: 0, minHeight: 0 }}>
-        {aberta ? <Chat key={aberta} conversaId={aberta} leadId={atual?.lead?.id} /> : <div className="chat"><div className="chat-msgs muted" style={{ justifyContent: 'center', alignItems: 'center' }}>Escolha uma conversa.</div></div>}
+        {aberta ? <Chat key={aberta} conversaId={aberta} leadId={atual?.lead?.id} abas aoSair={() => setAberta(null)} /> : <div className="chat"><div className="chat-msgs muted" style={{ justifyContent: 'center', alignItems: 'center' }}>Escolha uma conversa.</div></div>}
       </div>
       <div className="inbox-lado">{aberta && <Lado conversa={atual} />}</div>
     </div>
@@ -139,7 +204,7 @@ function Lado({ conversa }: { conversa?: Conversa }) {
   const salvarLead = useMutation({ mutationFn: (camposExtras: Record<string, string>) => api(`/crm/leads/${conversa!.lead!.id}`, { metodo: 'PATCH', corpo: { camposExtras } }), onSuccess: () => qc.invalidateQueries({ queryKey: ['crm', 'lead'] }) });
   const salvarContato = useMutation({ mutationFn: (camposExtras: Record<string, string>) => api(`/crm/contatos/${conversa!.contatoId}`, { metodo: 'PATCH', corpo: { camposExtras } }), onSuccess: () => qc.invalidateQueries({ queryKey: ['crm', 'lead'] }) });
   if (!conversa) return null;
-  if (!conversa.lead) return <div className="bloco"><h3>Sem card</h3><p className="muted">Este contato ainda não está em nenhum funil. Crie um card pelo quadro do funil.</p></div>;
+  if (!conversa.lead) return <div className="bloco"><h3>Sem card</h3><p className="muted">Este contato ainda não está em nenhum funil. Para criar o card, abra a aba "Notas" ou "Tarefas" da conversa.</p></div>;
   const l = lead.data;
   const funil = funis.data?.find((f) => f.id === l?.funilId);
   return (

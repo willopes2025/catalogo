@@ -171,3 +171,11 @@
 .sugestoes .linha-template { display: flex; align-items: stretch; }
 .sugestoes .linha-template > button:first-child { flex: 1; min-width: 0; }
 .sugestoes .linha-template .apagar { width: auto; padding: 7px 12px; color: var(--erro); }
+.chat-abas { display: flex; gap: 2px; padding: 4px 10px 0; background: var(--papel); border-bottom: 1px solid var(--linha); }
+.chat-abas button { border: 0; background: none; font: inherit; font-size: 13.5px; padding: 7px 12px; cursor: pointer; color: var(--suave); border-bottom: 3px solid transparent; }
+.chat-abas button.ativa { color: var(--tinta); font-weight: 700; border-bottom-color: var(--dourado); }
+.chat-abas button:focus-visible { outline: 2px solid var(--dourado); outline-offset: -2px; }
+.chat-painel { flex: 1; overflow-y: auto; padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; font-size: 14px; }
+.nota-chat { background: var(--papel); border: 1px solid var(--linha); border-radius: 8px; padding: 8px 10px; display: flex; flex-direction: column; gap: 2px; }
+label.nota-chat { flex-direction: row; gap: 8px; }
+.chat-msgs[hidden] { display: none; }

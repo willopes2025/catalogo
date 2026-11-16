@@ -1542,6 +1542,62 @@ test('chat do CRM: conversa avulsa, responder citando, reagir, apagar para todos
   await ok('DELETE', `/crm/canais/${c.id}`);
 });
 
+test('conversas: filtros (etiqueta, período, responsável), ações em lote, excluir e unificar contatos repetidos', async () => {
+  const c = await ok('POST', '/crm/canais', { nome: 'Lote e filtros', tipo: 'evolution' });
+  await fetch(`${SIM}/__evo/conectar?i=${encodeURIComponent(c.config.instancia)}`);
+  const hook = (await recebidos()).filter((r) => r.caminho === '/evo/instance/create').pop().corpo.webhook.url.replace('http://localhost:3100', '');
+  const chegar = (tel, id, texto) => fetch(API.replace(/\/api$/, '') + hook, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ event: 'messages.upsert', instance: c.config.instancia, data: { key: { remoteJid: `${tel}@s.whatsapp.net`, fromMe: false, id }, pushName: `Contato ${id}`, message: { conversation: texto }, messageTimestamp: Math.floor(Date.now() / 1000) } }) });
+  await chegar('5527933331111', 'LT1', 'Oi, sou a primeira');
+  await chegar('5527933332222', 'LT2', 'Oi, sou a segunda');
+  await chegar('5521988887777', 'LT3', 'Mesmo cliente, outro número');
+  const lista = async (q) => ok('GET', `/crm/conversas?canalId=${c.id}&${q}`);
+  const fila = await lista('aba=fila');
+  assert.equal(fila.length, 3);
+  const de = (tel) => fila.find((x) => x.telefone === tel);
+  const [c1, c2, c3] = [de('5527933331111'), de('5527933332222'), de('5521988887777')];
+
+  // Filtros: etiqueta do contato, período e todas as abas juntas.
+  await ok('PATCH', `/crm/contatos/${c1.contatoId}`, { etiquetas: ['vip'] });
+  assert.ok((await ok('GET', '/crm/etiquetas')).includes('vip'));
+  assert.deepEqual((await lista('aba=fila&etiqueta=vip')).map((x) => x.id), [c1.id]);
+  const hoje = new Date(Date.now() - 3 * 3600e3).toISOString().slice(0, 10);
+  assert.equal((await lista(`aba=fila&de=${hoje}&ate=${hoje}`)).length, 3);
+  assert.equal((await lista('aba=fila&ate=2020-01-01')).length, 0);
+  assert.equal((await lista('aba=todas')).length, 3);
+
+  // Em lote: pegar não existe, mas marcar lida, resolver e transferir sim; o que não pode fica de fora com o motivo.
+  assert.equal((await ok('POST', '/crm/conversas/lote', { ids: [c1.id, c2.id], acao: 'lida' })).feitas, 2);
+  assert.equal((await lista('aba=fila&naoLidas=1')).length, 1);
+  const eu = (await ok('GET', '/auth/eu')).id ?? (await ok('GET', '/crm/atendentes'))[0].id;
+  const tr = await ok('POST', '/crm/conversas/lote', { ids: [c1.id, c2.id], acao: 'transferir', usuarioId: eu });
+  assert.equal(tr.feitas, 2);
+  assert.equal((await lista(`aba=atendimento&atendenteId=${eu}`)).length, 2, 'filtro por responsável');
+  assert.equal((await chamar('POST', '/crm/conversas/lote', { ids: [c1.id], acao: 'transferir' })).status, 400);
+  const rs = await ok('POST', '/crm/conversas/lote', { ids: [c2.id, '00000000-0000-4000-8000-000000000000'], acao: 'resolver' });
+  assert.deepEqual([rs.feitas, rs.falhas], [1, 1]);
+  assert.equal((await lista('aba=resolvidas')).length, 1);
+  assert.equal((await ok('POST', '/crm/conversas/lote', { ids: [c1.id], acao: 'fila' })).feitas, 1);
+
+  // Unificar: o outro número é da mesma pessoa. Mensagens e cards passam para o contato principal; o repetido some.
+  const funil = (await ok('GET', '/crm/funis'))[0];
+  const card = await ok('POST', '/crm/leads', { funilId: funil.id, nome: 'Contato LT3', telefone: '21988887777' });
+  const un = await ok('POST', `/crm/conversas/${c1.id}/unificar`, { comConversaId: c3.id });
+  assert.deepEqual([un.juntadas, un.cards], [1, 1]);
+  const msgs = (await ok('GET', `/crm/conversas/${c1.id}/mensagens`));
+  assert.deepEqual(msgs.mensagens.map((m) => m.texto).sort(), ['Mesmo cliente, outro número', 'Oi, sou a primeira']);
+  assert.equal(msgs.contato.camposExtras['Outro telefone'], '5521988887777');
+  assert.equal((await ok('GET', `/crm/leads/${card.id}`)).contato.id, c1.contatoId, 'o card foi para o contato principal');
+  assert.equal((await lista('aba=todas')).length, 2, 'a conversa repetida sumiu');
+  assert.equal((await chamar('POST', `/crm/conversas/${c1.id}/unificar`, { comConversaId: c1.id })).status, 400);
+
+  // Excluir a conversa: somem as mensagens, o contato e o card continuam.
+  const ex = await ok('DELETE', `/crm/conversas/${c1.id}`);
+  assert.equal(ex.mensagens, 2);
+  assert.equal((await chamar('GET', `/crm/conversas/${c1.id}/mensagens`)).status, 404);
+  assert.equal((await ok('GET', `/crm/leads/${card.id}`)).contato.id, c1.contatoId);
+  await ok('DELETE', `/crm/canais/${c.id}`);
+});
+
 test('RH e ponto: cadastro, login pelo CPF, batida com foto e GPS, ajustes, espelho, ciência, documentos, AFD/AEJ e contabilidade', async () => {
   const gestor = token;
   const hoje = new Date(Date.now() - 3 * 3600e3).toISOString().slice(0, 10);

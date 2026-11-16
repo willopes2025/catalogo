@@ -391,7 +391,17 @@ export class AtendimentoController {
 
   @Get('crm/conversas')
   @Permissao('crm', 'ver')
-  async conversas(@Usuario() u: UsuarioLogado, @Query('aba') aba = 'fila', @Query('canalId') canalId?: string, @Query('busca') busca?: string, @Query('naoLidas') naoLidas?: string) {
+  async conversas(
+    @Usuario() u: UsuarioLogado,
+    @Query('aba') aba = 'fila',
+    @Query('canalId') canalId?: string,
+    @Query('busca') busca?: string,
+    @Query('naoLidas') naoLidas?: string,
+    @Query('etiqueta') etiqueta?: string,
+    @Query('atendenteId') atendenteId?: string,
+    @Query('de') de?: string,
+    @Query('ate') ate?: string,
+  ) {
     const g = gestor(u);
     const meus = (await this.canais.canaisDoUsuario(u.id, g)).map((c) => c.id);
     if (!meus.length) return [];
@@ -406,7 +416,18 @@ export class AtendimentoController {
       f.push(eq(crmConversas.status, 'resolvida'));
       if (!g) f.push(sql`(${crmConversas.atendenteId} = ${u.id} or ${crmConversas.atendenteId} is null)`);
     }
+    else if (aba === 'todas' && !g) {
+      // Todas (para buscar e unificar): quem não é da gestão não vê as que estão com outra pessoa.
+      f.push(sql`(${crmConversas.atendenteId} = ${u.id} or ${crmConversas.atendenteId} is null or ${crmConversas.status} <> 'atendimento')`);
+    }
     if (naoLidas === '1') f.push(sql`${crmConversas.naoLidas} > 0`);
+    // Etiqueta do contato ou de algum card dele.
+    if (etiqueta?.trim()) f.push(sql`(${crmContatos.etiquetas} ? ${etiqueta.trim()} or exists (select 1 from crm_leads l where l.contato_id = ${crmContatos.id} and l.etiquetas ? ${etiqueta.trim()}))`);
+    // Por responsável: só a gestão escolhe outra pessoa.
+    if (atendenteId && g && /^[0-9a-f-]{36}$/i.test(atendenteId)) f.push(eq(crmConversas.atendenteId, atendenteId));
+    // Período da última mensagem (dias inteiros, horário de Brasília).
+    if (de && /^\d{4}-\d{2}-\d{2}$/.test(de)) f.push(sql`${crmConversas.ultimaMensagemEm} >= ${new Date(`${de}T00:00:00-03:00`)}`);
+    if (ate && /^\d{4}-\d{2}-\d{2}$/.test(ate)) f.push(sql`${crmConversas.ultimaMensagemEm} <= ${new Date(`${ate}T23:59:59.999-03:00`)}`);
     if (busca?.trim()) {
       const dig = busca.replace(/\D/g, '');
       f.push(sql`(${crmContatos.nome} ilike ${'%' + busca.trim() + '%'}${dig.length >= 4 ? sql` or ${crmContatos.telefone} like ${'%' + dig + '%'}` : sql``})`);
@@ -565,6 +586,114 @@ export class AtendimentoController {
     const r = await this.canais.apagarMensagem(id, mensagemId);
     await this.auditoria.registrar({ usuarioId: u.id, acao: 'apagar_mensagem', entidade: 'crm_mensagem', entidadeId: mensagemId });
     return r;
+  }
+
+  /** Etiquetas em uso (contatos e cards), para o filtro da lista de conversas. */
+  @Get('crm/etiquetas')
+  @Permissao('crm', 'ver')
+  async etiquetasEmUso() {
+    const r = await this.db.execute<{ etiqueta: string }>(sql`
+      select distinct e as etiqueta from (
+        select jsonb_array_elements_text(etiquetas) as e from crm_contatos
+        union all select jsonb_array_elements_text(etiquetas) as e from crm_leads
+      ) t where e <> '' order by 1 limit 300`);
+    return r.rows.map((x) => x.etiqueta);
+  }
+
+  /** Várias conversas de uma vez: resolver, marcar lida / não lida, devolver para a fila ou transferir. */
+  @Post('crm/conversas/lote')
+  @Permissao('crm', 'editar')
+  async lote(@Usuario() u: UsuarioLogado, @Body() body: unknown) {
+    const d = validar(z.object({ ids: z.array(uuid).min(1).max(200), acao: z.enum(['resolver', 'lida', 'nao_lida', 'fila', 'transferir']), usuarioId: uuid.nullable().optional() }), body);
+    if (d.acao === 'transferir' && !d.usuarioId) throw new BadRequestException('Escolha para quem transferir.');
+    let feitas = 0;
+    const falhas: string[] = [];
+    for (const id of [...new Set(d.ids)]) {
+      try {
+        // As mesmas regras de uma conversa só: cada uma confere se a pessoa atende pelo número e se pode mexer.
+        if (d.acao === 'resolver') await this.canais.resolver(id, u.id, gestor(u));
+        else if (d.acao === 'fila') await this.transferir(u, id, { usuarioId: null });
+        else if (d.acao === 'transferir') await this.transferir(u, id, { usuarioId: d.usuarioId });
+        else {
+          await this.conversaVisivel(u, id);
+          await this.db.update(crmConversas).set({ naoLidas: d.acao === 'lida' ? 0 : sql`greatest(${crmConversas.naoLidas}, 1)` }).where(eq(crmConversas.id, id));
+        }
+        feitas++;
+      } catch (e) {
+        falhas.push((e as Error).message);
+      }
+    }
+    // Um motivo de cada tipo basta para a pessoa entender o que ficou de fora.
+    return { feitas, falhas: falhas.length, motivos: [...new Set(falhas)].slice(0, 3) };
+  }
+
+  /** Apaga a conversa e as mensagens dela (o contato e os cards continuam). Só a gestão. */
+  @Delete('crm/conversas/:id')
+  @Permissao('crm', 'excluir')
+  async excluirConversa(@Usuario() u: UsuarioLogado, @Param('id', ParseUUIDPipe) id: string) {
+    const { cv } = await this.conversaVisivel(u, id);
+    const [{ n }] = (await this.db.execute<{ n: number }>(sql`select count(*)::int as n from crm_mensagens where conversa_id = ${id}`)).rows;
+    await this.db.delete(crmConversas).where(eq(crmConversas.id, id));
+    await this.auditoria.registrar({ usuarioId: u.id, acao: 'excluir', entidade: 'crm_conversa', entidadeId: id, dados: { contatoId: cv.contatoId, canalId: cv.canalId, mensagens: n } });
+    return { ok: true, mensagens: n };
+  }
+
+  /**
+   * Unifica dois contatos que são a mesma pessoa (dois números, ou o mesmo com e sem o 9):
+   * as conversas, mensagens e cards da outra conversa passam para o contato desta, e o contato repetido some.
+   */
+  @Post('crm/conversas/:id/unificar')
+  @Permissao('crm', 'excluir')
+  async unificar(@Usuario() u: UsuarioLogado, @Param('id', ParseUUIDPipe) id: string, @Body() body: unknown) {
+    const { comConversaId } = validar(z.object({ comConversaId: uuid }), body);
+    const { cv: fica } = await this.conversaVisivel(u, id);
+    const { cv: sai } = await this.conversaVisivel(u, comConversaId);
+    if (fica.contatoId === sai.contatoId) throw new BadRequestException('As duas conversas já são do mesmo contato.');
+    const [principal] = await this.db.select().from(crmContatos).where(eq(crmContatos.id, fica.contatoId));
+    const [repetido] = await this.db.select().from(crmContatos).where(eq(crmContatos.id, sai.contatoId));
+    const r = await this.db.transaction(async (tx) => {
+      let juntadas = 0;
+      // Conversas do contato repetido: no mesmo número, as mensagens entram na conversa que fica; em outro número, a conversa só troca de dono.
+      for (const c of await tx.select().from(crmConversas).where(eq(crmConversas.contatoId, repetido.id))) {
+        const [destino] = await tx.select().from(crmConversas).where(and(eq(crmConversas.contatoId, principal.id), eq(crmConversas.canalId, c.canalId)));
+        if (!destino) {
+          await tx.update(crmConversas).set({ contatoId: principal.id }).where(eq(crmConversas.id, c.id));
+          continue;
+        }
+        await tx.update(crmMensagens).set({ conversaId: destino.id }).where(eq(crmMensagens.conversaId, c.id));
+        const maisNova = (c.ultimaMensagemEm?.getTime() ?? 0) > (destino.ultimaMensagemEm?.getTime() ?? 0);
+        await tx
+          .update(crmConversas)
+          .set({
+            naoLidas: destino.naoLidas + c.naoLidas,
+            ...(maisNova ? { ultimaMensagem: c.ultimaMensagem, ultimaMensagemEm: c.ultimaMensagemEm } : {}),
+            ...((c.ultimaEntradaEm?.getTime() ?? 0) > (destino.ultimaEntradaEm?.getTime() ?? 0) ? { ultimaEntradaEm: c.ultimaEntradaEm } : {}),
+          })
+          .where(eq(crmConversas.id, destino.id));
+        await tx.delete(crmConversas).where(eq(crmConversas.id, c.id));
+        juntadas++;
+      }
+      const cards = await tx.update(crmLeads).set({ contatoId: principal.id }).where(eq(crmLeads.contatoId, repetido.id)).returning({ id: crmLeads.id });
+      // Disparos: se os dois estavam no mesmo disparo, fica o registro do principal.
+      await tx.execute(sql`delete from crm_disparo_destinos d where d.contato_id = ${repetido.id} and exists (select 1 from crm_disparo_destinos p where p.disparo_id = d.disparo_id and p.contato_id = ${principal.id})`);
+      await tx.execute(sql`update crm_disparo_destinos set contato_id = ${principal.id} where contato_id = ${repetido.id}`);
+      // O que o principal não tinha, herda do repetido.
+      await tx
+        .update(crmContatos)
+        .set({
+          nome: principal.nome === principal.telefone && repetido.nome !== repetido.telefone ? repetido.nome : principal.nome,
+          email: principal.email ?? repetido.email,
+          pessoaId: principal.pessoaId ?? repetido.pessoaId,
+          etiquetas: [...new Set([...principal.etiquetas, ...repetido.etiquetas])].slice(0, 30),
+          camposExtras: { ...repetido.camposExtras, ...principal.camposExtras, ...(repetido.telefone !== principal.telefone && !principal.camposExtras['Outro telefone'] ? { 'Outro telefone': repetido.telefone } : {}) },
+          descadastrado: principal.descadastrado || repetido.descadastrado,
+        })
+        .where(eq(crmContatos.id, principal.id));
+      await tx.delete(crmContatos).where(eq(crmContatos.id, repetido.id));
+      return { juntadas, cards: cards.length };
+    });
+    await this.auditoria.registrar({ usuarioId: u.id, acao: 'unificar', entidade: 'crm_contato', entidadeId: principal.id, dados: { repetido: { id: repetido.id, nome: repetido.nome, telefone: repetido.telefone }, ...r } });
+    return { ok: true, ...r };
   }
 
   /** Conversa avulsa: escrever para um telefone que ainda não tem conversa (nem precisa ter card). */
