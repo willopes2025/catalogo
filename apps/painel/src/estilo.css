@@ -109,6 +109,7 @@ table.tabela { width: 100%; border-collapse: collapse; background: var(--papel);
 .campo label { font-size: 13px; color: var(--suave); font-weight: 600; }
 .campo .ajuda { font-size: 12px; color: var(--suave); }
 .campo .erro-campo { font-size: 12px; color: var(--erro); }
+.campo.com-erro input, .campo.com-erro select, .campo.com-erro textarea { border-color: var(--erro); background: var(--erro-fundo); }
 input, select, textarea { font: inherit; color: var(--tinta); background: #fff; border: 1px solid #d8ccb8; border-radius: 8px; padding: 8px 10px; width: 100%; }
 input:focus, select:focus, textarea:focus { outline: 2px solid var(--areia); border-color: var(--dourado); }
 input.invalido { border-color: var(--erro); }

@@ -36,12 +36,49 @@ export function Abas<T extends string>({ abas, ativa, mudar }: { abas: [T, strin
   );
 }
 
+/** Nome que a pessoa vê na tela para cada campo que o servidor pode recusar. */
+const ROTULOS: Record<string, string> = {
+  nome: 'Nome', nomeSocial: 'Nome social', cpf: 'CPF', cnpj: 'CNPJ', cpfCnpj: 'CPF/CNPJ', documento: 'CPF/CNPJ', rg: 'RG', pis: 'PIS / NIS', nascimento: 'Nascimento',
+  telefone: 'Telefone', telefone1: 'Telefone', telefone2: 'Telefone 2', celular: 'Celular', email: 'E-mail', cep: 'CEP', endereco: 'Endereço', numero: 'Número', bairro: 'Bairro', cidade: 'Cidade', uf: 'UF',
+  empresaId: 'Empresa', cargo: 'Cargo', departamento: 'Setor', tipoContrato: 'Tipo de contrato', salario: 'Salário', ctps: 'CTPS', matriculaEsocial: 'Matrícula no eSocial', escalaId: 'Escala de horário',
+  dataAdmissao: 'Admissão', dadosBancarios: 'Dados bancários', observacao: 'Observações', acesso: 'Acesso ao sistema', grupoId: 'Nível de acesso', senha: 'Senha',
+  valor: 'Valor', preco: 'Preço', quantidade: 'Quantidade', data: 'Data', vencimento: 'Vencimento', descricao: 'Descrição', titulo: 'Título', motivo: 'Motivo', tipo: 'Tipo', inicio: 'Início', fim: 'Fim',
+  pessoaId: 'Pessoa', produtoId: 'Produto', clienteId: 'Cliente', representanteId: 'Representante', responsavelId: 'Responsável', itens: 'Itens', pagamentos: 'Pagamentos', _: 'Dados enviados',
+};
+/** "dadosBancarios.pix" → "Dados bancários › Pix"; campo desconhecido vira texto legível ("limiteCredito" → "Limite credito"). */
+export function rotuloCampo(caminho: string) {
+  return caminho
+    .split('.')
+    .filter((p) => !/^\d+$/.test(p))
+    .map((p) => ROTULOS[p] ?? p.replace(/Id$/, '').replace(/([a-z])([A-Z])/g, '$1 $2').replace(/^./, (c) => c.toUpperCase()).replace(/ (.)/g, (m) => m.toLowerCase()))
+    .join(' › ');
+}
+
+/** Campos recusados pelo servidor, para destacar cada um no formulário. */
+export function camposComErro(erro: unknown): Record<string, string> {
+  return erro instanceof ErroApi ? erro.dados.campos ?? {} : {};
+}
+
 export function Erro({ erro }: { erro: unknown }) {
   if (!erro) return null;
   const e = erro instanceof ErroApi ? erro : null;
+  // O mesmo campo pode vir duas vezes (o e-mail da ficha e o do acesso): mostra uma vez só.
+  const vistos = new Set<string>();
+  const campos = Object.entries(e?.dados.campos ?? {}).filter(([c, m]) => {
+    const chave = `${c.split('.').pop()}|${m}`;
+    return vistos.has(chave) ? false : !!vistos.add(chave);
+  });
   return (
     <div className="aviso erro" role="alert">
-      {e?.dados.mensagem ?? (erro as Error).message ?? 'Erro inesperado'}
+      {campos.length ? 'Não deu para salvar. Confira:' : (e?.dados.mensagem ?? (erro as Error).message ?? 'Erro inesperado')}
+      {/* Diz qual campo e por quê: nem toda tela consegue destacar o campo. */}
+      {campos.length > 0 && (
+        <ul>
+          {campos.map(([c, m]) => (
+            <li key={c}><b>{rotuloCampo(c)}:</b> {m}</li>
+          ))}
+        </ul>
+      )}
       {e?.dados.motivos && (
         <ul>
           {e.dados.motivos.map((m) => (
@@ -55,7 +92,7 @@ export function Erro({ erro }: { erro: unknown }) {
 
 export function Campo({ rotulo, erro, ajuda, children, className }: { rotulo: string; erro?: string; ajuda?: string; children: ReactNode; className?: string }) {
   return (
-    <div className={`campo ${className ?? ''}`}>
+    <div className={`campo ${erro ? 'com-erro' : ''} ${className ?? ''}`}>
       <label>{rotulo}</label>
       {children}
       {erro ? <span className="erro-campo">{erro}</span> : ajuda ? <span className="ajuda">{ajuda}</span> : null}

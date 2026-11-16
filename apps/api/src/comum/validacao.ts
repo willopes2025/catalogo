@@ -1,6 +1,9 @@
 import { BadRequestException } from '@nestjs/common';
 import { z, type ZodTypeAny } from 'zod';
 
+// Mensagens padrão do validador em português (as que cada campo define continuam valendo).
+z.config(z.locales.pt());
+
 /** Valida o corpo da requisição e devolve os erros em português, campo a campo. */
 export function validar<T extends ZodTypeAny>(schema: T, dados: unknown): z.infer<T> {
   const r = schema.safeParse(dados);

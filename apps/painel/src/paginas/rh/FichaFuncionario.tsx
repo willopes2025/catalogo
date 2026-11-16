@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { api, pode } from '../../api';
 import { centavosParaTexto, paraCentavos } from '../../formato';
-import { Abas, Campo, Carregando, Erro, Topo } from '../../componentes/ui';
+import { Abas, Campo, Carregando, Erro, Topo, camposComErro } from '../../componentes/ui';
 import { TabelaEspelho } from './MeuPonto';
 import { abrirArquivo, competenciaAtual, hojeBR, lerArquivo, nomeMes, ultimasCompetencias } from './comum';
 import './rh.css';
@@ -69,8 +69,10 @@ function Dados({ f }: { f?: any }) {
     },
   });
   const editar = f ? pode('rh', 'editar') : pode('rh', 'criar');
+  // Campos que o servidor recusou: cada um fica destacado com o motivo embaixo.
+  const erros = camposComErro(salvar.error);
   const campo = (k: string, rotulo: string, props: Record<string, unknown> = {}, cls = '') => (
-    <Campo rotulo={rotulo} className={cls}><input disabled={!editar} value={d[k] ?? ''} onChange={(e) => setD({ ...d, [k]: e.target.value })} {...props} /></Campo>
+    <Campo rotulo={rotulo} className={cls} erro={erros[k] ?? erros[`dadosBancarios.${k}`]}><input disabled={!editar} value={d[k] ?? ''} onChange={(e) => setD({ ...d, [k]: e.target.value })} {...props} /></Campo>
   );
   if (criado) {
     return (
@@ -103,26 +105,26 @@ function Dados({ f }: { f?: any }) {
       {campo('cep', 'CEP', { inputMode: 'numeric' })}
       {campo('nomeSocial', 'Nome social (se houver)')}
       <div className="secao l4">Contrato</div>
-      <Campo rotulo="Empresa (empregador)" className="l2"><select disabled={!editar} value={d.empresaId} onChange={(e) => setD({ ...d, empresaId: e.target.value })}>{empresas.data?.map((e) => <option key={e.id} value={e.id}>{e.razaoSocial || e.nome}{e.cnpj ? '' : ' (sem CNPJ)'}</option>)}</select></Campo>
-      <Campo rotulo="Tipo de contrato"><select disabled={!editar} value={d.tipoContrato} onChange={(e) => setD({ ...d, tipoContrato: e.target.value })}>{[['clt', 'CLT'], ['experiencia', 'Experiência'], ['estagio', 'Estágio'], ['temporario', 'Temporário'], ['aprendiz', 'Aprendiz'], ['pj', 'PJ'], ['autonomo', 'Autônomo']].map(([k, n]) => <option key={k} value={k}>{n}</option>)}</select></Campo>
+      <Campo rotulo="Empresa (empregador)" className="l2" erro={erros.empresaId}><select disabled={!editar} value={d.empresaId} onChange={(e) => setD({ ...d, empresaId: e.target.value })}>{empresas.data?.map((e) => <option key={e.id} value={e.id}>{e.razaoSocial || e.nome}{e.cnpj ? '' : ' (sem CNPJ)'}</option>)}</select></Campo>
+      <Campo rotulo="Tipo de contrato" erro={erros.tipoContrato}><select disabled={!editar} value={d.tipoContrato} onChange={(e) => setD({ ...d, tipoContrato: e.target.value })}>{[['clt', 'CLT'], ['experiencia', 'Experiência'], ['estagio', 'Estágio'], ['temporario', 'Temporário'], ['aprendiz', 'Aprendiz'], ['pj', 'PJ'], ['autonomo', 'Autônomo']].map(([k, n]) => <option key={k} value={k}>{n}</option>)}</select></Campo>
       {campo('dataAdmissao', 'Admissão', { type: 'date' })}
       {campo('cargo', 'Cargo')}
       {campo('departamento', 'Setor')}
       {campo('salario', 'Salário (R$)', { inputMode: 'decimal' })}
       {campo('ctps', 'CTPS (número e série)')}
       {campo('matriculaEsocial', 'Matrícula no eSocial')}
-      <Campo rotulo="Escala de horário" className="l2"><select disabled={!editar} value={d.escalaId} onChange={(e) => setD({ ...d, escalaId: e.target.value })}><option value="">Sem escala</option>{escalas.data?.map((e) => <option key={e.id} value={e.id}>{e.nome}</option>)}</select></Campo>
+      <Campo rotulo="Escala de horário" className="l2" erro={erros.escalaId}><select disabled={!editar} value={d.escalaId} onChange={(e) => setD({ ...d, escalaId: e.target.value })}><option value="">Sem escala</option>{escalas.data?.map((e) => <option key={e.id} value={e.id}>{e.nome}</option>)}</select></Campo>
       <Campo rotulo="Controle de ponto"><select disabled={!editar} value={d.batePonto ? '1' : '0'} onChange={(e) => setD({ ...d, batePonto: e.target.value === '1' })}><option value="1">Bate ponto</option><option value="0">Não bate (sócio, cargo de confiança, PJ)</option></select></Campo>
       <div className="secao l4">Dados bancários (para a folha)</div>
       {campo('banco', 'Banco')}
       {campo('agencia', 'Agência')}
       {campo('conta', 'Conta')}
       {campo('pix', 'Chave Pix')}
-      <Campo rotulo="Observações" className="l4"><textarea rows={2} disabled={!editar} value={d.observacao} onChange={(e) => setD({ ...d, observacao: e.target.value })} /></Campo>
+      <Campo rotulo="Observações" className="l4" erro={erros.observacao}><textarea rows={2} disabled={!editar} value={d.observacao} onChange={(e) => setD({ ...d, observacao: e.target.value })} /></Campo>
       {!f && (
         <>
           <div className="secao l4">Acesso ao sistema</div>
-          <Campo rotulo="Nível de acesso" className="l2" ajuda="&quot;Somente ponto&quot; só bate ponto e vê os próprios documentos. Sem e-mail, o login é o CPF.">
+          <Campo rotulo="Nível de acesso" className="l2" erro={erros['acesso.grupoId']} ajuda="&quot;Somente ponto&quot; só bate ponto e vê os próprios documentos. Sem e-mail, o login é o CPF.">
             <select value={acessoGrupo} onChange={(e) => setAcessoGrupo(e.target.value)}><option value="">Criar acesso depois</option>{grupos.data?.map((g) => <option key={g.id} value={g.id}>{g.nome}</option>)}</select>
           </Campo>
         </>

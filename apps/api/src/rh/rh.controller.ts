@@ -115,7 +115,7 @@ export class RhController {
   @Post('funcionarios')
   @Permissao('rh', 'criar')
   async criar(@Usuario() u: UsuarioLogado, @Body() body: unknown) {
-    const { acesso, ...d } = validar(funcionarioSchema.extend({ acesso: z.object({ grupoId: z.string().uuid(), email: z.string().email().nullable().optional() }).nullable().optional() }), body);
+    const { acesso, ...d } = validar(funcionarioSchema.extend({ acesso: z.object({ grupoId: z.string().uuid('Escolha o nível de acesso'), email: z.string().email('E-mail inválido').nullable().optional() }).nullable().optional() }), body);
     const [dup] = await this.db.select({ nome: rhFuncionarios.nome }).from(rhFuncionarios).where(eq(rhFuncionarios.cpf, d.cpf));
     if (dup) throw new BadRequestException(`Já existe um funcionário com este CPF: ${dup.nome}.`);
     const r = await this.db.transaction(async (tx) => {
