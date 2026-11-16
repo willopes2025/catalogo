@@ -9,7 +9,9 @@ export type EventoCrm =
   | { tipo: 'lead_criado'; leadId: string }
   | { tipo: 'entrou_etapa'; leadId: string; etapaId: string }
   | { tipo: 'mensagem_recebida'; leadId: string; texto: string }
-  | { tipo: 'etiqueta_adicionada'; leadId: string; etiqueta: string };
+  | { tipo: 'etiqueta_adicionada'; leadId: string; etiqueta: string }
+  /** O contato escreveu (tenha card ou não): é o que acorda o agente de IA. */
+  | { tipo: 'conversa_entrada'; conversaId: string };
 
 type Executor = Db | Tx;
 

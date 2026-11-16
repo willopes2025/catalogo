@@ -4,12 +4,13 @@ import { api, pode } from '../../api';
 import { Erro } from '../../componentes/ui';
 import { ha, ligar, meuId, telefoneBonito, useMidia, useRelogio, usarAtendentes, usarFunis, type Template } from './comum';
 
-interface Mensagem { id: string; direcao: 'entrada' | 'saida' | 'interna'; tipo: string; texto: string | null; midia: string | null; midiaNome: string | null; templateNome: string | null; status: string; erro: string | null; autor: string | null; automatica: boolean; criadoEm: string; reacoes: { de: 'contato' | 'equipe'; emoji: string }[]; apagada: boolean; noWhatsApp: boolean; citada: { id: string; direcao: string; tipo: string; texto: string | null } | null }
+interface Mensagem { id: string; direcao: 'entrada' | 'saida' | 'interna'; tipo: string; texto: string | null; midia: string | null; midiaNome: string | null; templateNome: string | null; status: string; erro: string | null; autor: string | null; automatica: boolean; criadoEm: string; ia: boolean; reacoes: { de: 'contato' | 'equipe'; emoji: string }[]; apagada: boolean; noWhatsApp: boolean; citada: { id: string; direcao: string; tipo: string; texto: string | null } | null }
 interface Dados {
   conversa: { id: string; status: 'fila' | 'atendimento' | 'resolvida'; atendenteId: string | null; canalId: string; canal: string; canalTipo: 'oficial' | 'qrcode' | 'evolution'; dentroDaJanela: boolean; filaDesde: string | null; contatoId: string; fixada: boolean };
   contato: { id: string; nome: string; telefone: string; descadastrado: boolean };
   mensagens: Mensagem[];
-  recursos: { reagir: boolean; apagar: boolean };
+  recursos: { reagir: boolean; apagar: boolean; ia: boolean };
+  iaAtendendo: boolean;
 }
 
 const REACOES_RAPIDAS = ['👍', '❤️', '😂', '😮', '😢', '🙏'];
@@ -202,6 +203,7 @@ export function Chat({ conversaId, leadId, aoMudar, abas, aoSair }: { conversaId
   const apagar = useMutation({ mutationFn: (id: string) => api(`/crm/conversas/${conversaId}/mensagens/${id}/apagar`, { corpo: {} }), onSuccess: atualizar });
   const unificar = useMutation({ mutationFn: (comConversaId: string) => api<{ juntadas: number; cards: number }>(`/crm/conversas/${conversaId}/unificar`, { corpo: { comConversaId } }), onSuccess: () => { setUnificando(false); setBuscaUnir(''); atualizar(); } });
   const excluirConversa = useMutation({ mutationFn: () => api(`/crm/conversas/${conversaId}`, { metodo: 'DELETE' }), onSuccess: () => { qc.invalidateQueries({ queryKey: ['crm', 'conversas'] }); qc.invalidateQueries({ queryKey: ['crm', 'contadores'] }); aoSair?.(); } });
+  const sugerir = useMutation({ mutationFn: () => api<{ texto: string }>(`/crm/conversas/${conversaId}/sugerir`, { corpo: {} }), onSuccess: (r) => { if (r.texto) setTexto(r.texto); campoTexto.current?.focus(); } });
   const apagarTemplate = useMutation({ mutationFn: (id: string) => api(`/crm/templates/${id}`, { metodo: 'DELETE' }), onSuccess: () => qc.invalidateQueries({ queryKey: ['crm', 'templates'] }) });
   const renomear = useMutation({ mutationFn: (v: { id: string; nome: string }) => api(`/crm/contatos/${v.id}`, { metodo: 'PATCH', corpo: { nome: v.nome } }), onSuccess: () => { setNomeNovo(null); atualizar(); } });
 
@@ -334,6 +336,7 @@ export function Chat({ conversaId, leadId, aoMudar, abas, aoSair }: { conversaId
             <button className="botao claro pequeno" aria-label="Mais opções da conversa" aria-expanded={menu} onClick={() => setMenu((v) => !v)}>⋮</button>
             {menu && (
               <div className="menu-chat" role="menu" onClick={() => setMenu(false)}>
+                {editar && q.data!.recursos.ia && <button role="menuitem" onClick={() => acao.mutate({ rota: 'ia', corpo: { ativa: !q.data!.iaAtendendo } })}>{q.data!.iaAtendendo ? 'Pausar a IA nesta conversa' : '🤖 Acionar IA nesta conversa'}</button>}
                 {editar && <button role="menuitem" onClick={() => acao.mutate({ rota: 'fixar', corpo: { fixada: !c.fixada } })}>{c.fixada ? 'Desafixar do topo' : '📌 Fixar no topo'}</button>}
                 {editar && <button role="menuitem" onClick={() => acao.mutate({ rota: 'nao-lida' })}>Marcar como não lida</button>}
                 <button role="menuitem" onClick={() => void navigator.clipboard?.writeText(contato.telefone)}>Copiar o telefone</button>
@@ -380,6 +383,12 @@ export function Chat({ conversaId, leadId, aoMudar, abas, aoSair }: { conversaId
         </div>
       )}
       {abas && aba !== 'chat' && <NotasTarefas modo={aba} leadId={leadId ?? null} contato={contato} />}
+      {q.data!.iaAtendendo && aba === 'chat' && (
+        <div className="chat-faixa" style={{ background: '#e6f0ea', color: '#2c5a41' }}>
+          <span>🤖 A IA está atendendo esta conversa. Se você escrever ou pegar a conversa, ela sai.</span>
+          {editar && <button className="botao claro pequeno" disabled={acao.isPending} onClick={() => acao.mutate({ rota: 'ia', corpo: { ativa: false } })}>Pausar IA</button>}
+        </div>
+      )}
       {c.status === 'fila' && aba === 'chat' && (
         <div className="chat-faixa fila">
           <span>⏳ Na fila de espera {c.filaDesde ? `há ${ha(c.filaDesde)}` : ''}{esperaMin > 15 ? ' — esperando bastante' : ''}.</span>
@@ -410,7 +419,7 @@ export function Chat({ conversaId, leadId, aoMudar, abas, aoSair }: { conversaId
             <div key={m.id} style={{ display: 'contents' }}>
               {sep && <div className="dia">{dia}</div>}
               <div id={`msg-${m.id}`} className={`msg ${m.direcao} ${m.status === 'falhou' ? 'falhou' : ''} ${m.apagada ? 'apagada' : ''}`}>
-                {m.direcao === 'interna' && <div style={{ fontSize: 12, fontWeight: 700, color: '#8a6d12' }}>🔒 Interna · {m.autor}</div>}
+                {m.direcao === 'interna' && <div style={{ fontSize: 12, fontWeight: 700, color: '#8a6d12' }}>🔒 Interna · {m.ia ? 'IA' : m.autor}</div>}
                 {m.templateNome && <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--dourado-t)' }}>Template: {m.templateNome}</div>}
                 {m.citada && !m.apagada && (
                   <button className="citada" title="Ir para a mensagem respondida" onClick={() => document.getElementById(`msg-${m.citada!.id}`)?.scrollIntoView({ block: 'center', behavior: 'smooth' })}>
@@ -437,7 +446,7 @@ export function Chat({ conversaId, leadId, aoMudar, abas, aoSair }: { conversaId
                   </div>
                 )}
                 <div className="rodape-msg">
-                  {m.direcao === 'saida' && (m.automatica ? 'automática' : m.autor ?? 'celular')}
+                  {m.direcao === 'saida' && (m.ia ? '🤖 IA' : m.automatica ? 'automática' : m.autor ?? 'celular')}
                   <span>{new Date(m.criadoEm).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</span>
                   {m.direcao === 'saida' && <span style={{ color: m.status === 'lida' ? '#2a7fd4' : undefined }} title={m.erro ?? m.status}>{TICKS[m.status] ?? ''}</span>}
                 </div>
@@ -469,7 +478,7 @@ export function Chat({ conversaId, leadId, aoMudar, abas, aoSair }: { conversaId
               {apagarTemplate.error && <Erro erro={apagarTemplate.error} />}
             </div>
           )}
-          {(enviar.error || anexar.error || reagir.error || apagar.error || renomear.error) && <Erro erro={enviar.error ?? anexar.error ?? reagir.error ?? apagar.error ?? renomear.error} />}
+          {(enviar.error || anexar.error || reagir.error || apagar.error || renomear.error || sugerir.error) && <Erro erro={enviar.error ?? anexar.error ?? reagir.error ?? apagar.error ?? renomear.error ?? sugerir.error} />}
           {erroLocal && <div className="aviso erro" role="alert" style={{ margin: 0, padding: '6px 10px', fontSize: 13 }}>{erroLocal}</div>}
           {painel === 'emoji' && (
             <div className="emojis" role="group" aria-label="Emojis">
@@ -534,6 +543,7 @@ export function Chat({ conversaId, leadId, aoMudar, abas, aoSair }: { conversaId
             <button className="botao claro pequeno" title="Emojis" aria-label="Emojis" aria-expanded={painel === 'emoji'} disabled={!podeEscrever} onClick={() => setPainel(painel === 'emoji' ? null : 'emoji')}>😀</button>
             {!interna && <button className="botao claro pequeno" onClick={() => setVerTemplates((v) => !v)}>Templates</button>}
             {!interna && <button className="botao claro pequeno" disabled={!podeEscrever || anexar.isPending || (c.canalTipo === 'oficial' && !c.dentroDaJanela)} onClick={() => arquivo.current?.click()}>{anexar.isPending ? 'Enviando…' : '📎 Arquivo'}</button>}
+            {!interna && q.data!.recursos.ia && <button className="botao claro pequeno" title="A IA escreve uma resposta para você revisar antes de enviar" disabled={!podeEscrever || sugerir.isPending} onClick={() => sugerir.mutate()}>{sugerir.isPending ? 'Pensando…' : '✨ Sugerir'}</button>}
             {!interna && pode('formularios', 'ver') && <button className="botao claro pequeno" title="Mandar o link de um formulário" aria-expanded={painel === 'form'} disabled={!podeEscrever} onClick={() => setPainel(painel === 'form' ? null : 'form')}>📋 Formulário</button>}
             <input ref={arquivo} type="file" hidden accept="image/*,audio/*,video/mp4,application/pdf,.doc,.docx,.xls,.xlsx,.txt" onChange={(e) => { const f = e.target.files?.[0]; if (f) escolher(f); e.target.value = ''; }} />
             <span style={{ flex: 1 }} />

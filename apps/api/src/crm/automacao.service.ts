@@ -75,6 +75,7 @@ export class AutomacaoService implements OnModuleInit, OnModuleDestroy {
   // ───────────── Gatilhos ─────────────
 
   private async aoEvento(e: EventoCrm) {
+    if (e.tipo === 'conversa_entrada') return; // é do agente de IA, não dos gatilhos
     const [lead] = await this.db.select().from(crmLeads).where(eq(crmLeads.id, e.leadId));
     if (!lead) return;
     const gatilhos = await this.db.select().from(crmGatilhos).where(and(eq(crmGatilhos.ativo, true), eq(crmGatilhos.evento, e.tipo)));

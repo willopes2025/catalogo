@@ -1598,6 +1598,91 @@ test('conversas: filtros (etiqueta, período, responsável), ações em lote, ex
   await ok('DELETE', `/crm/canais/${c.id}`);
 });
 
+test('agente de IA no WhatsApp: atende a fila, passa para a equipe, sai quando alguém assume, e sugere resposta', async () => {
+  const c = await ok('POST', '/crm/canais', { nome: 'Com IA', tipo: 'evolution' });
+  const c2 = await ok('POST', '/crm/canais', { nome: 'Sem IA', tipo: 'evolution' });
+  for (const x of [c, c2]) await fetch(`${SIM}/__evo/conectar?i=${encodeURIComponent(x.config.instancia)}`);
+  const hooks = (await recebidos()).filter((r) => r.caminho === '/evo/instance/create').slice(-2).map((r) => r.corpo.webhook.url.replace('http://localhost:3100', ''));
+  let n = 0;
+  const chegar = (hook, inst, tel, message) => fetch(API.replace(/\/api$/, '') + hook, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ event: 'messages.upsert', instance: inst, data: { key: { remoteJid: `${tel}@s.whatsapp.net`, fromMe: false, id: `IA${++n}` }, pushName: 'Cliente Da IA', message, messageTimestamp: Math.floor(Date.now() / 1000) } }) });
+  const espera = (ms = 600) => new Promise((r) => setTimeout(r, ms));
+  const conversa = async (canalId, tel) => (await ok('GET', `/crm/conversas?aba=todas&canalId=${canalId}`)).find((x) => x.telefone === tel);
+  const msgs = async (id) => ok('GET', `/crm/conversas/${id}/mensagens`);
+
+  // Sem a chave, não liga; com a chave, liga só no primeiro número.
+  assert.equal((await chamar('PUT', '/crm/ia-agente', { ativo: true, canais: [c.id], instrucoes: '', conhecimento: '', maxRespostas: 3 })).status, 400);
+  await ok('PUT', '/integracoes/ia', { valores: { ANTHROPIC_API_KEY: 'chave-claude-teste' } });
+  const cfg = await ok('PUT', '/crm/ia-agente', { ativo: true, canais: [c.id], instrucoes: 'Trate por você.', conhecimento: 'Loja em Vila Velha, aberta das 9h às 18h.', maxRespostas: 3 });
+  assert.equal(cfg.ligada, true);
+
+  // Duas mensagens seguidas viram uma resposta só, marcada como da IA; a conversa continua na fila.
+  await chegar(hooks[0], c.config.instancia, '5527922221111', { conversation: 'Oi' });
+  await chegar(hooks[0], c.config.instancia, '5527922221111', { conversation: 'Vocês abrem sábado?' });
+  await espera();
+  const cv = await conversa(c.id, '5527922221111');
+  let d = await msgs(cv.id);
+  const daIa = d.mensagens.filter((m) => m.ia && m.direcao === 'saida');
+  assert.equal(daIa.length, 1);
+  assert.equal(daIa[0].texto, 'Oi! Como posso ajudar?', 'aceita o JSON dentro de bloco de código');
+  assert.equal(d.conversa.status, 'fila');
+  assert.equal(d.iaAtendendo, true);
+  const pedido = (await recebidos()).filter((r) => r.caminho === '/claude/v1/messages').pop().corpo;
+  assert.equal(pedido.model, 'claude-sonnet-5-5');
+  assert.ok(pedido.system.includes('Loja em Vila Velha') && pedido.system.includes('Trate por você.'));
+  assert.deepEqual(pedido.messages.map((m) => m.role), ['user'], 'as duas mensagens do cliente foram juntas');
+  // No outro número a IA não atende.
+  await chegar(hooks[1], c2.config.instancia, '5527922223333', { conversation: 'Oi' });
+  await espera();
+  assert.equal((await msgs((await conversa(c2.id, '5527922223333')).id)).mensagens.filter((m) => m.ia).length, 0);
+
+  // Pediu atendente: a IA avisa o cliente, deixa o recado para a equipe e sai da conversa.
+  await chegar(hooks[0], c.config.instancia, '5527922221111', { conversation: 'Quero falar com um atendente' });
+  await espera();
+  d = await msgs(cv.id);
+  assert.ok(d.mensagens.some((m) => m.ia && m.texto?.startsWith('Claro! Vou chamar alguém')));
+  assert.ok(d.mensagens.some((m) => m.direcao === 'interna' && m.texto?.includes('Pediu para falar com atendente.')));
+  assert.equal(d.iaAtendendo, false);
+  const antes = d.mensagens.filter((m) => m.ia && m.direcao === 'saida').length;
+  await chegar(hooks[0], c.config.instancia, '5527922221111', { conversation: 'Alô?' });
+  await espera();
+  assert.equal((await msgs(cv.id)).mensagens.filter((m) => m.ia && m.direcao === 'saida').length, antes, 'depois de passar, não responde mais');
+
+  // Sugestão de resposta: volta o texto, não envia nada.
+  const sug = await ok('POST', `/crm/conversas/${cv.id}/sugerir`);
+  assert.equal(sug.texto, 'Oi! Posso te ajudar com mais alguma coisa?', 'sem as aspas');
+  assert.equal((await msgs(cv.id)).mensagens.filter((m) => m.direcao === 'saida').length, antes);
+
+  // "Acionar IA" à mão: responde na hora ao cliente que está esperando; a equipe escrevendo desliga.
+  await ok('POST', `/crm/conversas/${cv.id}/ia`, { ativa: true });
+  await espera();
+  assert.equal((await msgs(cv.id)).mensagens.filter((m) => m.ia && m.direcao === 'saida').length, antes + 1);
+  await ok('POST', `/crm/conversas/${cv.id}/mensagens`, { texto: 'Oi, aqui é a Ana, da equipe.' });
+  assert.equal((await msgs(cv.id)).iaAtendendo, false);
+  await chegar(hooks[0], c.config.instancia, '5527922221111', { conversation: 'Oi Ana' });
+  await espera();
+  assert.equal((await msgs(cv.id)).mensagens.filter((m) => m.ia && m.direcao === 'saida').length, antes + 1, 'com a equipe na conversa, a IA fica quieta');
+
+  // Limite de respostas seguidas e IA fora do ar: a conversa fica na fila com o motivo anotado.
+  for (const t of ['um', 'dois', 'três', 'quatro', 'cinco']) { await chegar(hooks[0], c.config.instancia, '5527922224444', { conversation: t }); await espera(900); }
+  const lim = await msgs((await conversa(c.id, '5527922224444')).id);
+  assert.equal(lim.mensagens.filter((m) => m.ia && m.direcao === 'saida').length, 3);
+  assert.ok(lim.mensagens.some((m) => m.direcao === 'interna' && m.texto?.includes('limite de 3 respostas')));
+  await chegar(hooks[0], c.config.instancia, '5527922225555', { conversation: 'teste de sobrecarga' });
+  await espera();
+  const fora = await msgs((await conversa(c.id, '5527922225555')).id);
+  assert.ok(fora.mensagens.some((m) => m.direcao === 'interna' && m.texto?.includes('sobrecarregada')));
+  assert.equal(fora.conversa.status, 'fila');
+
+  // Foto mandada pelo cliente vai para a IA como imagem.
+  await chegar(hooks[0], c.config.instancia, '5527922226666', { imageMessage: { mimetype: 'image/jpeg', caption: 'Tem essa?' } });
+  await espera(900);
+  const comFoto = await msgs((await conversa(c.id, '5527922226666')).id);
+  if (comFoto.mensagens.some((m) => m.midia)) assert.ok(comFoto.mensagens.some((m) => m.ia && m.texto?.includes('Que peça linda na foto!')));
+
+  await ok('PUT', '/crm/ia-agente', { ativo: false, canais: [], instrucoes: '', conhecimento: '', maxRespostas: 10 });
+  for (const x of [c, c2]) await ok('DELETE', `/crm/canais/${x.id}`);
+});
+
 test('RH e ponto: cadastro, login pelo CPF, batida com foto e GPS, ajustes, espelho, ciência, documentos, AFD/AEJ e contabilidade', async () => {
   const gestor = token;
   const hoje = new Date(Date.now() - 3 * 3600e3).toISOString().slice(0, 10);

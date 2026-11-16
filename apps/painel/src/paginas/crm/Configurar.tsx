@@ -1,16 +1,16 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, pode } from '../../api';
 import { Abas, Campo, Carregando, Erro } from '../../componentes/ui';
 import { Distribuicao } from './Distribuicao';
 import { NOME_TIPO_CANAL, NovoCampo, TIPOS_CAMPO, usarAtendentes, usarCampos, usarCanais, usarFunis, variavelDoCampo, type CampoDef, type Canal, type Template, type TipoCanal } from './comum';
 
-type Sub = 'numeros' | 'funis' | 'distribuicao' | 'campos' | 'templates' | 'respostas' | 'ramais';
+type Sub = 'numeros' | 'funis' | 'distribuicao' | 'campos' | 'templates' | 'respostas' | 'ia' | 'ramais';
 const sel = { padding: 7, borderRadius: 8, border: '1px solid var(--linha)', font: 'inherit' } as const;
 
 export function Configurar() {
   const [sub, setSub] = useState<Sub>('numeros');
-  const abas: [Sub, string][] = [['numeros', 'Números de WhatsApp'], ['funis', 'Funis e etapas'], ['distribuicao', 'Distribuição por localização'], ['campos', 'Campos personalizados'], ['templates', 'Templates'], ['respostas', 'Respostas rápidas'], ...(pode('configuracoes', 'editar') ? ([['ramais', 'Ramais (softphone)']] as [Sub, string][]) : [])];
+  const abas: [Sub, string][] = [['numeros', 'Números de WhatsApp'], ['funis', 'Funis e etapas'], ['distribuicao', 'Distribuição por localização'], ['campos', 'Campos personalizados'], ['templates', 'Templates'], ['respostas', 'Respostas rápidas'], ['ia', 'Agente de IA'], ...(pode('configuracoes', 'editar') ? ([['ramais', 'Ramais (softphone)']] as [Sub, string][]) : [])];
   return (
     <div>
       <Abas ativa={sub} mudar={setSub} abas={abas} />
@@ -20,6 +20,7 @@ export function Configurar() {
       {sub === 'campos' && <Campos />}
       {sub === 'templates' && <Templates />}
       {sub === 'respostas' && <Respostas />}
+      {sub === 'ia' && <AgenteIa />}
       {sub === 'ramais' && <Ramais />}
     </div>
   );
@@ -443,6 +444,60 @@ function Ramais() {
         <Campo rotulo="Nome exibido (opcional)" className="l2"><input value={f.nomeExibicao} onChange={(e) => setF({ ...f, nomeExibicao: e.target.value })} /></Campo>
         <Campo rotulo="Prefixo para ligar para fora (opcional)" className="l2"><input value={f.prefixo} onChange={(e) => setF({ ...f, prefixo: e.target.value })} placeholder="Ex.: 0" /></Campo>
         <div className="l4"><button className="botao" disabled={!f.usuarioId || !f.servidor || !f.usuarioSip || m.isPending} onClick={() => m.mutate()}>Salvar ramal</button></div>
+      </div>
+    </div>
+  );
+}
+
+// ───────────── Agente de IA ─────────────
+
+interface ConfigAgente { ativo: boolean; canais: string[]; instrucoes: string; conhecimento: string; maxRespostas: number; ligada: boolean }
+
+/** O agente que atende no WhatsApp enquanto ninguém da equipe pegou a conversa. */
+function AgenteIa() {
+  const qc = useQueryClient();
+  const admin = pode('configuracoes', 'editar');
+  const q = useQuery({ queryKey: ['crm', 'ia-agente'], queryFn: () => api<ConfigAgente>('/crm/ia-agente') });
+  const canais = usarCanais();
+  const [f, setF] = useState<ConfigAgente | null>(null);
+  useEffect(() => { if (q.data && !f) setF(q.data); }, [q.data, f]);
+  const salvar = useMutation({ mutationFn: () => api<ConfigAgente>('/crm/ia-agente', { metodo: 'PUT', corpo: { ativo: f!.ativo, canais: f!.canais, instrucoes: f!.instrucoes, conhecimento: f!.conhecimento, maxRespostas: f!.maxRespostas } }), onSuccess: (r) => { setF(r); qc.invalidateQueries({ queryKey: ['crm', 'ia-agente'] }); } });
+  if (q.isLoading || !f) return <Carregando />;
+  if (q.error) return <Erro erro={q.error} />;
+  return (
+    <div className="coluna" style={{ gap: 12 }}>
+      {!f.ligada && <div className="aviso alerta">A inteligência artificial ainda não está ligada. Cole a chave do Claude em Configurações › Integrações › Inteligência artificial. Sem a chave, o agente não atende e os botões de IA do chat ficam escondidos.</div>}
+      <div className="cartao form">
+        <div className="secao" style={{ gridColumn: '1 / -1', marginTop: 0 }}>Agente que atende no WhatsApp</div>
+        <p className="muted l4" style={{ margin: 0 }}>Quando alguém escreve e ninguém da equipe pegou a conversa, a IA responde. Ela passa para a equipe quando pedem um atendente, em reclamação, pagamento, troca ou garantia, e quando não sabe a resposta. Assim que uma pessoa da equipe pega a conversa ou escreve, a IA sai.</p>
+        <label className="check l4"><input type="checkbox" checked={f.ativo} disabled={!admin || (!f.ligada && !f.ativo)} onChange={(e) => setF({ ...f, ativo: e.target.checked })} /> Atender sozinha as conversas que entram na fila</label>
+        <div className="l4">
+          <label className="muted" style={{ fontSize: 13, fontWeight: 600 }}>Em quais números (nenhum marcado = todos)</label>
+          <div className="flex" style={{ gap: 12, flexWrap: 'wrap', marginTop: 4 }}>
+            {canais.data?.map((c) => <label key={c.id} className="check"><input type="checkbox" disabled={!admin} checked={f.canais.includes(c.id)} onChange={(e) => setF({ ...f, canais: e.target.checked ? [...f.canais, c.id] : f.canais.filter((x) => x !== c.id) })} /> {c.nome}</label>)}
+          </div>
+        </div>
+        <Campo rotulo="Como ela deve atender" className="l4" ajuda="O tom, o objetivo e o que perguntar. Ex.: trate por você; descubra se a pessoa quer comprar ou ser revendedora; para revendedora, peça a cidade.">
+          <textarea rows={5} maxLength={6000} disabled={!admin} value={f.instrucoes} onChange={(e) => setF({ ...f, instrucoes: e.target.value })} />
+        </Campo>
+        <Campo rotulo="O que ela precisa saber sobre a empresa" className="l4" ajuda="Endereço, horário, formas de pagamento, como funciona a revenda, prazo de entrega, perguntas frequentes. Ela só afirma o que estiver escrito aqui; o resto ela diz que vai confirmar com a equipe.">
+          <textarea rows={10} maxLength={20000} disabled={!admin} value={f.conhecimento} onChange={(e) => setF({ ...f, conhecimento: e.target.value })} />
+        </Campo>
+        <Campo rotulo="Respostas seguidas antes de passar para a equipe" className="l2" ajuda="Evita conversa em círculo. Chegando ao limite, a conversa fica na fila com um recado.">
+          <input type="number" min={1} max={50} disabled={!admin} value={f.maxRespostas} onChange={(e) => setF({ ...f, maxRespostas: Math.max(1, Math.min(50, Number(e.target.value) || 1)) })} />
+        </Campo>
+        {salvar.error && <div className="l4"><Erro erro={salvar.error} /></div>}
+        {salvar.isSuccess && <div className="aviso ok l4">Salvo. {f.ativo ? 'O agente já está atendendo as conversas novas.' : 'O agente está desligado.'}</div>}
+        {admin && <div className="l4"><button className="botao" disabled={salvar.isPending} onClick={() => salvar.mutate()}>Salvar</button></div>}
+      </div>
+      <div className="cartao">
+        <b>No chat</b>
+        <ul style={{ margin: '8px 0 0', paddingLeft: 20 }}>
+          <li>As mensagens da IA aparecem marcadas com "IA", e a conversa mostra um aviso enquanto ela está atendendo.</li>
+          <li>"✨ Sugerir" escreve uma resposta para você revisar e enviar. Funciona mesmo com o agente desligado.</li>
+          <li>"🤖 Acionar IA" liga a IA só naquela conversa; "Pausar IA" desliga.</li>
+          <li>Quando a IA passa a conversa, ela deixa um recado interno dizendo o motivo.</li>
+        </ul>
       </div>
     </div>
   );

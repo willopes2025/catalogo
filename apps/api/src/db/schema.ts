@@ -1142,6 +1142,10 @@ export const crmConversas = pgTable(
     ultimaEntradaEm: timestamp('ultima_entrada_em', { withTimezone: true }),
     /** Fixada no topo da lista de conversas. */
     fixada: boolean('fixada').notNull().default(false),
+    /** Agente de IA nesta conversa: vazio = segue a configuração (atende enquanto está na fila); true = ligado à mão; false = desligado (alguém da equipe assumiu ou a IA passou a vez). */
+    iaAtiva: boolean('ia_ativa'),
+    /** Quantas respostas a IA já deu desde que a conversa entrou na fila (limite para não ficar em círculo). */
+    iaRespostas: integer('ia_respostas').notNull().default(0),
     criadoEm: criadoEm(),
   },
   (t) => ({ unica: uniqueIndex('crm_conversas_contato_canal_idx').on(t.contatoId, t.canalId), recentes: index('crm_conversas_recentes_idx').on(t.ultimaMensagemEm), porStatus: index('crm_conversas_status_idx').on(t.status, t.atendenteId) }),
@@ -1175,6 +1179,8 @@ export const crmMensagens = pgTable(
     reacoes: jsonb('reacoes').$type<{ de: 'contato' | 'equipe'; emoji: string }[]>().notNull().default([]),
     /** Apagada para todos (o texto e a mídia somem da tela). */
     apagadaEm: timestamp('apagada_em', { withTimezone: true }),
+    /** Escrita pelo agente de IA. */
+    ia: boolean('ia').notNull().default(false),
     criadoEm: criadoEm(),
   },
   (t) => ({ porConversa: index('crm_mensagens_conversa_idx').on(t.conversaId, t.criadoEm), porExterno: index('crm_mensagens_externo_idx').on(t.idExterno) }),
@@ -1730,4 +1736,20 @@ export const metaLeads = pgTable(
     criadoEm: criadoEm(),
   },
   (t) => ({ porForm: index('meta_leads_form_idx').on(t.formId) }),
+);
+
+/** Cada chamada à IA: para acompanhar o uso (e o custo) por recurso. */
+export const iaUsos = pgTable(
+  'ia_usos',
+  {
+    id: id(),
+    /** agente | sugestao | reconhecer_peca | maleta | foto | teste */
+    recurso: text('recurso').notNull(),
+    modelo: text('modelo').notNull(),
+    tokensEntrada: integer('tokens_entrada').notNull().default(0),
+    tokensSaida: integer('tokens_saida').notNull().default(0),
+    usuarioId: uuid('usuario_id').references(() => usuarios.id, { onDelete: 'set null' }),
+    criadoEm: criadoEm(),
+  },
+  (t) => ({ porDia: index('ia_usos_dia_idx').on(t.criadoEm) }),
 );

@@ -254,6 +254,35 @@ http
       if (r === 'disconnect') { wa.zapiConectado = false; return responder(res, 200, { value: true }); }
       return responder(res, 404, { error: 'not found' });
     }
+    // ── IA: Claude (texto e leitura de imagem) e OpenAI (gerar imagem) ──
+    if (url.pathname === '/claude/v1/messages') {
+      if (req.headers['x-api-key'] !== 'chave-claude-teste') return responder(res, 401, { type: 'error', error: { type: 'authentication_error', message: 'invalid x-api-key' } });
+      const blocos = (m) => (typeof m.content === 'string' ? [{ type: 'text', text: m.content }] : m.content);
+      const ultima = corpo.messages.at(-1);
+      const texto = blocos(ultima).filter((b) => b.type === 'text').map((b) => b.text).join(' ');
+      const fotos = corpo.messages.flatMap((m) => blocos(m)).filter((b) => b.type === 'image').length;
+      const papeis = corpo.messages.map((m) => m.role).join(',');
+      if (/user,user|assistant,assistant/.test(papeis) || corpo.messages[0].role !== 'user') return responder(res, 400, { type: 'error', error: { type: 'invalid_request_error', message: 'roles must alternate' } });
+      let saida;
+      if (corpo.system.includes('"passar"')) {
+        if (/sobrecarga/i.test(texto)) return responder(res, 529, { type: 'error', error: { type: 'overloaded_error', message: 'Overloaded' } });
+        saida = /atendente|reclama/i.test(texto) ? '{"resposta": "Claro! Vou chamar alguém da equipe para continuar com você.", "passar": true, "motivo": "Pediu para falar com atendente."}' : `Aqui está:\n\`\`\`json\n{"resposta": "Oi! ${fotos ? 'Que peça linda na foto! ' : ''}Como posso ajudar?", "passar": false}\n\`\`\``;
+      } else if (corpo.system.includes('SOMENTE com um JSON') && corpo.system.includes('descreva')) {
+        saida = '{"tipo": "brinco", "descricao": "Brinco de argola dourado, liso", "palavras": ["brinco", "argola", "dourado"]}';
+      } else if (corpo.system.includes('qual delas é a mesma peça')) {
+        const refs = [...texto.matchAll(/Candidata ([A-Za-z0-9._-]+)/g)].map((m) => m[1]);
+        saida = JSON.stringify({ ordem: refs.map((ref, i) => ({ ref, confianca: i === 0 ? 92 : 20, motivo: i === 0 ? 'Mesmo formato e acabamento.' : 'Formato diferente.' })) });
+      } else if (corpo.system.includes('montar a maleta')) {
+        const refs = [...texto.matchAll(/^- ([A-Za-z0-9._-]+) \|/gm)].map((m) => m[1]);
+        saida = JSON.stringify({ itens: [...refs.slice(0, 3).map((ref) => ({ ref, qtd: 2 })), { ref: 'NAO-EXISTE', qtd: 1 }, { ref: refs[0], qtd: 9999 }], resumo: 'Mais brincos, que é o que ela mais vende.' });
+      } else saida = '"Oi! Posso te ajudar com mais alguma coisa?"';
+      return responder(res, 200, { id: 'msg_teste', type: 'message', role: 'assistant', model: corpo.model, content: [{ type: 'text', text: saida }], stop_reason: 'end_turn', usage: { input_tokens: 1200 + fotos * 800, output_tokens: 60 } });
+    }
+    if (url.pathname === '/openai/v1/images/edits') {
+      if (req.headers.authorization !== 'Bearer chave-openai-teste') return responder(res, 401, { error: { message: 'Incorrect API key provided', code: 'invalid_api_key' } });
+      // PNG de 1x1 válido.
+      return responder(res, 200, { created: 1, data: [{ b64_json: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==' }], usage: { input_tokens: 300, output_tokens: 4000 } });
+    }
     // ── CEP e CNPJ (ViaCEP, BrasilAPI, CNPJ.ws) ──
     if (url.pathname.startsWith('/viacep/ws/')) {
       const cep = url.pathname.split('/')[3];

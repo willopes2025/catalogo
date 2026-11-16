@@ -6,7 +6,7 @@ import { Carregando, Erro } from '../../componentes/ui';
 import { Chat } from './Chat';
 import { ha, iniciais, telefoneBonito, usarAtendentes, usarCampos, usarCanais, usarContadores, usarFunis, useRelogio, ValorCampo } from './comum';
 
-interface Conversa { id: string; status: string; naoLidas: number; fixada: boolean; ultimaMensagem: string | null; ultimaMensagemEm: string | null; filaDesde: string | null; atendente: string | null; canal: string; canalTipo: string; contatoId: string; contato: string; telefone: string; lead: { id: string; titulo: string; etapa: string; funil: string } | null }
+interface Conversa { id: string; status: string; naoLidas: number; fixada: boolean; iaAtiva: boolean | null; ultimaMensagem: string | null; ultimaMensagemEm: string | null; filaDesde: string | null; atendente: string | null; canal: string; canalTipo: string; contatoId: string; contato: string; telefone: string; lead: { id: string; titulo: string; etapa: string; funil: string } | null }
 type Aba = 'fila' | 'minhas' | 'atendimento' | 'resolvidas';
 
 /** Caixa de entrada: fila de espera, minhas conversas, em atendimento (gestão) e resolvidas. */
@@ -173,7 +173,7 @@ export function Conversas({ inicial }: { inicial?: string | null }) {
                 {sel && <input type="checkbox" aria-label={`Selecionar a conversa com ${c.contato}`} checked={sel.includes(c.id)} readOnly style={{ marginTop: 10, width: 'auto', flex: 'none' }} />}
                 <span className="avatar g">{iniciais(c.contato)}</span>
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div className="nome">{c.fixada && <span title="Fixada no topo">📌 </span>}{c.contato}</div>
+                  <div className="nome">{c.fixada && <span title="Fixada no topo">📌 </span>}{c.iaAtiva === true && <span title="IA ligada nesta conversa">🤖 </span>}{c.contato}</div>
                   <div className="previa">{c.ultimaMensagem ?? telefoneBonito(c.telefone)}</div>
                   <div className="muted" style={{ fontSize: 11 }}>{c.canal}{c.lead ? ` · ${c.lead.etapa}` : ''}{aba !== 'minhas' && c.atendente ? ` · ${c.atendente}` : ''}</div>
                 </div>

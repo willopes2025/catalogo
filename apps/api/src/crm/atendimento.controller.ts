@@ -1,4 +1,4 @@
-import { BadRequestException, Body, Controller, Delete, ForbiddenException, Get, Headers, HttpCode, Inject, NotFoundException, Param, ParseUUIDPipe, Patch, Post, Query, Req, Res } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Delete, ForbiddenException, Get, Headers, HttpCode, Inject, NotFoundException, Param, ParseUUIDPipe, Patch, Post, Put, Query, Req, Res } from '@nestjs/common';
 import { existsSync } from 'node:fs';
 import type { Request, Response } from 'express';
 import { and, asc, desc, eq, inArray, sql, type SQL } from 'drizzle-orm';
@@ -34,6 +34,8 @@ import {
 } from '../db/schema';
 import { CrmService } from './crm.service';
 import { CanaisService } from './canais.service';
+import { AgenteService } from './agente.service';
+import { ErroIa, IaService } from '../ia/ia.service';
 import { AutomacaoService } from './automacao.service';
 
 /** Lista como array do Postgres (o sql`` do Drizzle expande arrays em vários parâmetros). */
@@ -77,6 +79,8 @@ export class AtendimentoController {
     @Inject(DB) private readonly db: Db,
     private readonly crm: CrmService,
     private readonly canais: CanaisService,
+    private readonly agente: AgenteService,
+    private readonly ia: IaService,
     private readonly automacao: AutomacaoService,
     private readonly arquivos: ArquivosService,
     private readonly auditoria: AuditoriaService,
@@ -438,6 +442,7 @@ export class AtendimentoController {
         status: crmConversas.status,
         naoLidas: crmConversas.naoLidas,
         fixada: crmConversas.fixada,
+        iaAtiva: crmConversas.iaAtiva,
         ultimaMensagem: crmConversas.ultimaMensagem,
         ultimaMensagemEm: crmConversas.ultimaMensagemEm,
         ultimaEntradaEm: crmConversas.ultimaEntradaEm,
@@ -490,6 +495,7 @@ export class AtendimentoController {
         erro: crmMensagens.erro,
         autor: usuarios.nome,
         automatica: sql<boolean>`(${crmMensagens.gatilhoId} is not null or ${crmMensagens.disparoId} is not null)`,
+        ia: crmMensagens.ia,
         criadoEm: crmMensagens.criadoEm,
         reacoes: crmMensagens.reacoes,
         apagada: sql<boolean>`${crmMensagens.apagadaEm} is not null`,
@@ -513,7 +519,9 @@ export class AtendimentoController {
       // Apagada para todos: o texto e o arquivo não aparecem mais.
       mensagens: ms.reverse().map((m) => (m.apagada ? { ...m, texto: null, midia: null, midiaNome: null } : m)),
       // O que este tipo de número consegue fazer com uma mensagem.
-      recursos: { reagir: true, apagar: canal.tipo !== 'oficial' },
+      recursos: { reagir: true, apagar: canal.tipo !== 'oficial', ia: this.ia.texto },
+      // A IA está atendendo esta conversa agora?
+      iaAtendendo: this.ia.texto && (cv.iaAtiva === true || (cv.iaAtiva === null && cv.status === 'fila' && (await this.agente.config().then((a) => a.ativo && (!a.canais.length || a.canais.includes(cv.canalId)))))),
     };
   }
 
@@ -586,6 +594,47 @@ export class AtendimentoController {
     const r = await this.canais.apagarMensagem(id, mensagemId);
     await this.auditoria.registrar({ usuarioId: u.id, acao: 'apagar_mensagem', entidade: 'crm_mensagem', entidadeId: mensagemId });
     return r;
+  }
+
+  // ───────────── Agente de IA ─────────────
+
+  @Get('crm/ia-agente')
+  @Permissao('crm', 'ver')
+  async agenteConfig() {
+    return { ...(await this.agente.config()), ligada: this.ia.texto };
+  }
+
+  @Put('crm/ia-agente')
+  @Permissao('configuracoes', 'editar')
+  async salvarAgente(@Usuario() u: UsuarioLogado, @Body() body: unknown) {
+    const d = validar(z.object({ ativo: z.boolean(), canais: z.array(uuid).max(50).default([]), instrucoes: z.string().max(6000).default(''), conhecimento: z.string().max(20000).default(''), maxRespostas: z.number().int().min(1).max(50).default(10) }), body);
+    if (d.ativo && !this.ia.texto) throw new BadRequestException('Cole a chave do Claude em Configurações › Integrações › Inteligência artificial antes de ligar o agente.');
+    await this.agente.salvarConfig(d);
+    await this.auditoria.registrar({ usuarioId: u.id, acao: d.ativo ? 'ligar' : 'configurar', entidade: 'ia_agente', dados: { ativo: d.ativo, canais: d.canais.length, maxRespostas: d.maxRespostas } });
+    return { ...d, ligada: this.ia.texto };
+  }
+
+  /** Liga ou pausa a IA nesta conversa ("Acionar IA"). */
+  @Post('crm/conversas/:id/ia')
+  @Permissao('crm', 'editar')
+  async acionarIa(@Usuario() u: UsuarioLogado, @Param('id', ParseUUIDPipe) id: string, @Body() body: unknown) {
+    const { ativa } = validar(z.object({ ativa: z.boolean() }), body);
+    await this.conversaMinha(u, id);
+    if (ativa && !this.ia.texto) throw new BadRequestException('A inteligência artificial não está ligada. Cole a chave do Claude em Configurações › Integrações.');
+    return this.agente.acionar(id, ativa);
+  }
+
+  /** Sugestão de resposta para o atendente revisar e enviar. */
+  @Post('crm/conversas/:id/sugerir')
+  @Permissao('crm', 'editar')
+  async sugerir(@Usuario() u: UsuarioLogado, @Param('id', ParseUUIDPipe) id: string) {
+    await this.conversaVisivel(u, id);
+    try {
+      return await this.agente.sugerir(id, u.id);
+    } catch (e) {
+      if (e instanceof ErroIa) throw new BadRequestException(e.message);
+      throw e;
+    }
   }
 
   /** Etiquetas em uso (contatos e cards), para o filtro da lista de conversas. */

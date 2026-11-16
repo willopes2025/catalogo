@@ -30,6 +30,8 @@ export interface EnvioCrm {
   disparoId?: string | null;
   /** Mensagem da conversa que esta responde (citação). */
   citarId?: string | null;
+  /** Escrita pelo agente de IA. */
+  ia?: boolean;
   /** Lead para preencher {{nome}}, {{etapa}}… */
   leadId?: string | null;
 }
@@ -307,7 +309,7 @@ export class CanaisService implements OnModuleInit {
     // Só pega se ninguém pegou antes (dois atendentes clicando ao mesmo tempo).
     const [r] = await this.db
       .update(crmConversas)
-      .set({ status: 'atendimento', atendenteId: usuarioId, pegaEm: new Date(), naoLidas: 0 })
+      .set({ status: 'atendimento', atendenteId: usuarioId, pegaEm: new Date(), naoLidas: 0, iaAtiva: false })
       .where(and(eq(crmConversas.id, conversaId), sql`(${crmConversas.atendenteId} is null or ${crmConversas.status} <> 'atendimento' or ${crmConversas.atendenteId} = ${usuarioId})`))
       .returning();
     if (!r) throw new BadRequestException('Outra pessoa já pegou esta conversa.');
@@ -323,7 +325,8 @@ export class CanaisService implements OnModuleInit {
     if (!gestor && cv.atendenteId !== usuarioId) throw new ForbiddenException('Só quem está atendendo (ou a gestão) pode transferir.');
     const [r] = await this.db
       .update(crmConversas)
-      .set(para ? { status: 'atendimento', atendenteId: para, pegaEm: new Date() } : { status: 'fila', atendenteId: null, filaDesde: new Date() })
+      // Devolvida para a fila: a IA volta a poder atender (se estiver ligada na configuração).
+      .set(para ? { status: 'atendimento', atendenteId: para, pegaEm: new Date(), iaAtiva: false } : { status: 'fila', atendenteId: null, filaDesde: new Date(), iaAtiva: null, iaRespostas: 0 })
       .where(eq(crmConversas.id, conversaId))
       .returning();
     await this.notaNosLeads(cv.contatoId, para ? 'Conversa transferida.' : 'Conversa devolvida para a fila.', usuarioId, { para });
@@ -334,7 +337,7 @@ export class CanaisService implements OnModuleInit {
     const [cv] = await this.db.select().from(crmConversas).where(eq(crmConversas.id, conversaId));
     if (!cv) throw new NotFoundException('Conversa não encontrada.');
     if (!gestor && cv.atendenteId && cv.atendenteId !== usuarioId) throw new ForbiddenException('Esta conversa é de outro atendente.');
-    const [r] = await this.db.update(crmConversas).set({ status: 'resolvida', naoLidas: 0 }).where(eq(crmConversas.id, conversaId)).returning();
+    const [r] = await this.db.update(crmConversas).set({ status: 'resolvida', naoLidas: 0, iaAtiva: null, iaRespostas: 0 }).where(eq(crmConversas.id, conversaId)).returning();
     await this.notaNosLeads(cv.contatoId, 'Atendimento resolvido.', usuarioId);
     return r;
   }
@@ -396,7 +399,7 @@ export class CanaisService implements OnModuleInit {
     const midiaNome = e.midia ? await this.arquivos.salvarMidia(e.midia.conteudo, e.midia.mime) : null;
     const [m] = await this.db
       .insert(crmMensagens)
-      .values({ citadaId, conversaId: cv.id, direcao: 'saida', tipo: e.tipo, texto: textoGuardado, midia: midiaNome, midiaNome: e.midia?.nome ?? null, templateNome, status: 'pendente', usuarioId: e.usuarioId ?? null, gatilhoId: e.gatilhoId ?? null, disparoId: e.disparoId ?? null })
+      .values({ ia: !!e.ia, citadaId, conversaId: cv.id, direcao: 'saida', tipo: e.tipo, texto: textoGuardado, midia: midiaNome, midiaNome: e.midia?.nome ?? null, templateNome, status: 'pendente', usuarioId: e.usuarioId ?? null, gatilhoId: e.gatilhoId ?? null, disparoId: e.disparoId ?? null })
       .returning();
     try {
       const r = await this.conexao(canal).enviar(saida);
@@ -404,7 +407,9 @@ export class CanaisService implements OnModuleInit {
       const resumo = textoGuardado ?? `[${e.tipo}]`;
       // Atendente respondendo uma conversa da fila: ela passa a ser dele.
       const pegar = e.usuarioId && cv.status !== 'atendimento' ? { status: 'atendimento', atendenteId: e.usuarioId, pegaEm: new Date() } : {};
-      await this.db.update(crmConversas).set({ ultimaMensagem: resumo.slice(0, 200), ultimaMensagemEm: new Date(), ...pegar }).where(eq(crmConversas.id, cv.id));
+      // Uma pessoa da equipe escreveu: a IA sai desta conversa.
+      const semIa = e.usuarioId ? { iaAtiva: false } : {};
+      await this.db.update(crmConversas).set({ ultimaMensagem: resumo.slice(0, 200), ultimaMensagemEm: new Date(), ...pegar, ...semIa }).where(eq(crmConversas.id, cv.id));
       await this.crm.tocarInteracao(cv.contatoId);
       return ok;
     } catch (err) {
@@ -537,6 +542,9 @@ export class CanaisService implements OnModuleInit {
         texto = [texto, `[mídia não baixada: ${(e as Error).message}]`].filter(Boolean).join(' ');
       }
     }
+    // O WhatsApp marca a hora em segundos inteiros: uma mensagem que chega logo depois de uma resposta
+    // ficaria "antes" dela na conversa. Mensagem que acabou de chegar nunca entra atrás da última.
+    if (cv.ultimaMensagemEm && m.quando <= cv.ultimaMensagemEm && Date.now() - m.quando.getTime() < 60_000) m.quando = new Date(cv.ultimaMensagemEm.getTime() + 1);
     const citada = m.citaIdExterno ? await this.mensagemDoCanal(c.id, m.citaIdExterno) : null;
     await this.db.insert(crmMensagens).values({
       citadaId: citada && citada.conversaId === cv.id ? citada.id : null,
@@ -566,6 +574,8 @@ export class CanaisService implements OnModuleInit {
         ultimaEntradaEm: m.quando,
         naoLidas: sql`${crmConversas.naoLidas} + 1`,
         ...(voltaFila ? { status: 'fila', atendenteId: null, filaDesde: new Date() } : {}),
+        // Atendimento novo: a IA pode atender de novo, mesmo que tenha passado a vez da outra vez.
+        ...(voltaFila && cv.iaAtiva === false ? { iaAtiva: null, iaRespostas: 0 } : {}),
         ...(cv.status === 'fila' && !cv.filaDesde ? { filaDesde: new Date() } : {}),
       })
       .where(eq(crmConversas.id, cv.id));
@@ -588,6 +598,7 @@ export class CanaisService implements OnModuleInit {
     }
     await this.crm.tocarInteracao(contato.id);
     for (const l of leads) this.crm.emitir({ tipo: 'mensagem_recebida', leadId: l.id, texto: texto ?? '' });
+    this.crm.emitir({ tipo: 'conversa_entrada', conversaId: cv.id });
   }
 
   private async status(s: StatusEntrada) {
