@@ -40,15 +40,15 @@ function Numeros() {
     <div className="coluna" style={{ gap: 10 }}>
       {admin && !novo && (
         <div className="flex" style={{ gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-          <button className="botao" disabled={!qrProprio} title={qrProprio ? undefined : 'O servidor de WhatsApp por QR code ainda não foi instalado nesta VPS'} onClick={() => setNovo('evolution')}>+ Conectar WhatsApp por QR code</button>
+          <button className="botao" disabled={!qrProprio} title={qrProprio ? undefined : 'O servidor de WhatsApp por QR code ainda não foi instalado nesta VPS'} onClick={() => setNovo('evolution')}>+ Conectar WhatsApp por QR code (Evolution API)</button>
           <button className="botao claro" onClick={() => setNovo('oficial')}>+ WhatsApp oficial (Meta)</button>
-          <button className="botao claro" onClick={() => setNovo('qrcode')}>+ Z-API (ID da instância e token)</button>
-          {opcoes.data && !qrProprio && <span className="muted" style={{ fontSize: 13 }}>O QR code direto fica disponível depois de rodar o instalador da VPS de novo.</span>}
+          <button className="botao claro" title="Só para quem já tem conta paga na Z-API. O normal é usar o QR code (Evolution API)." onClick={() => setNovo('qrcode')}>+ Z-API (só se já tiver conta)</button>
+          {opcoes.data && !qrProprio && <span className="muted" style={{ fontSize: 13 }}>O QR code (Evolution API) fica disponível depois de rodar o instalador da VPS de novo.</span>}
         </div>
       )}
       {novo && <FormCanal tipo={novo} fechar={(id) => { setNovo(null); if (id) setRecemCriado(id); }} />}
       {canais.error && <Erro erro={canais.error} />}
-      {!canais.data?.length && !novo && <div className="cartao vazio">Nenhum número ligado. O QR code liga qualquer celular (da empresa ou de uma atendente) só lendo o código na tela. O oficial serve para disparos em massa com templates aprovados pela Meta.</div>}
+      {!canais.data?.length && !novo && <div className="cartao vazio">Nenhum número ligado. O QR code (Evolution API, já instalada no servidor do sistema) liga qualquer celular (da empresa ou de uma atendente) só lendo o código na tela. O oficial serve para disparos em massa com templates aprovados pela Meta.</div>}
       {canais.data?.map((c) => (editando === c.id ? <FormCanal key={c.id} tipo={c.tipo} canal={c} fechar={() => setEditando(null)} /> : <CartaoCanal key={c.id} canal={c} destaque={recemCriado === c.id} editar={() => setEditando(c.id)} />))}
     </div>
   );
@@ -134,7 +134,7 @@ function FormCanal({ tipo, canal, fechar }: { tipo: TipoCanal; canal?: Canal; fe
   );
   return (
     <div className="cartao form">
-      <div className="secao" style={{ gridColumn: '1 / -1', marginTop: 0 }}>{canal ? `Editar ${canal.nome}` : tipo === 'oficial' ? 'Novo WhatsApp oficial (API Cloud da Meta)' : tipo === 'evolution' ? 'Conectar WhatsApp por QR code' : 'Novo WhatsApp pela Z-API (ID da instância e token)'}</div>
+      <div className="secao" style={{ gridColumn: '1 / -1', marginTop: 0 }}>{canal ? `Editar ${canal.nome}` : tipo === 'oficial' ? 'Novo WhatsApp oficial (API Cloud da Meta)' : tipo === 'evolution' ? 'Conectar WhatsApp por QR code (Evolution API)' : 'Novo WhatsApp pela Z-API (ID da instância e token)'}</div>
       {tipo === 'evolution' && !canal && <p className="muted l4" style={{ margin: 0 }}>Só dê um nome ao número e salve. O QR code aparece na hora: é ler com o celular e pronto, sem digitar nenhum código.</p>}
       <Campo rotulo="Nome do número" className="l2"><input value={f.nome} onChange={(e) => setF({ ...f, nome: e.target.value })} placeholder={tipo === 'oficial' ? 'Matriz oficial' : 'Celular da Ana'} /></Campo>
       {tipo === 'oficial' ? (
