@@ -12,6 +12,7 @@ import { AuditoriaService } from '../comum/auditoria.service';
 import { AssertivaService } from './assertiva.service';
 import { EmailService } from './email.service';
 import { JueriService } from '../jueri/jueri.service';
+import { ErroIa, IaService } from '../ia/ia.service';
 
 @Controller('integracoes')
 export class IntegracoesController {
@@ -23,9 +24,15 @@ export class IntegracoesController {
     private readonly asaas: AsaasService,
     private readonly fiscal: FiscalService,
     private readonly jueri: JueriService,
+    private readonly ia: IaService,
   ) {}
 
   private ligada(chave: string) {
+    const v = (n: string) => !!this.segredos.v(n);
+    if (chave === 'ia') return this.ia.texto || this.ia.imagem;
+    if (chave === 'cra') return ['CRA_URL', 'CRA_USUARIO', 'CRA_SENHA', 'CRA_CODIGO'].every(v);
+    if (chave === 'google') return v('GOOGLE_CLIENT_ID') && v('GOOGLE_CLIENT_SECRET');
+    if (chave === 'push') return v('FIREBASE_CONTA_SERVICO') || (v('APNS_CHAVE_P8') && v('APNS_KEY_ID') && v('APNS_TEAM_ID'));
     if (chave === 'meta_ads') return !!(this.segredos.v('META_ADS_TOKEN') && this.segredos.v('META_ADS_CONTA'));
     if (chave === 'jueri') return this.jueri.configurado;
     return chave === 'email' ? this.email.configurado : chave === 'asaas' ? this.asaas.configurado : chave === 'fiscal' ? this.fiscal.configurado : chave === 'assertiva' ? this.assertiva.configurada : false;
@@ -40,7 +47,7 @@ export class IntegracoesController {
     return INTEGRACOES.map((i) => ({
       ...i,
       ligada: this.ligada(i.chave),
-      ambiente: i.chave === 'asaas' ? this.asaas.ambiente : i.chave === 'fiscal' ? this.fiscal.ambiente : null,
+      ambiente: i.chave === 'asaas' ? this.asaas.ambiente : i.chave === 'fiscal' ? this.fiscal.ambiente : i.chave === 'ia' ? ([this.ia.texto && 'Claude', this.ia.imagem && 'OpenAI'].filter(Boolean).join(' e ') || null) : null,
       extra: i.chave === 'asaas' ? { webhookUrl: `${dominio}/api/webhooks/asaas` } : null,
       campos: i.campos.map((c) => {
         const v = this.segredos.v(c.nome);
@@ -99,6 +106,16 @@ export class IntegracoesController {
     if (chave === 'fiscal') return this.fiscal.testar();
     if (chave === 'assertiva') return this.assertiva.testar();
     if (chave === 'jueri') return this.jueri.testar();
+    if (chave === 'ia') {
+      if (!this.ia.texto) return { ok: true, mensagem: 'Só a chave da OpenAI está preenchida: as fotos de catálogo ficam ligadas. Para testar o Claude, cole a chave dele.' };
+      try {
+        await this.ia.perguntar({ recurso: 'teste', sistema: 'Responda só com a palavra: ok', mensagens: [{ role: 'user', content: 'Teste de conexão.' }], maxTokens: 10, usuarioId: u.id });
+      } catch (e) {
+        if (e instanceof ErroIa) throw new BadRequestException(e.message);
+        throw e;
+      }
+      return { ok: true, mensagem: `O Claude respondeu (modelo ${this.ia.modelo}). O agente, a sugestão de resposta, a maleta e o reconhecimento da peça já podem ser usados.` };
+    }
     if (chave === 'meta_ads') {
       const conta = (this.segredos.v('META_ADS_CONTA') ?? '').replace(/^act_/, '');
       const base = (process.env.META_ADS_URL ?? 'https://graph.facebook.com/v21.0').replace(/\/$/, '');

@@ -1612,6 +1612,10 @@ test('agente de IA no WhatsApp: atende a fila, passa para a equipe, sai quando a
   // Sem a chave, não liga; com a chave, liga só no primeiro número.
   assert.equal((await chamar('PUT', '/crm/ia-agente', { ativo: true, canais: [c.id], instrucoes: '', conhecimento: '', maxRespostas: 3 })).status, 400);
   await ok('PUT', '/integracoes/ia', { valores: { ANTHROPIC_API_KEY: 'chave-claude-teste' } });
+  // A tela de integrações mostra a IA como ligada e o teste fala com o Claude.
+  const ia = (await ok('GET', '/integracoes')).find((i) => i.chave === 'ia');
+  assert.deepEqual([ia.ligada, ia.ambiente], [true, 'Claude']);
+  assert.match((await ok('POST', '/integracoes/ia/testar', {})).mensagem, /O Claude respondeu/);
   const cfg = await ok('PUT', '/crm/ia-agente', { ativo: true, canais: [c.id], instrucoes: 'Trate por você.', conhecimento: 'Loja em Vila Velha, aberta das 9h às 18h.', maxRespostas: 3 });
   assert.equal(cfg.ligada, true);
 
