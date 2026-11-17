@@ -50,6 +50,8 @@ import { Formularios } from './paginas/Formularios';
 import { FormularioPublico } from './paginas/FormularioPublico';
 import { Marketing } from './paginas/Marketing';
 import { Cadastro } from './paginas/Cadastro';
+import { Cobranca } from './paginas/cobranca/Cobranca';
+import { Devedor } from './paginas/cobranca/Devedor';
 
 const cliente = new QueryClient({ defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: false, staleTime: 15_000 } } });
 
@@ -82,7 +84,7 @@ ReactDOM.createRoot(document.getElementById('raiz')!).render(
               </Protegido>
             }
           >
-            <Route index element={pode('inicio', 'ver') ? <Inicio /> : <Navigate to="/meu-ponto" replace />} />
+            <Route index element={pode('inicio', 'ver') ? <Inicio /> : <Navigate to={pode('cobranca', 'ver') ? '/cobranca' : '/meu-ponto'} replace />} />
             <Route path="meu-ponto" element={<MeuPonto />} />
             <Route path="agenda" element={<Agenda />} />
             <Route path="rh" element={<Rh />} />
@@ -103,6 +105,8 @@ ReactDOM.createRoot(document.getElementById('raiz')!).render(
             <Route path="maletas/:id" element={<DetalheMaleta />} />
             <Route path="maletas/:id/acerto" element={<Acerto />} />
             <Route path="financeiro" element={<Financeiro />} />
+            <Route path="cobranca" element={<Cobranca />} />
+            <Route path="cobranca/devedor/:pessoaId" element={<Devedor />} />
             <Route path="lojas" element={<Lojas />} />
             <Route path="vendas" element={<Vendas />} />
             <Route path="vendas/nova" element={<NovaVenda />} />

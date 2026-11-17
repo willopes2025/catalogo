@@ -2518,7 +2518,7 @@ test('app da representante: registra o celular e recebe notificações pelo Fire
 
 test('preenchimento automático: CEP traz o endereço e CNPJ traz os dados da empresa, com segunda fonte', async () => {
   const c = await ok('GET', '/consultas/cep/29101-010');
-  assert.deepEqual(c, { cep: '29101010', logradouro: 'Avenida Champagnat', bairro: 'Centro', cidade: 'Vila Velha', uf: 'ES' });
+  assert.deepEqual(c, { cep: '29101010', logradouro: 'Avenida Champagnat', bairro: 'Centro', cidade: 'Vila Velha', uf: 'ES', ibge: '3205200' });
   // Primeira fonte fora do ar: a segunda responde.
   assert.equal((await ok('GET', '/consultas/cep/29000001')).cidade, 'Vitória');
   assert.equal((await chamar('GET', '/consultas/cep/00000000')).status, 404);
@@ -2539,6 +2539,212 @@ test('preenchimento automático: CEP traz o endereço e CNPJ traz os dados da em
   token = '';
   assert.equal((await chamar('GET', '/consultas/cep/29101010')).status, 401);
   token = admin;
+});
+
+test('cobrança: carteira, terceirizada vê só a dela, contato e promessa, 2ª via troca o boleto, acordo com quebra e abatimento, régua', async () => {
+  const dia = (n) => new Date(Date.now() - 3 * 3600_000 + n * 86400_000).toISOString().slice(0, 10);
+  const cpf = (base) => {
+    const d = String(base).padStart(9, '0').split('').map(Number);
+    for (const n of [10, 11]) d.push(((d.reduce((s, x, i) => s + x * (n - i), 0) * 10) % 11) % 10);
+    return d.join('');
+  };
+  const emp = (await ok('GET', '/empresas'))[0];
+  const cfg0 = await ok('GET', '/cobranca/config');
+  assert.equal(cfg0.regua.passos.length, 5, 'régua padrão: 3 dias antes, no dia, 3, 10 e 30 depois');
+  await ok('PUT', '/cobranca/config', { ...cfg0, multaPb: 200, jurosMesPb: 100, diasCarencia: 0, descontoMaxPb: 1000, descontoMaxGestorPb: 5000, parcelasMax: 6, regua: { ...cfg0.regua, ativa: false } });
+  assert.equal((await chamar('PUT', '/cobranca/config', { ...cfg0, multaPb: 5000 })).status, 400, 'multa acima de 10% é recusada');
+  const endereco = { cep: '29101010', logradouro: 'Avenida Champagnat', numero: '100', bairro: 'Centro', cidade: 'Vila Velha', uf: 'ES' };
+  const a = await ok('POST', '/pessoas', { tipo: 'cliente', nome: 'Ana Devedora Cobrança', documento: cpf(123456781), telefone1: '27991110001', email: 'ana.cobranca@exemplo.com', ...endereco });
+  const b = await ok('POST', '/pessoas', { tipo: 'cliente', nome: 'Bruna Atrasada Cobrança', documento: cpf(223456782), telefone1: '27991110002', ...endereco });
+  const [ta1] = await ok('POST', '/financeiro/titulos', { empresaId: emp.id, tipo: 'receber', pessoaId: a.id, descricao: 'Parcela antiga Ana', valor: 10000, vencimento: dia(-40) });
+  const [ta2] = await ok('POST', '/financeiro/titulos', { empresaId: emp.id, tipo: 'receber', pessoaId: a.id, descricao: 'Parcela nova Ana', valor: 6000, vencimento: dia(-10) });
+  const [tb] = await ok('POST', '/financeiro/titulos', { empresaId: emp.id, tipo: 'receber', pessoaId: b.id, descricao: 'Parcela Bruna', valor: 10000, vencimento: dia(-5) });
+
+  // Carteira: valor atualizado com multa e juros simples por dia.
+  const cart = await ok('GET', '/cobranca/carteira?busca=Cobrança');
+  const la = cart.itens.find((x) => x.pessoaId === a.id);
+  assert.equal(la.titulos, 2);
+  assert.equal(Number(la.original), 16000);
+  assert.equal(Number(la.atualizado), 16000 + 200 + 133 + 120 + 20, 'multa de 2% + juros de 1% ao mês, por dia');
+  assert.equal(la.maiorAtraso, 40);
+  assert.ok(cart.itens.some((x) => x.pessoaId === b.id));
+  assert.equal((await ok('GET', '/cobranca/carteira?busca=Cobrança&faixa=31_60')).itens.length, 1);
+  const painel = await ok('GET', '/cobranca/painel');
+  assert.ok(painel.vencido.devedores >= 2);
+
+  // Terceirizada: cobrador, acesso com senha provisória, carteira só com quem foi passado para ela.
+  const terc = await ok('POST', '/cobranca/cobradores', { nome: 'Recupera Cobranças Ltda', tipo: 'terceirizada', comissaoPb: 1000 });
+  const acesso = await ok('POST', `/cobranca/cobradores/${terc.id}/acessos`, { nome: 'Carla da Recupera', email: 'carla@recupera.exemplo' });
+  assert.ok(acesso.senhaProvisoria.length >= 10);
+  await ok('POST', '/cobranca/carteira/atribuir', { pessoaIds: [a.id], cobradorId: terc.id });
+  const admin = token;
+  token = (await ok('POST', '/auth/login', { email: 'carla@recupera.exemplo', senha: acesso.senhaProvisoria })).token;
+  await ok('POST', '/auth/trocar-senha', { atual: acesso.senhaProvisoria, nova: 'SenhaDaRecupera2026' });
+  const eu = await ok('GET', '/cobranca/eu');
+  assert.deepEqual([eu.restrito, eu.gestor, eu.cobrador], [true, false, 'Recupera Cobranças Ltda']);
+  const minha = await ok('GET', '/cobranca/carteira');
+  assert.deepEqual(minha.itens.map((x) => x.pessoaId), [a.id], 'só a carteira dela');
+  assert.equal((await ok('GET', '/cobranca/painel')).vencido.devedores, 1, 'o painel dela também só conta a carteira dela');
+  assert.equal((await chamar('GET', `/cobranca/devedores/${b.id}`)).status, 403);
+  assert.equal((await chamar('GET', '/financeiro/titulos')).status, 403, 'não entra no Financeiro');
+  assert.equal((await chamar('GET', '/pessoas')).status, 403, 'nem nos cadastros');
+  assert.equal((await chamar('POST', '/cobranca/carteira/atribuir', { pessoaIds: [b.id], cobradorId: terc.id })).status, 403);
+  assert.equal((await chamar('POST', '/cobranca/protestos', { tituloIds: [tb.id] })).status, 403);
+  const ficha = await ok('GET', `/cobranca/devedores/${a.id}`);
+  assert.equal(ficha.titulos.length, 2);
+  assert.equal(ficha.regras.descontoMaxPb, 1000, 'limite de desconto de quem não é gestor');
+  // Contato com promessa; a promessa nova substitui a anterior.
+  assert.equal((await chamar('POST', `/cobranca/devedores/${a.id}/contatos`, { tipo: 'ligacao', texto: 'Prometeu', promessaData: dia(-1) })).status, 400);
+  await ok('POST', `/cobranca/devedores/${a.id}/contatos`, { tipo: 'ligacao', texto: 'Disse que paga na sexta', promessaData: dia(3), promessaValor: 16000 });
+  await ok('POST', `/cobranca/devedores/${a.id}/contatos`, { tipo: 'whatsapp', texto: 'Pediu mais uns dias', promessaData: dia(7), promessaValor: 16000 });
+  const contatos = (await ok('GET', `/cobranca/devedores/${a.id}`)).contatos.filter((c) => c.promessaData);
+  assert.deepEqual(contatos.map((c) => c.promessaStatus).sort(), ['aberta', 'substituida']);
+  assert.equal(contatos.find((c) => c.promessaStatus === 'aberta').cobrador, 'Recupera Cobranças Ltda');
+  // Desconto acima do limite dela é recusado na simulação.
+  const sim = await chamar('POST', `/cobranca/devedores/${a.id}/acordos/simular`, { tituloIds: [ta1.id, ta2.id], desconto: 5000, parcelas: 2, primeiroVencimento: dia(30) });
+  assert.equal(sim.status, 400);
+  assert.match(sim.dados.mensagem ?? sim.dados.message, /limite de 10%/);
+  token = admin;
+
+  // 2ª via com encargos: emite boleto novo, apaga o anterior e o título passa a apontar para o novo.
+  const v1 = await ok('POST', `/cobranca/titulos/${ta1.id}/segunda-via`, { vencimento: dia(3), tipo: 'BOLETO', comEncargos: true });
+  assert.equal(v1.valor, 10000 + 200 + 143, 'encargos calculados até o novo vencimento');
+  assert.equal((await recebidos()).filter((r) => r.caminho === '/asaas/payments').pop().corpo.value, v1.valor / 100);
+  const v2 = await ok('POST', `/cobranca/titulos/${ta1.id}/segunda-via`, { vencimento: dia(5), tipo: 'BOLETO', comEncargos: false });
+  assert.equal(v2.valor, 10000);
+  assert.notEqual(v2.id, v1.id);
+  assert.ok((await recebidos()).some((r) => r.metodo === 'DELETE' && r.caminho === `/asaas/payments/${v1.id}`), 'o boleto anterior foi apagado no Asaas');
+  assert.ok((await recebidos()).some((r) => r.metodo === 'PUT' && r.caminho.startsWith('/asaas/customers/')), 'cadastro do cliente atualizado no Asaas');
+  const t1 = (await ok('GET', `/cobranca/devedores/${a.id}`)).titulos.find((t) => t.id === ta1.id);
+  assert.deepEqual([t1.cobranca.valor, t1.cobranca.vencimento], [10000, dia(5)]);
+  assert.equal((await chamar('POST', `/cobranca/titulos/${ta1.id}/segunda-via`, { vencimento: dia(-2), tipo: 'BOLETO' })).status, 400);
+
+  // Acordo: entrada + 2 parcelas, com desconto (gestor pode até 50%).
+  const corpo = { tituloIds: [ta1.id, ta2.id], desconto: 473, entrada: 5000, vencimentoEntrada: dia(0), parcelas: 2, primeiroVencimento: dia(30) };
+  const s = await ok('POST', `/cobranca/devedores/${a.id}/acordos/simular`, corpo);
+  assert.equal(s.total, 16000, 'atualizado de R$ 164,73 com R$ 4,73 de desconto');
+  assert.deepEqual(s.parcelas.map((p) => p.valor), [5500, 5500]);
+  assert.equal((await chamar('POST', `/cobranca/devedores/${a.id}/acordos/simular`, { ...corpo, parcelas: 12 })).status, 400, 'passa do máximo de parcelas');
+  const ac = await ok('POST', `/cobranca/devedores/${a.id}/acordos`, { ...corpo, cobranca: 'BOLETO' });
+  assert.equal(ac.parcelas.length, 3);
+  assert.ok(ac.parcelas.every((p) => p.cobrancaExternaId), 'boleto de cada parcela emitido');
+  assert.equal(ac.avisos.length, 0);
+  const fichaAc = await ok('GET', `/cobranca/devedores/${a.id}`);
+  assert.ok(!fichaAc.titulos.some((t) => t.id === ta1.id || t.id === ta2.id), 'os títulos de origem saíram da dívida (renegociados)');
+  assert.equal(fichaAc.contatos.filter((c) => c.promessaStatus === 'aberta').length, 0, 'o acordo substitui a promessa');
+  assert.equal((await chamar('POST', `/cobranca/devedores/${a.id}/acordos`, { ...corpo, cobranca: 'nenhuma' })).status, 400, 'título renegociado não entra em outro acordo');
+  // Paga a entrada e cancela o acordo: o que foi pago abate o título mais antigo e o resto volta a ser cobrado.
+  await ok('POST', `/financeiro/titulos/${ac.parcelas[0].id}/baixar`, { valorPago: 5000 });
+  const enc = await ok('POST', `/cobranca/acordos/${ac.acordo.id}/cancelar`, { motivo: 'Cliente desistiu do acordo' });
+  assert.equal(enc.abatido, 5000);
+  const volta = await ok('GET', `/cobranca/devedores/${a.id}`);
+  assert.deepEqual(volta.titulos.map((t) => [t.valor, t.vencimento]).sort(), [[5000, dia(-40)], [6000, dia(-10)]].sort());
+  assert.equal(volta.acordos[0].status, 'cancelado');
+  assert.equal((await ok('GET', `/cobranca/acordos/${ac.acordo.id}`)).parcelas.filter((p) => p.status === 'cancelado').length, 2);
+
+  // Régua: prévia junta por pessoa e preenche o texto; envio pelo WhatsApp, uma vez só por passo.
+  const canal = await ok('POST', '/crm/canais', { nome: 'Cobrança', tipo: 'evolution', config: { servidor: `${SIM}/evofora`, instancia: 'loja-centro', token: 'token-da-instancia-fora' } });
+  const passos = [{ dias: 5, canal: 'whatsapp', texto: 'Oi {primeiro_nome}, a parcela de {valor} venceu há {dias} dias. Hoje fica {valor_atualizado}. {link}' }];
+  assert.equal((await chamar('PUT', '/cobranca/config', { ...cfg0, regua: { ativa: true, canalId: null, passos } })).status, 400, 'régua por WhatsApp sem número');
+  await ok('PUT', '/cobranca/config', { ...cfg0, multaPb: 200, jurosMesPb: 100, diasCarencia: 0, regua: { ativa: true, canalId: canal.id, passos } });
+  const previa = (await ok('GET', '/cobranca/regua/previa')).previa.find((p) => p.pessoaId === b.id);
+  assert.equal(previa.texto.split(' Hoje')[0], 'Oi Bruna, a parcela de R$ 100,00 venceu há 5 dias.');
+  assert.match(previa.texto, /R\$ 102,17/);
+  await ok('POST', `/cobranca/devedores/${a.id}/pausar`, { pausada: true, motivo: 'Em negociação' });
+  const r1 = await ok('POST', '/cobranca/regua/rodar');
+  assert.ok(r1.enviados >= 1);
+  const msg = (await recebidos()).filter((r) => r.caminho === '/evofora/message/sendText/loja-centro').pop();
+  assert.match(JSON.stringify(msg.corpo), /Oi Bruna/);
+  assert.match(JSON.stringify(msg.corpo), /asaas\.com/, 'o boleto foi emitido antes e foi junto');
+  const r2 = await ok('POST', '/cobranca/regua/rodar');
+  assert.ok(!r2.previa.some((p) => p.pessoaId === b.id), 'não manda o mesmo passo duas vezes');
+  assert.ok((await ok('GET', `/cobranca/devedores/${b.id}`)).contatos.some((c) => c.tipo === 'regua'));
+  await ok('PUT', '/cobranca/config', { ...cfg0, multaPb: 200, jurosMesPb: 100, diasCarencia: 0, regua: { ...cfg0.regua, ativa: false } });
+  ctx.cobranca = { a, b, tb, terc };
+});
+
+test('protesto pela CRA: confere, envia a remessa, protocolo, protestado, pagamento à Aritana autoriza o cancelamento; desistência', async () => {
+  const { a, b, tb } = ctx.cobranca;
+  const dia = (n) => new Date(Date.now() - 3 * 3600_000 + n * 86400_000).toISOString().slice(0, 10);
+  const emp = (await ok('GET', '/empresas'))[0];
+  const cfg = await ok('GET', '/cobranca/config');
+  await ok('PUT', '/cobranca/config', { ...cfg, protesto: { diasMinimos: 30, especie: 'dmi' } });
+  // Conferência: a Bruna venceu há 5 dias (mínimo 30) → não pode.
+  const c1 = await ok('POST', '/cobranca/protestos/conferir', { tituloIds: [tb.id] });
+  assert.equal(c1.prontos, 0);
+  assert.match(c1.itens[0].problemas.join(' '), /mínimo configurado é 30/);
+  assert.equal((await chamar('POST', '/cobranca/protestos', { tituloIds: [tb.id] })).status, 400);
+  const semEnd = await ok('POST', '/pessoas', { tipo: 'cliente', nome: 'Sem Endereço Cobrança', documento: '32345678321' });
+  const [tSem] = await ok('POST', '/financeiro/titulos', { empresaId: emp.id, tipo: 'receber', pessoaId: semEnd.id, descricao: 'Sem endereço', valor: 5000, vencimento: dia(-60) });
+  assert.match((await ok('POST', '/cobranca/protestos/conferir', { tituloIds: [tSem.id] })).itens[0].problemas.join(' '), /endereço/);
+  // Dois títulos vencidos há mais de 30 dias: um da Ana e um novo da Bruna.
+  const ta = (await ok('GET', `/cobranca/devedores/${a.id}`)).titulos.find((t) => t.dias >= 30);
+  const [tb2] = await ok('POST', '/financeiro/titulos', { empresaId: emp.id, tipo: 'receber', pessoaId: b.id, descricao: 'Parcela muito antiga Bruna', valor: 20000, vencimento: dia(-90) });
+  const c2 = await ok('POST', '/cobranca/protestos/conferir', { tituloIds: [ta.id, tb2.id] });
+  assert.equal(c2.prontos, 2);
+  const env = await ok('POST', '/cobranca/protestos', { tituloIds: [ta.id, tb2.id] });
+  assert.match(env.arquivo, /^B123\d{4}\.\d{3}$/, 'nome do arquivo no padrão da CRA');
+  const cra = await (await fetch(`${SIM}/__cra`)).json();
+  const rem = cra.chamadas.find((x) => x.metodo === 'Remessa');
+  assert.equal(rem.arquivo, env.arquivo);
+  assert.match(rem.dados, /<comarca CodMun="3205200">/, 'praça pelo código IBGE do CEP');
+  const trA = cra.titulos.find((t) => t.t23 === 'ANA DEVEDORA COBRANCA');
+  assert.deepEqual([trA.t12, trA.t17, trA.t24, trA.t28, trA.t30], ['DMI', '50.00', '002', '29101010', 'ES']);
+  assert.equal((await chamar('POST', '/cobranca/protestos', { tituloIds: [ta.id] })).status, 400, 'já está em protesto');
+  let lista = (await ok('GET', '/cobranca/protestos')).itens;
+  const pa = lista.find((p) => p.tituloId === ta.id);
+  const pb = lista.find((p) => p.tituloId === tb2.id);
+  assert.equal(pa.status, 'enviado');
+  // Título em cartório fica fora da régua e não entra em acordo.
+  assert.equal((await chamar('POST', `/cobranca/devedores/${b.id}/acordos/simular`, { tituloIds: [tb2.id], parcelas: 1, primeiroVencimento: dia(10) })).status, 400);
+
+  // Confirmação: os dois protocolados.
+  for (const p of [pa, pb]) await fetch(`${SIM}/__cra/confirmar`, { method: 'POST', body: JSON.stringify({ numero: p.numero }) });
+  const s1 = await ok('POST', '/cobranca/protestos/sincronizar');
+  assert.ok(s1.atualizados >= 2);
+  lista = (await ok('GET', '/cobranca/protestos')).itens;
+  assert.deepEqual([lista.find((p) => p.id === pa.id).status, lista.find((p) => p.id === pa.id).protocolo], ['em_cartorio', '0000012345']);
+  // Ana: protestada. Bruna: segue no cartório.
+  await fetch(`${SIM}/__cra/retornar`, { method: 'POST', body: JSON.stringify({ numero: pa.numero, ocorrencia: '2' }) });
+  await ok('POST', '/cobranca/protestos/sincronizar');
+  lista = (await ok('GET', '/cobranca/protestos')).itens;
+  assert.equal(lista.find((p) => p.id === pa.id).status, 'protestado');
+  assert.equal(lista.find((p) => p.id === pa.id).tituloStatus, 'protestado');
+  assert.equal((await ok('GET', '/cobranca/carteira?busca=Ana Devedora')).itens[0].emProtesto, 1);
+  // A Ana paga à Aritana (2ª via do título protestado): o sistema autoriza o cancelamento sozinho.
+  const via = await ok('POST', `/cobranca/titulos/${ta.id}/segunda-via`, { vencimento: dia(1), tipo: 'PIX', comEncargos: false });
+  const salvo = token;
+  token = '';
+  const pago = await (await fetch(API + '/webhooks/asaas', { method: 'POST', headers: { 'content-type': 'application/json', 'asaas-access-token': 'token-webhook-teste' }, body: JSON.stringify({ id: 'evt_protesto_1', event: 'PAYMENT_RECEIVED', payment: { id: via.id, value: 50, paymentDate: dia(0), externalReference: ta.id } }) })).json();
+  assert.equal(pago.resultado, 'baixado');
+  token = salvo;
+  const s3 = await ok('POST', '/cobranca/protestos/sincronizar');
+  assert.equal(s3.pedidos, 1);
+  const ac = (await (await fetch(`${SIM}/__cra`)).json()).chamadas.find((x) => x.metodo === 'Autoriza_Cancelamento');
+  assert.match(ac.arquivo, /^AC123/);
+  assert.match(ac.dados, /<numero_protocolo>0000012345<\/numero_protocolo>/);
+  assert.match(ac.dados, /<CodMun>3205200<\/CodMun>/);
+  assert.equal((await ok('GET', '/cobranca/protestos')).itens.find((p) => p.id === pa.id).pedido, 'autoriza_cancelamento');
+  assert.equal((await ok('POST', '/cobranca/protestos/sincronizar')).pedidos, 0, 'não pede de novo');
+  // Bruna: desistência manual enquanto está no cartório; depois o cartório devolve "retirado" e o título volta a aberto.
+  assert.equal((await chamar('POST', `/cobranca/protestos/${pb.id}/pedido`, { tipo: 'autoriza_cancelamento', motivo: 'Teste' })).status, 400, 'não foi protestado ainda');
+  await ok('POST', `/cobranca/protestos/${pb.id}/pedido`, { tipo: 'desistencia', motivo: 'Negociando direto com a cliente' });
+  assert.ok((await (await fetch(`${SIM}/__cra`)).json()).chamadas.some((x) => x.metodo === 'Desistencia' && /^DP123/.test(x.arquivo)));
+  await fetch(`${SIM}/__cra/retornar`, { method: 'POST', body: JSON.stringify({ numero: pb.numero, ocorrencia: '3' }) });
+  await ok('POST', '/cobranca/protestos/sincronizar');
+  const fb = (await ok('GET', '/cobranca/protestos')).itens.find((p) => p.id === pb.id);
+  assert.deepEqual([fb.status, fb.tituloStatus], ['retirado', 'aberto']);
+  const arqs = await ok('GET', '/cobranca/protestos/arquivos');
+  assert.ok(['remessa', 'confirmacao', 'retorno', 'desistencia', 'autoriza_cancelamento'].every((t) => arqs.some((x) => x.tipo === t)));
+  const xml = await ok('GET', `/cobranca/protestos/arquivos/${arqs.find((x) => x.tipo === 'remessa').id}`);
+  assert.match(xml.conteudo, /^<\?xml/);
+  // Remessa recusada pela CRA: o protesto fica "recusado" com o motivo.
+  const ruim = await ok('POST', '/pessoas', { tipo: 'cliente', nome: 'RECUSAR Cobrança', documento: '42345678410', ...{ cep: '29101010', logradouro: 'Rua A', numero: '1', bairro: 'Centro', cidade: 'Vila Velha', uf: 'ES' } });
+  const [tr] = await ok('POST', '/financeiro/titulos', { empresaId: emp.id, tipo: 'receber', pessoaId: ruim.id, descricao: 'Vai ser recusado', valor: 3000, vencimento: dia(-45) });
+  const rec = await chamar('POST', '/cobranca/protestos', { tituloIds: [tr.id] });
+  assert.equal(rec.status, 400);
+  assert.match(rec.dados.mensagem ?? rec.dados.message, /devedor invalido/);
+  assert.equal((await ok('GET', '/cobranca/protestos?status=recusado')).itens.length, 1);
 });
 
 test('implantação: apagar dados de teste exige APAGAR e mantém o que é configuração', async () => {

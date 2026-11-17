@@ -59,6 +59,18 @@ export const INTEGRACOES: Integracao[] = [
     ],
   },
   {
+    chave: 'cra',
+    nome: 'Protesto (CRA21 / P21)',
+    descricao: 'Manda títulos vencidos a protesto pela Central de Remessa de Arquivos do estado, acompanha o cartório e pede o cancelamento quando a pessoa paga.',
+    ondeConseguir: 'Depende do convênio da Aritana com a CRA do estado (IEPTB). A CRA entrega o endereço do webservice, o usuário, a senha e o código de apresentante. Comece pelo endereço de homologação (craUF.cra21.com.br) e só troque para o de produção depois de a CRA aprovar os arquivos de teste.',
+    campos: [
+      { nome: 'CRA_URL', rotulo: 'Endereço do webservice', ajuda: 'Ex.: https://craes.cra21.com.br/craes/xml/protestos.php (homologação)' },
+      { nome: 'CRA_USUARIO', rotulo: 'Usuário' },
+      { nome: 'CRA_SENHA', rotulo: 'Senha', secreto: true },
+      { nome: 'CRA_CODIGO', rotulo: 'Código de apresentante', ajuda: 'Três dígitos, dado pela CRA no convênio.' },
+    ],
+  },
+  {
     chave: 'fiscal',
     nome: 'Focus NFe (notas fiscais)',
     descricao: 'NFC-e da loja e dos eventos, NF-e de remessa da maleta e notas do acerto.',

@@ -43,6 +43,7 @@ const ROTULOS: Record<string, string> = {
   empresaId: 'Empresa', cargo: 'Cargo', departamento: 'Setor', tipoContrato: 'Tipo de contrato', salario: 'Salário', ctps: 'CTPS', matriculaEsocial: 'Matrícula no eSocial', escalaId: 'Escala de horário',
   dataAdmissao: 'Admissão', dadosBancarios: 'Dados bancários', observacao: 'Observações', acesso: 'Acesso ao sistema', grupoId: 'Nível de acesso', senha: 'Senha',
   valor: 'Valor', preco: 'Preço', quantidade: 'Quantidade', data: 'Data', vencimento: 'Vencimento', descricao: 'Descrição', titulo: 'Título', motivo: 'Motivo', tipo: 'Tipo', inicio: 'Início', fim: 'Fim',
+  multaPb: 'Multa', jurosMesPb: 'Juros ao mês', promessaData: 'Data da promessa', promessaValor: 'Valor prometido', tituloIds: 'Títulos', primeiroVencimento: '1ª parcela', entrada: 'Entrada', desconto: 'Desconto', parcelas: 'Parcelas', 'regua.canalId': 'Número da régua', 'protesto.especie': 'Espécie do título',
   pessoaId: 'Pessoa', produtoId: 'Produto', clienteId: 'Cliente', representanteId: 'Representante', responsavelId: 'Responsável', itens: 'Itens', pagamentos: 'Pagamentos', _: 'Dados enviados',
 };
 /** "dadosBancarios.pix" → "Dados bancários › Pix"; campo desconhecido vira texto legível ("limiteCredito" → "Limite credito"). */

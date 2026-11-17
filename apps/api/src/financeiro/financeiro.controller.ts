@@ -148,7 +148,7 @@ export class FinanceiroController {
     const r = await this.db.transaction(async (tx) => {
       const [t] = await tx.select().from(titulos).where(eq(titulos.id, id)).for('update');
       if (!t) throw new NotFoundException('Título não encontrado.');
-      if (t.status !== 'aberto') throw new BadRequestException(`Título está ${t.status}.`);
+      if (t.status !== 'aberto' && t.status !== 'protestado') throw new BadRequestException(`Título está ${t.status}.`);
       const valorPago = d.valorPago ?? t.valor;
       if (valorPago <= 0) throw new BadRequestException('Informe o valor pago.');
       // Pagamento parcial: baixa o que foi pago e abre um título com o saldo, no mesmo vencimento.
@@ -160,8 +160,8 @@ export class FinanceiroController {
         .returning();
       let saldo = null;
       if (parcial) {
-        const { id: _i, criadoEm: _c, cobrancaExternaId: _e, cobrancaUrl: _u, pixCopiaCola: _p, cobrancaTipo: _t, ...resto } = t;
-        [saldo] = await tx.insert(titulos).values({ ...resto, valor: t.valor - valorPago, descricao: `${t.descricao} · saldo`, status: 'aberto', pagoEm: null, valorPago: null, contaId: null }).returning();
+        const { id: _i, criadoEm: _c, cobrancaExternaId: _e, cobrancaUrl: _u, pixCopiaCola: _p, cobrancaTipo: _t, cobrancaValor: _v, cobrancaVencimento: _cv, ...resto } = t;
+        [saldo] = await tx.insert(titulos).values({ ...resto, valor: t.valor - valorPago, descricao: `${t.descricao} · saldo`, status: t.status, pagoEm: null, valorPago: null, contaId: null }).returning();
       }
       await this.auditoria.registrar({ usuarioId: u.id, acao: 'baixar', entidade: 'titulo', entidadeId: id, dados: { ...d, parcial, saldoId: saldo?.id } }, tx);
       return { ...baixado, saldo, cobrancaAnterior: t.cobrancaExternaId };

@@ -100,12 +100,33 @@ const SECOES: Secao[] = [
   },
   {
     id: 'financeiro',
-    titulo: 'Financeiro e cobrança',
+    titulo: 'Financeiro',
     passos: [
       { t: 'Contas a receber', d: 'Parcelas dos acertos e vendas a prazo. Gere Pix ou boleto pelo Asaas; a baixa é automática quando a cliente paga.' },
       { t: 'Contas a pagar', d: 'Fornecedores, despesas e comissões fechadas.' },
       { t: 'Baixa manual', d: 'Para pagamentos fora do Asaas, informe a data e o valor recebido.' },
       { t: 'Cartões (conciliar)', d: 'Com o extrato da maquininha aberto, marque o que caiu (por dia, débito ou crédito e maquininha), digite o valor depositado e escolha a conta. O sistema baixa tudo de uma vez e lança a diferença como despesa "Taxas de cartão", então o saldo da conta bate com o banco.' },
+    ],
+  },
+  {
+    id: 'cobranca',
+    titulo: 'Cobrança: carteiras, acordos, régua e protesto',
+    passos: [
+      { t: 'Painel', d: 'Em Cobrança, o painel mostra o vencido com multa e juros, separado por faixa de atraso (clique na faixa para ver os devedores), o recuperado no mês, as promessas de pagamento dos próximos dias, os retornos combinados e o resultado de cada cobrador.' },
+      { t: 'Carteira', d: 'Lista quem tem título vencido, do maior valor para o menor. Marque os devedores e use "Passar para…" para entregar à equipe interna ou a uma empresa terceirizada. A carteira guarda desde quando o devedor está com cada cobrador, para contar o recuperado e a comissão.' },
+      { t: 'Terceirizada', d: 'Em Cobradores e acessos, cadastre a empresa como Terceirizada e crie o acesso de quem vai trabalhar (nome e e-mail). A senha provisória aparece uma vez só: passe por um canal seguro. Essa pessoa entra direto na Cobrança e vê só os devedores passados para a empresa; não vê Financeiro, cadastros nem outros módulos, não muda carteira e não manda a protesto.' },
+      { t: 'Ficha do devedor', d: 'Mostra os títulos com o valor de hoje (multa e juros), o boleto atual, os acordos e todo o histórico. Registre cada ligação, WhatsApp ou visita; marque "Prometeu pagar" com data e valor. A promessa vira "cumprida" sozinha quando o pagamento entra, ou "quebrada" se a data passar.' },
+      { t: '2ª via', d: 'Escolha o novo vencimento e se vai com multa e juros. O sistema emite o boleto novo no Asaas, apaga o anterior e atualiza o cadastro da pessoa no Asaas. O título passa a apontar só para o boleto novo, então a baixa automática continua funcionando.' },
+      { t: 'Acordo', d: 'Marque os títulos e clique em "Fazer acordo": desconto, entrada, número de parcelas e o primeiro vencimento. A simulação mostra cada parcela antes de confirmar. Os títulos de origem ficam como renegociados e as parcelas novas ganham boleto. O desconto respeita o limite de cada um (cobrador ou gestão), configurado em Cobrança › Configurar.' },
+      { t: 'Acordo quebrado', d: 'Se uma parcela passar do prazo configurado (padrão 15 dias), o acordo quebra sozinho: as parcelas em aberto são canceladas e a dívida antiga volta, já descontado o que foi pago (dos títulos mais antigos para os mais novos). A gestão também pode cancelar um acordo pela ficha.' },
+      { t: 'Régua', d: 'Mensagens automáticas por WhatsApp ou e-mail em dias fixos em relação ao vencimento (por exemplo, 3 dias antes, no dia, 3, 10 e 30 depois). Títulos da mesma pessoa vão numa mensagem só, com o link do boleto. Use "Ver o que sai hoje" antes de ligar. No WhatsApp oficial, cada passo precisa de um template aprovado pela Meta. Pause a régua de um devedor pela ficha quando estiver negociando.' },
+      { t: 'Protesto', d: 'Depende do convênio da Aritana com a CRA do estado. Com o convênio, preencha Configurações › Integrações › Protesto (CRA21) com o endereço de homologação, o usuário, a senha e o código de apresentante. Na ficha, marque os títulos e clique em "Mandar a protesto": o sistema confere CPF/CNPJ, endereço, CEP e o mínimo de dias antes de enviar. A confirmação (protocolo) e o retorno do cartório são buscados a cada 3 horas.' },
+      { t: 'Pagou depois do protesto', d: 'Quando o devedor paga à Aritana (boleto, Pix, baixa manual ou acordo quitado), o sistema pede sozinho a desistência, se o título ainda está no cartório, ou autoriza o cancelamento, se já foi protestado. Pago no próprio cartório, o título recebe a baixa pelo retorno da CRA.' },
+    ],
+    dicas: [
+      'Multa, juros e carência ficam em Cobrança › Configurar e valem para todos os títulos: carteira, 2ª via, régua e acordos.',
+      'Na homologação, a aba Protesto mostra cada arquivo trocado com a CRA, para conferir com eles antes de liberar a produção.',
+      'A comissão da terceirizada é só um relatório: o pagamento é feito fora do sistema.',
     ],
   },
   {

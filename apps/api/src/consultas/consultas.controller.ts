@@ -2,7 +2,7 @@ import { BadRequestException, Controller, Get, NotFoundException, Param, Service
 import { Usuario, type UsuarioLogado } from '../comum/auth';
 import { Limitador } from '../comum/limitador';
 
-export interface EnderecoCep { cep: string; logradouro: string | null; bairro: string | null; cidade: string | null; uf: string | null }
+export interface EnderecoCep { cep: string; logradouro: string | null; bairro: string | null; cidade: string | null; uf: string | null; ibge?: string | null }
 export interface DadosCnpj extends EnderecoCep {
   cnpj: string; razaoSocial: string | null; nomeFantasia: string | null; inscricaoEstadual: string | null;
   numero: string | null; complemento: string | null; telefone: string | null; email: string | null; situacao: string | null;
@@ -54,6 +54,21 @@ export class ConsultasController {
     return g && g.ate > Date.now() ? (g.dados as T) : null;
   }
 
+  /** Código IBGE do município pelo CEP (a CRA identifica a praça de pagamento por ele). */
+  async ibgeDoCep(bruto: string): Promise<string | null> {
+    const cep = so(bruto);
+    if (cep.length !== 8) return null;
+    const ja = this.lembrado<string>(`ibge:${cep}`);
+    if (ja) return ja;
+    try {
+      const r = await buscar(`${process.env.VIACEP_URL ?? 'https://viacep.com.br'}/ws/${cep}/json/`);
+      const ibge = r.status === 200 && r.corpo && !r.corpo.erro ? txt(r.corpo.ibge) : null;
+      return ibge ? this.lembrar(`ibge:${cep}`, ibge, 24 * 90) : null;
+    } catch {
+      return null;
+    }
+  }
+
   @Get('cep/:cep')
   async cep(@Param('cep') bruto: string, @Usuario() u: UsuarioLogado): Promise<EnderecoCep> {
     const cep = so(bruto);
@@ -65,7 +80,7 @@ export class ConsultasController {
     // 1ª fonte: ViaCEP.
     try {
       const r = await buscar(`${process.env.VIACEP_URL ?? 'https://viacep.com.br'}/ws/${cep}/json/`);
-      if (r.status === 200 && r.corpo && !r.corpo.erro) return this.lembrar(`cep:${cep}`, { cep, logradouro: txt(r.corpo.logradouro), bairro: txt(r.corpo.bairro), cidade: txt(r.corpo.localidade), uf: txt(r.corpo.uf) }, 24 * 30);
+      if (r.status === 200 && r.corpo && !r.corpo.erro) return this.lembrar(`cep:${cep}`, { cep, logradouro: txt(r.corpo.logradouro), bairro: txt(r.corpo.bairro), cidade: txt(r.corpo.localidade), uf: txt(r.corpo.uf), ibge: txt(r.corpo.ibge) }, 24 * 30);
       if (r.status >= 500) fora++;
     } catch { fora++; }
     // 2ª fonte: BrasilAPI (também acha CEPs novos que a primeira ainda não tem).

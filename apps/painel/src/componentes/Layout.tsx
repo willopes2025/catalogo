@@ -6,7 +6,7 @@ import { api, atualizarUsuario, lerSessao, pode, salvarSessao } from '../api';
 import { Softphone } from './Softphone';
 
 /** Rotas já construídas nesta etapa; as demais abrem a página "em construção". */
-const ROTAS: Record<string, string> = { inicio: '/', rede: '/rede', cadastros: '/cadastros', produtos: '/produtos', estoque: '/estoque', maletas: '/maletas', vendas: '/vendas', lojas: '/lojas', financeiro: '/financeiro', fiscal: '/fiscal', relatorios: '/relatorios', configuracoes: '/configuracoes', suporte: '/suporte', garantia: '/garantia', comissoes: '/comissoes', crm: '/crm', pontos: '/pontos', formularios: '/formularios', marketing: '/marketing', rh: '/rh' };
+const ROTAS: Record<string, string> = { inicio: '/', rede: '/rede', cadastros: '/cadastros', produtos: '/produtos', estoque: '/estoque', maletas: '/maletas', vendas: '/vendas', lojas: '/lojas', financeiro: '/financeiro', cobranca: '/cobranca', fiscal: '/fiscal', relatorios: '/relatorios', configuracoes: '/configuracoes', suporte: '/suporte', garantia: '/garantia', comissoes: '/comissoes', crm: '/crm', pontos: '/pontos', formularios: '/formularios', marketing: '/marketing', rh: '/rh' };
 
 /** Menu separado por assunto. Módulo novo que não estiver aqui aparece em "Outros". */
 const GRUPOS: { titulo: string; chaves: string[] }[] = [
@@ -15,7 +15,7 @@ const GRUPOS: { titulo: string; chaves: string[] }[] = [
   { titulo: 'Revendedoras', chaves: ['rede', 'maletas', 'pontos', 'comissoes'] },
   { titulo: 'Vendas', chaves: ['vendas', 'lojas', 'garantia'] },
   { titulo: 'Produtos', chaves: ['produtos', 'estoque'] },
-  { titulo: 'Financeiro', chaves: ['financeiro', 'fiscal', 'relatorios'] },
+  { titulo: 'Financeiro', chaves: ['financeiro', 'cobranca', 'fiscal', 'relatorios'] },
   { titulo: 'Equipe', chaves: ['meu-ponto', 'rh'] },
   { titulo: 'Sistema', chaves: ['cadastros', 'configuracoes', 'suporte'] },
 ];

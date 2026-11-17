@@ -17,6 +17,7 @@ export const MODULOS = [
   { chave: 'garantia', nome: 'Garantia', versao: 1 },
   { chave: 'pontos', nome: 'Pontos e prêmios', versao: 1 },
   { chave: 'financeiro', nome: 'Financeiro', versao: 1 },
+  { chave: 'cobranca', nome: 'Cobrança', versao: 1 },
   { chave: 'comissoes', nome: 'Comissões', versao: 1 },
   { chave: 'rh', nome: 'RH e ponto', versao: 1 },
   { chave: 'fiscal', nome: 'Fiscal', versao: 1 },

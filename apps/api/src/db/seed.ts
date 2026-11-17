@@ -55,7 +55,7 @@ async function main() {
         },
         {
           nome: 'Financeiro',
-          permissoes: { inicio: ['ver'], financeiro: ['ver', 'criar', 'editar', 'exportar'], maletas: ['ver'], rede: ['ver'], fiscal: ['ver', 'criar'], relatorios: ['ver', 'exportar'] },
+          permissoes: { inicio: ['ver'], financeiro: ['ver', 'criar', 'editar', 'exportar'], cobranca: ['ver', 'criar', 'editar', 'exportar'], maletas: ['ver'], rede: ['ver'], fiscal: ['ver', 'criar'], relatorios: ['ver', 'exportar'] },
         },
         { nome: 'Loja', permissoes: { inicio: ['ver'], lojas: ['ver', 'criar'], produtos: ['ver'], cadastros: ['ver', 'criar'] } },
       ])

@@ -16,6 +16,7 @@ const wa = { n: 0, zapiConectado: true, webhookZapi: null };
 const evo = new Map();
 // Notificações recebidas pelos simuladores do Firebase e da Apple
 const pushes = [];
+const cra = { chamadas: [], titulos: [], confirmacoes: [], retornos: [] };
 const fcmChaves = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
 const apnsChaves = crypto.generateKeyPairSync('ec', { namedCurve: 'prime256v1' });
 // O e2e lê as chaves privadas de teste daqui, para colar na tela de integrações.
@@ -97,6 +98,41 @@ http
       corpo = { bruto: txt.slice(0, 200) }; // multipart (upload de mídia)
     }
     const url = new URL(req.url, 'http://x');
+    // ── CRA21 (protesto): SOAP rpc/encoded com autenticação básica ──
+    if (url.pathname === '/cra/xml/protestos.php') {
+      if (req.headers.authorization !== `Basic ${Buffer.from('cra-usuario:cra-senha').toString('base64')}`) { res.writeHead(401); return res.end('Unauthorized'); }
+      const metodo = /<ns1:(\w+)>/.exec(txt)?.[1];
+      const des = (v) => (v ?? '').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&amp;/g, '&');
+      const p = (n) => des(new RegExp(`<${n}[^>]*>([\\s\\S]*?)</${n}>`).exec(txt)?.[1]);
+      const esc = (v) => v.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      const soap = (ret) => { res.writeHead(200, { 'content-type': 'text/xml' }); res.end(`<?xml version="1.0"?><SOAP-ENV:Envelope xmlns:SOAP-ENV="http://schemas.xmlsoap.org/soap/envelope/"><SOAP-ENV:Body><ns1:${metodo}Response><return xsi:type="xsd:string">${esc(ret)}</return></ns1:${metodo}Response></SOAP-ENV:Body></SOAP-ENV:Envelope>`); };
+      cra.chamadas.push({ metodo, arquivo: p('userArq'), dados: p('userDados') });
+      if (metodo === 'Remessa') {
+        const dados = p('userDados');
+        if (/RECUSAR/.test(dados)) return soap('<relatorio><erro>Arquivo rejeitado: devedor invalido</erro></relatorio>');
+        for (const m of dados.matchAll(/<tr ([^>]*)\/>/g)) cra.titulos.push(Object.fromEntries([...m[1].matchAll(/(\w+)="([^"]*)"/g)].map((x) => [x[1], x[2]])));
+        return soap('<relatorio><codigo>0000</codigo><mensagem>Arquivo recebido com sucesso</mensagem></relatorio>');
+      }
+      const regs = (lista, raiz) => `<${raiz}><comarca CodMun="3205200"><hd h01="0"/>${lista.map((r) => `<tr ${Object.entries(r).map(([k, v]) => `${k}="${v}"`).join(' ')}/>`).join('')}<tl t01="9"/></comarca></${raiz}>`;
+      if (metodo === 'Confirmacao') return soap(cra.confirmacoes.length ? regs(cra.confirmacoes, 'confirmacao') : '');
+      if (metodo === 'Retorno') return soap(cra.retornos.length ? regs(cra.retornos, 'retorno') : '');
+      if (metodo === 'Desistencia' || metodo === 'Autoriza_Cancelamento' || metodo === 'Cancelamento') return soap('<relatorio><codigo>0000</codigo><mensagem>Arquivo recebido com sucesso</mensagem></relatorio>');
+      res.writeHead(500, { 'content-type': 'text/xml' });
+      return res.end('<SOAP-ENV:Envelope xmlns:SOAP-ENV="http://schemas.xmlsoap.org/soap/envelope/"><SOAP-ENV:Body><SOAP-ENV:Fault><faultcode>Client</faultcode><faultstring>Metodo desconhecido</faultstring></SOAP-ENV:Fault></SOAP-ENV:Body></SOAP-ENV:Envelope>');
+    }
+    // Controle do teste: o cartório protocola (confirmação) ou devolve uma ocorrência (retorno).
+    if (url.pathname === '/__cra/confirmar') {
+      const t = cra.titulos.find((x) => Number(x.t11) === Number(corpo.numero));
+      cra.confirmacoes.push({ ...t, t31: '01', t32: String(corpo.protocolo ?? '0000012345'), t34: '17112026', t35: '45.30', t38: corpo.irregularidade ?? '' });
+      return responder(res, 200, { ok: true });
+    }
+    if (url.pathname === '/__cra/retornar') {
+      const t = cra.titulos.find((x) => Number(x.t11) === Number(corpo.numero));
+      cra.retornos = cra.retornos.filter((x) => Number(x.t11) !== Number(corpo.numero));
+      cra.retornos.push({ ...t, t31: '01', t32: '0000012345', t33: corpo.ocorrencia, t34: '17112026', t37: '18112026', t35: '45.30' });
+      return responder(res, 200, { ok: true });
+    }
+    if (url.pathname === '/__cra') return responder(res, 200, cra);
     recebidos.push({ metodo: req.method, caminho: url.pathname + url.search, headers: req.headers, corpo });
 
     if (url.pathname === '/__recebidos') return responder(res, 200, recebidos);
@@ -286,7 +322,7 @@ http
     // ── CEP e CNPJ (ViaCEP, BrasilAPI, CNPJ.ws) ──
     if (url.pathname.startsWith('/viacep/ws/')) {
       const cep = url.pathname.split('/')[3];
-      if (cep === '29101010') return responder(res, 200, { cep: '29101-010', logradouro: 'Avenida Champagnat', bairro: 'Centro', localidade: 'Vila Velha', uf: 'ES' });
+      if (cep === '29101010') return responder(res, 200, { cep: '29101-010', logradouro: 'Avenida Champagnat', bairro: 'Centro', localidade: 'Vila Velha', uf: 'ES', ibge: '3205200' });
       if (cep === '29000001') return responder(res, 500, {}); // fora do ar: cai na segunda fonte
       return responder(res, 200, { erro: 'true' });
     }
@@ -437,6 +473,7 @@ http
       const cash = url.pathname.match(/^\/asaas\/payments\/(pay_\d+)\/receiveInCash$/);
       if (req.method === 'POST' && cash) return responder(res, 200, { id: cash[1], status: 'RECEIVED_IN_CASH' });
       if (req.method === 'GET' && url.pathname === '/asaas/customers') return responder(res, 200, { totalCount: 0, data: [] });
+      if (req.method === 'PUT' && /^\/asaas\/customers\/[\w-]+$/.test(url.pathname)) return responder(res, 200, { id: url.pathname.split('/').pop(), ...corpo });
       if (req.method === 'GET' && pix) return responder(res, 200, { encodedImage: 'iVBOR', payload: `00020126580014br.gov.bcb.pix-${pix[1]}`, expirationDate: '2027-01-01 23:59:59' });
     }
 

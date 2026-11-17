@@ -82,6 +82,8 @@ export const usuarios = pgTable('usuarios', {
   sessaoInicioEm: timestamp('sessao_inicio_em', { withTimezone: true }),
   /** Senha criada por outra pessoa: precisa ser trocada no primeiro acesso. */
   senhaProvisoria: boolean('senha_provisoria').notNull().default(false),
+  /** Cobrador a que este usuário pertence. Terceirizada: só vê a carteira dela. */
+  cobradorId: uuid('cobrador_id'),
   /** Vendedora de loja: comissão própria (pontos-base) e meta mensal em centavos. */
   comissaoPb: integer('comissao_pb'),
   metaMensal: integer('meta_mensal'),
@@ -379,7 +381,7 @@ export const acertos = pgTable('acertos', {
 
 // ───────────────────────── Financeiro ─────────────────────────
 
-export const statusTitulo = pgEnum('status_titulo', ['aberto', 'pago', 'cancelado', 'protestado']);
+export const statusTitulo = pgEnum('status_titulo', ['aberto', 'pago', 'cancelado', 'protestado', 'renegociado']);
 
 export const contas = pgTable('contas', {
   id: id(),
@@ -415,6 +417,13 @@ export const titulos = pgTable(
     cobrancaTipo: text('cobranca_tipo'),
     cobrancaUrl: text('cobranca_url'),
     pixCopiaCola: text('pix_copia_cola'),
+    /** Valor e vencimento do boleto/Pix atual (a segunda via pode ter outro vencimento e o valor com encargos). */
+    cobrancaValor: integer('cobranca_valor'),
+    cobrancaVencimento: date('cobranca_vencimento'),
+    /** Parcela de um acordo de cobrança. */
+    acordoId: uuid('acordo_id'),
+    /** Título que entrou num acordo (fica "renegociado"; volta a aberto se o acordo quebrar). */
+    renegociadoAcordoId: uuid('renegociado_acordo_id'),
     idJueri: text('id_jueri'),
     criadoEm: criadoEm(),
   },
@@ -1752,4 +1761,155 @@ export const iaUsos = pgTable(
     criadoEm: criadoEm(),
   },
   (t) => ({ porDia: index('ia_usos_dia_idx').on(t.criadoEm) }),
+);
+
+// ───────────────────────── Cobrança ─────────────────────────
+
+/** Quem cobra: funcionário da Aritana ou empresa terceirizada. */
+export const cobradores = pgTable('cobradores', {
+  id: id(),
+  nome: text('nome').notNull(),
+  /** interno | terceirizada */
+  tipo: text('tipo').notNull().default('interno'),
+  documento: text('documento'),
+  telefone: text('telefone'),
+  email: text('email'),
+  /** Comissão sobre o que for recuperado (pontos-base; 1000 = 10%). */
+  comissaoPb: integer('comissao_pb').notNull().default(0),
+  ativo: boolean('ativo').notNull().default(true),
+  criadoEm: criadoEm(),
+});
+
+/** Devedor na carteira de um cobrador (a carteira é por pessoa, com todos os títulos dela). */
+export const cobrancaCarteira = pgTable('cobranca_carteira', {
+  pessoaId: uuid('pessoa_id')
+    .primaryKey()
+    .references(() => pessoas.id, { onDelete: 'cascade' }),
+  cobradorId: uuid('cobrador_id').references(() => cobradores.id, { onDelete: 'set null' }),
+  /** Desde quando está com este cobrador (a comissão conta o que foi pago depois). */
+  desde: timestamp('desde', { withTimezone: true }).notNull().defaultNow(),
+  /** Régua pausada (em negociação, ação judicial…). */
+  pausada: boolean('pausada').notNull().default(false),
+  motivoPausa: text('motivo_pausa'),
+  atualizadoEm: timestamp('atualizado_em', { withTimezone: true }).notNull().defaultNow(),
+});
+
+/** Histórico de contatos com o devedor e promessas de pagamento. */
+export const cobrancaContatos = pgTable(
+  'cobranca_contatos',
+  {
+    id: id(),
+    pessoaId: uuid('pessoa_id')
+      .notNull()
+      .references(() => pessoas.id, { onDelete: 'cascade' }),
+    usuarioId: uuid('usuario_id').references(() => usuarios.id, { onDelete: 'set null' }),
+    cobradorId: uuid('cobrador_id').references(() => cobradores.id, { onDelete: 'set null' }),
+    /** ligacao | whatsapp | email | visita | nota | regua | sistema */
+    tipo: text('tipo').notNull(),
+    texto: text('texto').notNull(),
+    promessaData: date('promessa_data'),
+    promessaValor: integer('promessa_valor'),
+    /** aberta | cumprida | quebrada */
+    promessaStatus: text('promessa_status'),
+    retornoEm: date('retorno_em'),
+    criadoEm: criadoEm(),
+  },
+  (t) => ({ porPessoa: index('cobranca_contatos_pessoa_idx').on(t.pessoaId, t.criadoEm) }),
+);
+
+/** Acordo (renegociação): os títulos originais ficam "renegociados" e nascem as parcelas. */
+export const cobrancaAcordos = pgTable('cobranca_acordos', {
+  id: id(),
+  numero: serial('numero').notNull(),
+  pessoaId: uuid('pessoa_id')
+    .notNull()
+    .references(() => pessoas.id),
+  cobradorId: uuid('cobrador_id').references(() => cobradores.id, { onDelete: 'set null' }),
+  usuarioId: uuid('usuario_id').references(() => usuarios.id, { onDelete: 'set null' }),
+  /** ativo | quitado | quebrado | cancelado */
+  status: text('status').notNull().default('ativo'),
+  original: integer('original').notNull(),
+  multa: integer('multa').notNull(),
+  juros: integer('juros').notNull(),
+  desconto: integer('desconto').notNull(),
+  total: integer('total').notNull(),
+  entrada: integer('entrada').notNull().default(0),
+  parcelas: integer('parcelas').notNull(),
+  observacao: text('observacao'),
+  encerradoEm: timestamp('encerrado_em', { withTimezone: true }),
+  motivoEncerramento: text('motivo_encerramento'),
+  criadoEm: criadoEm(),
+});
+
+/** Mensagens da régua já enviadas (uma por título e passo). */
+export const cobrancaEnvios = pgTable(
+  'cobranca_envios',
+  {
+    id: id(),
+    tituloId: uuid('titulo_id')
+      .notNull()
+      .references(() => titulos.id, { onDelete: 'cascade' }),
+    /** Dias em relação ao vencimento do passo da régua (-3, 0, 5…). */
+    passo: integer('passo').notNull(),
+    canal: text('canal').notNull(),
+    /** enviado | falhou | sem_contato */
+    resultado: text('resultado').notNull(),
+    detalhe: text('detalhe'),
+    criadoEm: criadoEm(),
+  },
+  (t) => ({ unico: uniqueIndex('cobranca_envios_titulo_passo_idx').on(t.tituloId, t.passo) }),
+);
+
+/** Arquivos trocados com a CRA (remessa, desistência, autorização de cancelamento, confirmação, retorno). */
+export const cobrancaArquivosCra = pgTable('cobranca_arquivos_cra', {
+  id: id(),
+  /** remessa | desistencia | autoriza_cancelamento | confirmacao | retorno */
+  tipo: text('tipo').notNull(),
+  nome: text('nome').notNull(),
+  conteudo: text('conteudo').notNull(),
+  /** enviado | recusado | recebido */
+  situacao: text('situacao').notNull(),
+  resposta: text('resposta'),
+  usuarioId: uuid('usuario_id').references(() => usuarios.id, { onDelete: 'set null' }),
+  criadoEm: criadoEm(),
+});
+
+/** Um título enviado a protesto e o que aconteceu com ele no cartório. */
+export const cobrancaProtestos = pgTable(
+  'cobranca_protestos',
+  {
+    id: id(),
+    /** Número do título e nosso número enviados à CRA. */
+    numero: serial('numero').notNull(),
+    tituloId: uuid('titulo_id')
+      .notNull()
+      .references(() => titulos.id),
+    pessoaId: uuid('pessoa_id')
+      .notNull()
+      .references(() => pessoas.id),
+    /** Valor enviado (saldo a protestar). */
+    valor: integer('valor').notNull(),
+    especie: text('especie').notNull(),
+    codMunicipio: text('cod_municipio').notNull(),
+    /**
+     * enviado (aguardando o cartório) | em_cartorio (protocolado) | protestado | pago (pago no cartório) |
+     * retirado (desistência aceita) | sustado | devolvido (irregularidade) | cancelado (protesto cancelado) | recusado (a CRA recusou o arquivo)
+     */
+    status: text('status').notNull().default('enviado'),
+    cartorio: text('cartorio'),
+    protocolo: text('protocolo'),
+    dataProtocolo: text('data_protocolo'),
+    ocorrencia: text('ocorrencia'),
+    irregularidade: text('irregularidade'),
+    custas: integer('custas'),
+    /** Pedido feito à CRA depois do pagamento: desistencia | autoriza_cancelamento. */
+    pedido: text('pedido'),
+    pedidoEm: timestamp('pedido_em', { withTimezone: true }),
+    remessaId: uuid('remessa_id').references(() => cobrancaArquivosCra.id),
+    usuarioId: uuid('usuario_id').references(() => usuarios.id, { onDelete: 'set null' }),
+    historico: jsonb('historico').$type<{ em: string; texto: string }[]>().notNull().default([]),
+    criadoEm: criadoEm(),
+    atualizadoEm: timestamp('atualizado_em', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({ porTitulo: index('cobranca_protestos_titulo_idx').on(t.tituloId) }),
 );

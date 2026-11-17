@@ -9,3 +9,4 @@ export * from './texto';
 export * from './score';
 export * from './formularios';
 export * from './jornada';
+export * from './cobranca';

@@ -1,9 +1,9 @@
 import { BadRequestException, Inject, Injectable, Logger, ServiceUnavailableException, UnauthorizedException } from '@nestjs/common';
 import { timingSafeEqual } from 'node:crypto';
-import { and, eq, ilike, or } from 'drizzle-orm';
+import { and, eq, ilike, inArray, or } from 'drizzle-orm';
 import { DB, type Db } from '../comum/db.module';
 import { AuditoriaService } from '../comum/auditoria.service';
-import { ConfiguracoesService } from '../configuracoes/configuracoes.service';
+import { CobrancaConfigService } from '../cobranca/cobranca-config.service';
 import { SegredosService } from '../segredos/segredos.service';
 import { contas, eventosIntegracao, pessoas, titulos } from '../db/schema';
 import { hoje } from '../maletas/maletas.service';
@@ -21,7 +21,7 @@ export class AsaasService {
   constructor(
     @Inject(DB) private readonly db: Db,
     private readonly auditoria: AuditoriaService,
-    private readonly config: ConfiguracoesService,
+    private readonly config: CobrancaConfigService,
     private readonly segredos: SegredosService,
   ) {}
 
@@ -65,22 +65,30 @@ export class AsaasService {
     return j;
   }
 
-  /** Cria (uma vez) a pessoa como cliente no Asaas. */
-  private async clienteAsaas(pessoaId: string) {
+  /**
+   * Cria (uma vez) a pessoa como cliente no Asaas. Com `atualizar`, manda de novo nome, e-mail, celular e endereço
+   * do cadastro (o boleto novo sai com os dados de hoje, e os avisos do Asaas vão para o contato certo).
+   */
+  private async clienteAsaas(pessoaId: string, atualizar = false) {
     const [p] = await this.db.select().from(pessoas).where(eq(pessoas.id, pessoaId));
     if (!p) throw new BadRequestException('Pessoa não encontrada.');
-    if (p.asaasClienteId) return p.asaasClienteId;
-    if (!p.documento) throw new BadRequestException('Para gerar boleto ou Pix, o cadastro precisa ter CPF ou CNPJ.');
-    const c = await this.chamar<{ id: string }>('POST', '/customers', {
+    if (!p.documento && !p.asaasClienteId) throw new BadRequestException('Para gerar boleto ou Pix, o cadastro precisa ter CPF ou CNPJ.');
+    const dados = {
       name: p.nome,
-      cpfCnpj: p.documento,
+      cpfCnpj: p.documento ?? undefined,
       email: p.email ?? undefined,
       mobilePhone: p.telefone1 ?? undefined,
       postalCode: p.cep ?? undefined,
+      address: p.logradouro ?? undefined,
       addressNumber: p.numero ?? undefined,
+      province: p.bairro ?? undefined,
       externalReference: p.id,
-      notificationDisabled: false,
-    });
+    };
+    if (p.asaasClienteId) {
+      if (atualizar) await this.chamar('PUT', `/customers/${p.asaasClienteId}`, dados).catch((e) => this.log.warn(`Cadastro do cliente ${p.asaasClienteId} não atualizado no Asaas: ${(e as Error).message}`));
+      return p.asaasClienteId;
+    }
+    const c = await this.chamar<{ id: string }>('POST', '/customers', { ...dados, notificationDisabled: false });
     await this.db.update(pessoas).set({ asaasClienteId: c.id }).where(eq(pessoas.id, p.id));
     return c.id;
   }
@@ -101,23 +109,30 @@ export class AsaasService {
     }).catch((e) => this.log.warn(`Não informou o pagamento manual da cobrança ${cobrancaId}: ${(e as Error).message}`));
   }
 
-  /** Gera boleto ou Pix para um título a receber. */
-  async cobrar(tituloId: string, tipo: 'BOLETO' | 'PIX', usuarioId: string | null) {
+  /**
+   * Gera boleto ou Pix para um título a receber.
+   * `nova`: emite outra (segunda via, novo vencimento, valor com encargos) e apaga a anterior no Asaas.
+   * O título passa a apontar só para a cobrança nova: é ela que aparece na ficha, no portal e nas mensagens.
+   */
+  async cobrar(tituloId: string, tipo: 'BOLETO' | 'PIX', usuarioId: string | null, nova?: { valor: number; vencimento: string }) {
     const [t] = await this.db.select().from(titulos).where(eq(titulos.id, tituloId));
     if (!t) throw new BadRequestException('Título não encontrado.');
-    if (t.tipo !== 'receber' || t.status !== 'aberto') throw new BadRequestException('Só títulos a receber em aberto podem ser cobrados.');
+    if (t.tipo !== 'receber' || (t.status !== 'aberto' && t.status !== 'protestado')) throw new BadRequestException('Só títulos a receber em aberto podem ser cobrados.');
     if (!t.pessoaId) throw new BadRequestException('O título não tem pagador.');
     if (t.formaPagamento === 'debito' || t.formaPagamento === 'credito') throw new BadRequestException('Título de cartão é pago pela maquininha; não gera boleto nem Pix.');
-    if (t.cobrancaExternaId)
+    if (t.cobrancaExternaId && !nova)
       return {
         id: t.cobrancaExternaId,
         url: t.cobrancaUrl,
         pixCopiaCola: t.pixCopiaCola,
         jaExistia: true,
       };
-    const customer = await this.clienteAsaas(t.pessoaId);
-    const encargos = t.origemTipo === 'acerto' ? await this.config.regras() : null;
-    const venc = t.vencimento < hoje() ? hoje() : t.vencimento;
+    const customer = await this.clienteAsaas(t.pessoaId, !!nova);
+    // Multa e juros da configuração de cobrança: o Asaas calcula se a pessoa pagar depois do vencimento.
+    const cfg = await this.config.obter();
+    const encargos = cfg.multaPb > 0 || cfg.jurosMesPb > 0 ? cfg : null;
+    const venc = nova ? nova.vencimento : t.vencimento < hoje() ? hoje() : t.vencimento;
+    const valor = nova ? nova.valor : t.valor;
     const pg = await this.chamar<{
       id: string;
       invoiceUrl?: string;
@@ -125,14 +140,13 @@ export class AsaasService {
     }>('POST', '/payments', {
       customer,
       billingType: tipo,
-      value: t.valor / 100,
+      value: valor / 100,
       dueDate: venc,
       description: t.descricao.slice(0, 500),
       externalReference: t.id,
-      // Multa e juros pelas regras do consignado (o Asaas calcula se a pessoa pagar depois do vencimento).
       ...(encargos
         ? {
-            fine: { value: encargos.multaAtrasoPb / 100 },
+            fine: { value: encargos.multaPb / 100 },
             interest: { value: encargos.jurosMesPb / 100 },
           }
         : {}),
@@ -150,14 +164,18 @@ export class AsaasService {
         cobrancaTipo: tipo,
         cobrancaUrl: url,
         pixCopiaCola: pix,
+        cobrancaValor: valor,
+        cobrancaVencimento: venc,
       })
       .where(eq(titulos.id, t.id));
+    // A anterior deixa de valer: apaga no Asaas para ninguém pagar duas vezes.
+    if (nova && t.cobrancaExternaId && t.cobrancaExternaId !== pg.id) await this.cancelarCobranca(t.cobrancaExternaId);
     await this.auditoria.registrar({
       usuarioId,
       acao: 'gerar_cobranca',
       entidade: 'titulo',
       entidadeId: t.id,
-      dados: { asaas: pg.id, tipo },
+      dados: { asaas: pg.id, tipo, ...(nova ? { segundaVia: true, anterior: t.cobrancaExternaId, valor, vencimento: venc } : {}) },
     });
     return { id: pg.id, url, pixCopiaCola: pix, jaExistia: false };
   }
@@ -194,7 +212,7 @@ export class AsaasService {
           .from(titulos)
           .where(or(eq(titulos.cobrancaExternaId, String(p.id ?? '')), eq(titulos.id, isUuid(p.externalReference) ? String(p.externalReference) : '00000000-0000-0000-0000-000000000000')));
         if (!t) resultado = 'título não encontrado';
-        else if (t.status !== 'aberto') resultado = `título já ${t.status}`;
+        else if (t.status !== 'aberto' && t.status !== 'protestado') resultado = `título já ${t.status}`;
         else {
           const [contaAsaas] = await this.db
             .select({ id: contas.id })
@@ -212,7 +230,7 @@ export class AsaasService {
               contaId: contaAsaas?.id ?? null,
               formaPagamento: t.cobrancaTipo === 'PIX' ? 'pix' : 'boleto',
             })
-            .where(and(eq(titulos.id, t.id), eq(titulos.status, 'aberto')));
+            .where(and(eq(titulos.id, t.id), inArray(titulos.status, ['aberto', 'protestado'])));
           await this.auditoria.registrar({
             usuarioId: null,
             acao: 'baixa_automatica',

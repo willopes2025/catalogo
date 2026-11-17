@@ -16,6 +16,10 @@ import { DocumentosService } from './documentos/documentos.service';
 import { CatalogoController } from './catalogo/catalogo.controller';
 import { PrivacidadeController } from './catalogo/privacidade.controller';
 import { ConsultasController } from './consultas/consultas.controller';
+import { CobrancaController } from './cobranca/cobranca.controller';
+import { CobrancaConfigService } from './cobranca/cobranca-config.service';
+import { CobrancaService } from './cobranca/cobranca.service';
+import { CraService } from './cobranca/cra.service';
 import { EmpresasController } from './empresas/empresas.controller';
 import { VendasController } from './vendas/vendas.controller';
 import { VendasService } from './vendas/vendas.service';
@@ -128,6 +132,7 @@ if (!segredo || (process.env.NODE_ENV === 'production' && segredo.length < 32)) 
     MarketingController,
     MetaController,
     IaController,
+    CobrancaController,
   ],
   providers: [
     SegredosService,
@@ -161,6 +166,10 @@ if (!segredo || (process.env.NODE_ENV === 'production' && segredo.length < 32)) 
     RhService,
     ContabilidadeService,
     AvisosService,
+    CobrancaConfigService,
+    CobrancaService,
+    CraService,
+    ConsultasController,
     { provide: APP_GUARD, useClass: AuthGuard },
     { provide: APP_FILTER, useClass: ErrosFilter },
   ],

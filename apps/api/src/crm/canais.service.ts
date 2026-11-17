@@ -513,6 +513,14 @@ export class CanaisService implements OnModuleInit {
     return { ok: true };
   }
 
+  /** Mensagem automática para um telefone (régua de cobrança): abre a conversa se não houver, sem tirar ninguém da fila. */
+  async enviarParaTelefone(d: { canalId: string; telefone: string; nome?: string | null; texto: string; templateId?: string | null }) {
+    const contato = await this.crm.garantirContato({ telefone: d.telefone, nome: d.nome });
+    if (contato.descadastrado) throw new BadRequestException('O contato pediu para não receber mensagens.');
+    const cv = await this.garantirConversa(contato.id, d.canalId, 'resolvida');
+    return this.enviar({ conversaId: cv.id, tipo: d.templateId ? 'template' : 'texto', texto: d.texto, templateId: d.templateId ?? undefined });
+  }
+
   /** Conversa nova com um telefone qualquer (que pode nem estar no CRM): já fica com quem abriu. */
   async novaConversa(d: { canalId: string; telefone: string; nome?: string | null; usuarioId: string; gestor: boolean }) {
     const canal = await this.obter(d.canalId);

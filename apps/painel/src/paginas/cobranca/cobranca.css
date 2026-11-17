@@ -1,0 +1,26 @@
+/* Cobrança */
+.modal-fundo { position: fixed; inset: 0; background: rgba(43, 35, 29, 0.45); z-index: 60; display: flex; align-items: flex-start; justify-content: center; padding: 8vh 16px; overflow-y: auto; }
+.modal { width: 100%; }
+.cob-faixas { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; }
+.cob-faixa { border: 1px solid var(--linha); border-radius: var(--raio); padding: 12px 14px; background: var(--papel); cursor: pointer; text-align: left; font: inherit; }
+.cob-faixa:hover { border-color: var(--dourado); }
+.cob-faixa b { display: block; font-size: 20px; font-variant-numeric: tabular-nums; }
+.cob-faixa .barra { height: 5px; border-radius: 3px; background: var(--creme-2); margin-top: 8px; overflow: hidden; }
+.cob-faixa .barra i { display: block; height: 100%; background: var(--dourado); }
+.cob-ficha { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 16px; align-items: start; }
+.cob-linha-tempo { display: flex; flex-direction: column; gap: 10px; max-height: 620px; overflow-y: auto; }
+.cob-evento { border-left: 3px solid var(--linha); padding: 2px 0 2px 10px; font-size: 14px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.cob-evento.sistema { border-left-color: var(--dourado); color: var(--suave); }
+.cob-evento.regua { border-left-color: #8fb3a3; }
+.cob-evento.promessa { border-left-color: var(--alerta); }
+.cob-evento .quem { font-size: 12px; color: var(--suave); }
+.cob-parcelas { font-variant-numeric: tabular-nums; }
+.cob-passo { display: grid; grid-template-columns: 120px 130px minmax(0, 1fr) auto; gap: 8px; align-items: start; padding: 10px 0; border-bottom: 1px solid var(--linha); }
+.cob-passo textarea { min-height: 76px; }
+.cob-xml { white-space: pre-wrap; overflow-wrap: anywhere; font-family: ui-monospace, monospace; font-size: 12px; max-height: 60vh; overflow: auto; background: var(--creme); padding: 10px; border-radius: 8px; }
+@media (max-width: 1100px) {
+  .cob-ficha { grid-template-columns: 1fr; }
+  .cob-faixas { grid-template-columns: repeat(2, 1fr); }
+  .cob-passo { grid-template-columns: 1fr 1fr; }
+  .cob-passo textarea { grid-column: span 2; }
+}
