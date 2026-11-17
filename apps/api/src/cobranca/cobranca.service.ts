@@ -80,9 +80,10 @@ export class CobrancaService implements OnModuleInit, OnModuleDestroy {
   }
 
   /** Valor atualizado (com multa e juros até hoje) de cada título vencido, em SQL, para ordenar e somar. */
+  // Em numeric: valor × juros × dias passa do limite do inteiro em títulos grandes ou muito antigos.
   private atualizadoSql(cfg: ConfigCobranca) {
     const dias = sql`greatest(0, ${hoje()}::date - ${titulos.vencimento})`;
-    return sql<number>`(${titulos.valor} + case when ${dias} > ${Math.max(0, cfg.diasCarencia)} then round(${titulos.valor} * ${cfg.multaPb} / 10000.0) + round(${titulos.valor} * ${cfg.jurosMesPb} * ${dias} / 300000.0) else 0 end)`;
+    return sql<number>`(${titulos.valor} + case when ${dias} > ${Math.max(0, cfg.diasCarencia)} then round(${titulos.valor}::numeric * ${cfg.multaPb} / 10000) + round(${titulos.valor}::numeric * ${cfg.jurosMesPb} * ${dias} / 300000) else 0 end)`;
   }
 
   // ───────────── Carteira ─────────────

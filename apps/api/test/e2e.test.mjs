@@ -2569,6 +2569,10 @@ test('cobrança: carteira, terceirizada vê só a dela, contato e promessa, 2ª 
   assert.equal(la.maiorAtraso, 40);
   assert.ok(cart.itens.some((x) => x.pessoaId === b.id));
   assert.equal((await ok('GET', '/cobranca/carteira?busca=Cobrança&faixa=31_60')).itens.length, 1);
+  // Título grande e muito antigo: valor × juros × dias passa do limite do inteiro no banco.
+  const antiga = await ok('POST', '/pessoas', { tipo: 'cliente', nome: 'Dívida Antiga Grande', documento: cpf(523456785), ...endereco });
+  await ok('POST', '/financeiro/titulos', { empresaId: emp.id, tipo: 'receber', pessoaId: antiga.id, descricao: 'Muito antiga', valor: 500000, vencimento: dia(-600) });
+  assert.equal(Number((await ok('GET', '/cobranca/carteira?busca=Dívida Antiga')).itens[0].atualizado), 500000 + 10000 + 100000);
   const painel = await ok('GET', '/cobranca/painel');
   assert.ok(painel.vencido.devedores >= 2);
 
