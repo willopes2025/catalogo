@@ -1155,6 +1155,10 @@ export const crmConversas = pgTable(
     iaAtiva: boolean('ia_ativa'),
     /** Quantas respostas a IA já deu desde que a conversa entrou na fila (limite para não ficar em círculo). */
     iaRespostas: integer('ia_respostas').notNull().default(0),
+    /** Especialista de IA que está atendendo (a recepção escolhe; troca quando o assunto muda). */
+    iaAgenteId: uuid('ia_agente_id').references((): AnyPgColumn => iaAgentes.id, { onDelete: 'set null' }),
+    /** Quantas vezes a conversa passou de um especialista para outro neste atendimento. */
+    iaTransferencias: integer('ia_transferencias').notNull().default(0),
     criadoEm: criadoEm(),
   },
   (t) => ({ unica: uniqueIndex('crm_conversas_contato_canal_idx').on(t.contatoId, t.canalId), recentes: index('crm_conversas_recentes_idx').on(t.ultimaMensagemEm), porStatus: index('crm_conversas_status_idx').on(t.status, t.atendenteId) }),
@@ -1917,3 +1921,22 @@ export const cobrancaProtestos = pgTable(
   },
   (t) => ({ porTitulo: index('cobranca_protestos_titulo_idx').on(t.tituloId) }),
 );
+
+/**
+ * Especialistas do agente de IA no WhatsApp. A recepção lê a conversa e passa para o especialista do assunto;
+ * todos falam com o mesmo nome. Sem especialistas, o agente único continua atendendo como antes.
+ */
+export const iaAgentes = pgTable('ia_agentes', {
+  id: id(),
+  /** vendas | recrutamento | revendedora | cobranca | posvenda | outro */
+  funcao: text('funcao').notNull(),
+  nome: text('nome').notNull(),
+  /** Quando a recepção deve passar para este especialista (o assunto dele). */
+  quando: text('quando').notNull(),
+  instrucoes: text('instrucoes').notNull().default(''),
+  conhecimento: text('conhecimento').notNull().default(''),
+  ativo: boolean('ativo').notNull().default(true),
+  ordem: integer('ordem').notNull().default(0),
+  criadoEm: criadoEm(),
+  atualizadoEm: timestamp('atualizado_em', { withTimezone: true }).notNull().defaultNow(),
+});

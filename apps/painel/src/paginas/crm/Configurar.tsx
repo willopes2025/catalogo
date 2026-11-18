@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, pode } from '../../api';
-import { Abas, Campo, Carregando, Erro } from '../../componentes/ui';
+import { Abas, Campo, Carregando, Erro, camposComErro } from '../../componentes/ui';
 import { Distribuicao } from './Distribuicao';
 import { NOME_TIPO_CANAL, NovoCampo, TIPOS_CAMPO, usarAtendentes, usarCampos, usarCanais, usarFunis, variavelDoCampo, type CampoDef, type Canal, type Template, type TipoCanal } from './comum';
 
@@ -451,7 +451,8 @@ function Ramais() {
 
 // ───────────── Agente de IA ─────────────
 
-interface ConfigAgente { ativo: boolean; canais: string[]; instrucoes: string; conhecimento: string; maxRespostas: number; ligada: boolean }
+interface Especialista { id: string; funcao: string; nome: string; quando: string; instrucoes: string; conhecimento: string; ativo: boolean; ordem: number }
+interface ConfigAgente { ativo: boolean; canais: string[]; instrucoes: string; conhecimento: string; maxRespostas: number; nome: string; maxTransferencias: number; ligada: boolean; especialistas: Especialista[] }
 
 /** O agente que atende no WhatsApp enquanto ninguém da equipe pegou a conversa. */
 function AgenteIa() {
@@ -461,7 +462,7 @@ function AgenteIa() {
   const canais = usarCanais();
   const [f, setF] = useState<ConfigAgente | null>(null);
   useEffect(() => { if (q.data && !f) setF(q.data); }, [q.data, f]);
-  const salvar = useMutation({ mutationFn: () => api<ConfigAgente>('/crm/ia-agente', { metodo: 'PUT', corpo: { ativo: f!.ativo, canais: f!.canais, instrucoes: f!.instrucoes, conhecimento: f!.conhecimento, maxRespostas: f!.maxRespostas } }), onSuccess: (r) => { setF(r); qc.invalidateQueries({ queryKey: ['crm', 'ia-agente'] }); } });
+  const salvar = useMutation({ mutationFn: () => api<ConfigAgente>('/crm/ia-agente', { metodo: 'PUT', corpo: { ativo: f!.ativo, canais: f!.canais, instrucoes: f!.instrucoes, conhecimento: f!.conhecimento, maxRespostas: f!.maxRespostas, nome: f!.nome, maxTransferencias: f!.maxTransferencias } }), onSuccess: (r) => { setF({ ...f!, ...r }); qc.invalidateQueries({ queryKey: ['crm', 'ia-agente'] }); } });
   if (q.isLoading || !f) return <Carregando />;
   if (q.error) return <Erro erro={q.error} />;
   return (
@@ -477,10 +478,16 @@ function AgenteIa() {
             {canais.data?.map((c) => <label key={c.id} className="check"><input type="checkbox" disabled={!admin} checked={f.canais.includes(c.id)} onChange={(e) => setF({ ...f, canais: e.target.checked ? [...f.canais, c.id] : f.canais.filter((x) => x !== c.id) })} /> {c.nome}</label>)}
           </div>
         </div>
-        <Campo rotulo="Como ela deve atender" className="l4" ajuda="O tom, o objetivo e o que perguntar. Ex.: trate por você; descubra se a pessoa quer comprar ou ser revendedora; para revendedora, peça a cidade.">
+        <Campo rotulo="Nome com que ela se apresenta" className="l2" ajuda="O mesmo para todos os especialistas: o cliente não percebe a troca. Em branco, ela não se apresenta por nome.">
+          <input maxLength={40} disabled={!admin} value={f.nome ?? ''} onChange={(e) => setF({ ...f, nome: e.target.value })} placeholder="Ex.: Ari" />
+        </Campo>
+        <Campo rotulo="Trocas de especialista por conversa" className="l2" ajuda="Passou disso, a conversa vai para a equipe (evita a IA ficar passando de um para o outro).">
+          <input type="number" min={0} max={5} disabled={!admin} value={f.maxTransferencias ?? 2} onChange={(e) => setF({ ...f, maxTransferencias: Math.max(0, Math.min(5, Number(e.target.value) || 0)) })} />
+        </Campo>
+        <Campo rotulo="Como ela deve atender (vale para todos)" className="l4" ajuda="O tom, o objetivo e o que perguntar. Ex.: trate por você; descubra se a pessoa quer comprar ou ser revendedora; para revendedora, peça a cidade.">
           <textarea rows={5} maxLength={6000} disabled={!admin} value={f.instrucoes} onChange={(e) => setF({ ...f, instrucoes: e.target.value })} />
         </Campo>
-        <Campo rotulo="O que ela precisa saber sobre a empresa" className="l4" ajuda="Endereço, horário, formas de pagamento, como funciona a revenda, prazo de entrega, perguntas frequentes. Ela só afirma o que estiver escrito aqui; o resto ela diz que vai confirmar com a equipe.">
+        <Campo rotulo="O que ela precisa saber sobre a empresa (vale para todos)" className="l4" ajuda="Endereço, horário, formas de pagamento, como funciona a revenda, prazo de entrega, perguntas frequentes. Ela só afirma o que estiver escrito aqui; o resto ela diz que vai confirmar com a equipe.">
           <textarea rows={10} maxLength={20000} disabled={!admin} value={f.conhecimento} onChange={(e) => setF({ ...f, conhecimento: e.target.value })} />
         </Campo>
         <Campo rotulo="Respostas seguidas antes de passar para a equipe" className="l2" ajuda="Evita conversa em círculo. Chegando ao limite, a conversa fica na fila com um recado.">
@@ -490,6 +497,7 @@ function AgenteIa() {
         {salvar.isSuccess && <div className="aviso ok l4">Salvo. {f.ativo ? 'O agente já está atendendo as conversas novas.' : 'O agente está desligado.'}</div>}
         {admin && <div className="l4"><button className="botao" disabled={salvar.isPending} onClick={() => salvar.mutate()}>Salvar</button></div>}
       </div>
+      <Especialistas lista={q.data?.especialistas ?? []} admin={admin} />
       <UsoIa />
       <div className="cartao">
         <b>No chat</b>
@@ -498,13 +506,89 @@ function AgenteIa() {
           <li>"✨ Sugerir" escreve uma resposta para você revisar e enviar. Funciona mesmo com o agente desligado.</li>
           <li>"🤖 Acionar IA" liga a IA só naquela conversa; "Pausar IA" desliga.</li>
           <li>Quando a IA passa a conversa, ela deixa um recado interno dizendo o motivo.</li>
+          <li>Com especialistas, cada troca também aparece como recado interno (ex.: "🤖 Recepção → Vendas: quer comprar peça").</li>
         </ul>
       </div>
     </div>
   );
 }
 
-const NOME_RECURSO: Record<string, string> = { agente: 'Agente no WhatsApp', sugestao: 'Sugestão de resposta', reconhecer_peca: 'Reconhecer peça pela foto', maleta: 'Sugestão de maleta', foto: 'Foto de catálogo', transcricao: 'Transcrição de áudio', teste: 'Teste de conexão' };
+/** Especialistas: a recepção lê a conversa e passa para o do assunto. */
+function Especialistas({ lista, admin }: { lista: Especialista[]; admin: boolean }) {
+  const qc = useQueryClient();
+  const [editar, setEditar] = useState<Partial<Especialista> | null>(null);
+  const atualizar = () => qc.invalidateQueries({ queryKey: ['crm', 'ia-agente'] });
+  const sugeridos = useMutation({ mutationFn: () => api('/crm/ia-agentes/sugeridos', { corpo: {} }), onSuccess: atualizar });
+  const salvar = useMutation({
+    mutationFn: (e: Partial<Especialista>) => api(e.id ? `/crm/ia-agentes/${e.id}` : '/crm/ia-agentes', { metodo: e.id ? 'PATCH' : 'POST', corpo: { funcao: e.funcao, nome: e.nome, quando: e.quando, instrucoes: e.instrucoes ?? '', conhecimento: e.conhecimento ?? '', ativo: e.ativo ?? true, ordem: Number(e.ordem) || 0 } }),
+    onSuccess: () => { setEditar(null); atualizar(); },
+  });
+  const ligar = useMutation({ mutationFn: (e: Especialista) => api(`/crm/ia-agentes/${e.id}`, { metodo: 'PATCH', corpo: { ativo: !e.ativo } }), onSuccess: atualizar });
+  const excluir = useMutation({ mutationFn: (id: string) => api(`/crm/ia-agentes/${id}`, { metodo: 'DELETE' }), onSuccess: () => { setEditar(null); atualizar(); } });
+  const erros = camposComErro(salvar.error);
+  const ativos = lista.filter((e) => e.ativo).length;
+  return (
+    <div className="cartao">
+      <div className="flex" style={{ justifyContent: 'space-between', flexWrap: 'wrap' }}>
+        <b>Especialistas</b>
+        {admin && (
+          <div className="flex">
+            {lista.length < 3 && <button className="botao claro pequeno" disabled={sugeridos.isPending} onClick={() => sugeridos.mutate()}>Criar os sugeridos</button>}
+            <button className="botao pequeno" onClick={() => setEditar({ ativo: true, ordem: lista.length + 1 })}>+ Especialista</button>
+          </div>
+        )}
+      </div>
+      <p className="muted" style={{ margin: '6px 0 10px', fontSize: 13 }}>
+        {ativos
+          ? 'A recepção (um modelo rápido e barato) lê a conversa, faz até uma pergunta se o assunto não estiver claro, e passa para o especialista. Se a pessoa mudar de assunto, o especialista passa para o outro. Todos usam o nome e o conhecimento geral acima, mais as instruções e o conhecimento próprios.'
+          : 'Sem especialistas ligados, um agente só atende tudo com as instruções acima. Com especialistas, a recepção escolhe quem atende cada assunto.'}
+      </p>
+      {lista.length > 0 && (
+        <table className="tabela">
+          <thead><tr><th>Especialista</th><th>Atende quando</th><th></th></tr></thead>
+          <tbody>
+            {lista.map((e) => (
+              <tr key={e.id} style={e.ativo ? undefined : { opacity: 0.55 }}>
+                <td><b>{e.nome}</b><div className="muted" style={{ fontSize: 12 }}>{e.funcao}{e.ativo ? '' : ' · desligado'}</div></td>
+                <td style={{ fontSize: 13 }}>{e.quando}</td>
+                <td style={{ whiteSpace: 'nowrap' }}>
+                  {admin && <button className="botao claro pequeno" onClick={() => setEditar(e)}>Editar</button>}{' '}
+                  {admin && <button className="botao claro pequeno" disabled={ligar.isPending} onClick={() => ligar.mutate(e)}>{e.ativo ? 'Desligar' : 'Ligar'}</button>}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      {(sugeridos.error || ligar.error) && <Erro erro={sugeridos.error ?? ligar.error} />}
+      {editar && (
+        <div className="modal-fundo" onClick={() => setEditar(null)}>
+          <div className="cartao modal" onClick={(ev) => ev.stopPropagation()} style={{ maxWidth: 680 }}>
+            <h3 style={{ marginTop: 0 }}>{editar.id ? `Editar ${editar.nome}` : 'Novo especialista'}</h3>
+            <div className="form">
+              <Campo rotulo="Nome (só a equipe vê)" erro={erros.nome} className="l2"><input value={editar.nome ?? ''} onChange={(ev) => setEditar({ ...editar, nome: ev.target.value })} placeholder="Ex.: Pós-venda" /></Campo>
+              <Campo rotulo="Chave" erro={erros.funcao} ajuda="Minúsculas, sem espaço." ><input value={editar.funcao ?? ''} onChange={(ev) => setEditar({ ...editar, funcao: ev.target.value.toLowerCase().replace(/[^a-z0-9_]/g, '') })} placeholder="posvenda" /></Campo>
+              <Campo rotulo="Ordem"><input type="number" min={0} max={100} value={editar.ordem ?? 0} onChange={(ev) => setEditar({ ...editar, ordem: Number(ev.target.value) })} /></Campo>
+              <Campo rotulo="Quando a recepção passa para ele" erro={erros.quando} className="l4" ajuda="O assunto, com exemplos. É o que a recepção lê para decidir."><textarea rows={3} maxLength={600} value={editar.quando ?? ''} onChange={(ev) => setEditar({ ...editar, quando: ev.target.value })} placeholder="Ex.: troca, defeito ou garantia de peça já comprada." /></Campo>
+              <Campo rotulo="Como atender este assunto" className="l4"><textarea rows={5} maxLength={6000} value={editar.instrucoes ?? ''} onChange={(ev) => setEditar({ ...editar, instrucoes: ev.target.value })} /></Campo>
+              <Campo rotulo="O que ele precisa saber deste assunto" className="l4" ajuda="Só o que é deste assunto (o conhecimento geral já vai junto)."><textarea rows={6} maxLength={20000} value={editar.conhecimento ?? ''} onChange={(ev) => setEditar({ ...editar, conhecimento: ev.target.value })} /></Campo>
+              <label className="check l4"><input type="checkbox" checked={editar.ativo ?? true} onChange={(ev) => setEditar({ ...editar, ativo: ev.target.checked })} /> Ligado</label>
+            </div>
+            {salvar.error && <Erro erro={salvar.error} />}
+            {excluir.error && <Erro erro={excluir.error} />}
+            <div className="flex" style={{ marginTop: 12 }}>
+              <button className="botao" disabled={salvar.isPending} onClick={() => salvar.mutate(editar)}>Salvar</button>
+              <button className="botao claro" onClick={() => setEditar(null)}>Voltar</button>
+              {editar.id && <button className="botao perigo" style={{ marginLeft: 'auto' }} disabled={excluir.isPending} onClick={() => window.confirm(`Excluir o especialista ${editar.nome}? As conversas com ele voltam para a recepção.`) && excluir.mutate(editar.id!)}>Excluir</button>}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+const NOME_RECURSO: Record<string, string> = { agente: 'Agente no WhatsApp', triagem: 'Recepção do agente (escolhe o especialista)', sugestao: 'Sugestão de resposta', reconhecer_peca: 'Reconhecer peça pela foto', maleta: 'Sugestão de maleta', foto: 'Foto de catálogo', transcricao: 'Transcrição de áudio', teste: 'Teste de conexão' };
 
 /** Quantas vezes a IA foi chamada neste mês (a cobrança é das empresas de IA, pelo consumo). */
 function UsoIa() {

@@ -3,7 +3,7 @@ import { DB, type Db } from '../comum/db.module';
 import { iaUsos } from '../db/schema';
 import { SegredosService } from '../segredos/segredos.service';
 
-export type Recurso = 'agente' | 'sugestao' | 'reconhecer_peca' | 'maleta' | 'foto' | 'transcricao' | 'teste';
+export type Recurso = 'agente' | 'triagem' | 'sugestao' | 'reconhecer_peca' | 'maleta' | 'foto' | 'transcricao' | 'teste';
 export type Bloco = { type: 'text'; text: string } | { type: 'image'; source: { type: 'base64'; media_type: string; data: string } | { type: 'url'; url: string } };
 export interface MensagemIa {
   role: 'user' | 'assistant';
@@ -37,16 +37,20 @@ export class IaService {
   get modelo() {
     return this.segredos.v('IA_MODELO')?.trim() || MODELO_PADRAO;
   }
+  /** Modelo da recepção do agente (só escolhe o especialista): rápido e barato. */
+  get modeloTriagem() {
+    return this.segredos.v('IA_MODELO_TRIAGEM')?.trim() || 'claude-haiku-5-5';
+  }
 
   private async registrar(recurso: Recurso, modelo: string, entrada: number, saida: number, usuarioId?: string | null) {
     await this.db.insert(iaUsos).values({ recurso, modelo, tokensEntrada: entrada, tokensSaida: saida, usuarioId: usuarioId ?? null }).catch((e) => this.log.warn(`Uso não registrado: ${(e as Error).message}`));
   }
 
   /** Pergunta ao Claude e devolve o texto da resposta. */
-  async perguntar(o: { recurso: Recurso; sistema: string; mensagens: MensagemIa[]; maxTokens?: number; usuarioId?: string | null }): Promise<string> {
+  async perguntar(o: { recurso: Recurso; sistema: string; mensagens: MensagemIa[]; maxTokens?: number; usuarioId?: string | null; modelo?: string }): Promise<string> {
     const chave = this.segredos.v('ANTHROPIC_API_KEY');
     if (!chave) throw new ServiceUnavailableException({ mensagem: 'A inteligência artificial não está ligada. Cole a chave do Claude em Configurações › Integrações › Inteligência artificial.' });
-    const modelo = this.modelo;
+    const modelo = o.modelo || this.modelo;
     let res: Response;
     try {
       res = await fetch(`${(process.env.IA_CLAUDE_URL ?? 'https://api.anthropic.com').replace(/\/$/, '')}/v1/messages`, {

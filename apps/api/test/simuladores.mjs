@@ -302,7 +302,21 @@ http
       const papeis = corpo.messages.map((m) => m.role).join(',');
       if (/user,user|assistant,assistant/.test(papeis) || corpo.messages[0].role !== 'user') return responder(res, 400, { type: 'error', error: { type: 'invalid_request_error', message: 'roles must alternate' } });
       let saida;
-      if (corpo.system.includes('"passar"')) {
+      if (corpo.system.includes('recepção do WhatsApp')) {
+        const tudo = corpo.messages.filter((m) => m.role === 'user').flatMap(blocos).filter((b) => b.type === 'text').map((b) => b.text).join(' ');
+        const r = /atendente/i.test(texto) ? { agente: 'equipe', motivo: 'Pediu atendente' } : /revender|revendedora|trabalhar com voc/i.test(tudo) ? { agente: 'recrutamento', certeza: 0.9, motivo: 'Quer revender' } : /acerto|minha maleta/i.test(tudo) ? { agente: 'revendedora', certeza: 0.9, motivo: 'Fala da maleta' } : /preço|brinco|colar|anel|argola/i.test(tudo) ? { agente: 'vendas', certeza: 0.95, motivo: 'Quer comprar peça' } : corpo.system.includes('Você já perguntou') ? { agente: 'equipe', motivo: 'Assunto não ficou claro' } : { agente: 'perguntar', certeza: 0.2, pergunta: 'Oi! Me conta o que você está procurando? 😊', motivo: 'Só cumprimentou' };
+        saida = JSON.stringify(r);
+      } else if (corpo.system.includes('SUA ESPECIALIDADE NESTA CONVERSA: Vendas') && /revender/i.test(texto)) {
+        saida = '{"resposta": "", "passar": false, "transferir": "recrutamento", "motivo": "Agora quer revender"}';
+      } else if (corpo.system.includes('SUA ESPECIALIDADE NESTA CONVERSA: Vendas') && /maleta/i.test(texto)) {
+        saida = '{"resposta": "", "passar": false, "transferir": "revendedora", "motivo": "Falou da maleta"}';
+      } else if (corpo.system.includes('SUA ESPECIALIDADE NESTA CONVERSA: Quero revender') && /maleta/i.test(texto)) {
+        saida = '{"resposta": "", "passar": false, "transferir": "vendas", "motivo": "Voltou a falar de peça"}';
+      } else if (corpo.system.includes('SUA ESPECIALIDADE NESTA CONVERSA: Quero revender')) {
+        saida = `{"resposta": "Que bom que você quer revender com a gente${corpo.system.includes('Seu nome é Ari') ? ', aqui é a Ari' : ''}! Em qual cidade você está?", "passar": false}`;
+      } else if (corpo.system.includes('SUA ESPECIALIDADE NESTA CONVERSA: Vendas')) {
+        saida = `{"resposta": "Temos várias argolas! ${corpo.system.includes('revendedora (') ? 'Vi que você é nossa revendedora. ' : ''}Prefere dourada ou prateada?", "passar": false}`;
+      } else if (corpo.system.includes('"passar"')) {
         if (/sobrecarga/i.test(texto)) return responder(res, 529, { type: 'error', error: { type: 'overloaded_error', message: 'Overloaded' } });
         saida = /transcrito: ".*argola/.test(texto) ? '{"resposta": "Temos sim! Vou te mandar as argolas douradas com o preço.", "passar": false}' : /atendente|reclama/i.test(texto) ? '{"resposta": "Claro! Vou chamar alguém da equipe para continuar com você.", "passar": true, "motivo": "Pediu para falar com atendente."}' : `Aqui está:\n\`\`\`json\n{"resposta": "Oi! ${fotos ? 'Que peça linda na foto! ' : ''}Como posso ajudar?", "passar": false}\n\`\`\``;
       } else if (corpo.system.includes('SOMENTE com um JSON') && corpo.system.includes('descreva')) {

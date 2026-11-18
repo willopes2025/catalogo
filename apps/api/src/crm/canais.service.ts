@@ -328,7 +328,7 @@ export class CanaisService implements OnModuleInit {
     const [r] = await this.db
       .update(crmConversas)
       // Devolvida para a fila: a IA volta a poder atender (se estiver ligada na configuração).
-      .set(para ? { status: 'atendimento', atendenteId: para, pegaEm: new Date(), iaAtiva: false } : { status: 'fila', atendenteId: null, filaDesde: new Date(), iaAtiva: null, iaRespostas: 0 })
+      .set(para ? { status: 'atendimento', atendenteId: para, pegaEm: new Date(), iaAtiva: false } : { status: 'fila', atendenteId: null, filaDesde: new Date(), iaAtiva: null, iaRespostas: 0, iaAgenteId: null, iaTransferencias: 0 })
       .where(eq(crmConversas.id, conversaId))
       .returning();
     await this.notaNosLeads(cv.contatoId, para ? 'Conversa transferida.' : 'Conversa devolvida para a fila.', usuarioId, { para });
@@ -339,7 +339,7 @@ export class CanaisService implements OnModuleInit {
     const [cv] = await this.db.select().from(crmConversas).where(eq(crmConversas.id, conversaId));
     if (!cv) throw new NotFoundException('Conversa não encontrada.');
     if (!gestor && cv.atendenteId && cv.atendenteId !== usuarioId) throw new ForbiddenException('Esta conversa é de outro atendente.');
-    const [r] = await this.db.update(crmConversas).set({ status: 'resolvida', naoLidas: 0, iaAtiva: null, iaRespostas: 0 }).where(eq(crmConversas.id, conversaId)).returning();
+    const [r] = await this.db.update(crmConversas).set({ status: 'resolvida', naoLidas: 0, iaAtiva: null, iaRespostas: 0, iaAgenteId: null, iaTransferencias: 0 }).where(eq(crmConversas.id, conversaId)).returning();
     await this.notaNosLeads(cv.contatoId, 'Atendimento resolvido.', usuarioId);
     return r;
   }
@@ -586,7 +586,7 @@ export class CanaisService implements OnModuleInit {
         naoLidas: sql`${crmConversas.naoLidas} + 1`,
         ...(voltaFila ? { status: 'fila', atendenteId: null, filaDesde: new Date() } : {}),
         // Atendimento novo: a IA pode atender de novo, mesmo que tenha passado a vez da outra vez.
-        ...(voltaFila && cv.iaAtiva === false ? { iaAtiva: null, iaRespostas: 0 } : {}),
+        ...(voltaFila && cv.iaAtiva === false ? { iaAtiva: null, iaRespostas: 0, iaAgenteId: null, iaTransferencias: 0 } : {}),
         ...(cv.status === 'fila' && !cv.filaDesde ? { filaDesde: new Date() } : {}),
       })
       .where(eq(crmConversas.id, cv.id));

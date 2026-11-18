@@ -29,6 +29,7 @@ export const INTEGRACOES: Integracao[] = [
     campos: [
       { nome: 'ANTHROPIC_API_KEY', rotulo: 'Chave do Claude (Anthropic)', secreto: true, ajuda: 'Começa com sk-ant-' },
       { nome: 'IA_MODELO', rotulo: 'Modelo do Claude', ajuda: 'Deixe em branco para usar o padrão (claude-sonnet-5-5). Para gastar menos: claude-haiku-5-5.' },
+      { nome: 'IA_MODELO_TRIAGEM', rotulo: 'Modelo da recepção do agente', ajuda: 'A recepção só lê a conversa e escolhe o especialista. Em branco: claude-haiku-5-5 (rápido e barato).' },
       { nome: 'OPENAI_API_KEY', rotulo: 'Chave da OpenAI (fotos)', secreto: true, ajuda: 'Começa com sk-' },
       { nome: 'IA_MODELO_IMAGEM', rotulo: 'Modelo de imagem da OpenAI', ajuda: 'Deixe em branco para usar o padrão da OpenAI.' },
       { nome: 'IA_TRANSCREVER_AUTO', rotulo: 'Áudios recebidos no chat', opcoes: [['sim', 'Transcrever sozinho todo áudio que chegar'], ['nao', 'Só quando clicar em "Transcrever"']] },

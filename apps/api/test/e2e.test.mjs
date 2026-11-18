@@ -1828,6 +1828,76 @@ test('transcrição de áudio no chat: sozinha quando chega, o agente responde a
   await ok('DELETE', `/crm/canais/${c.id}`);
 });
 
+test('multiagentes: recepção pergunta e escolhe o especialista, troca quando o assunto muda, limite de trocas, mesmo nome', async () => {
+  const c = await ok('POST', '/crm/canais', { nome: 'Multiagentes', tipo: 'evolution' });
+  await fetch(`${SIM}/__evo/conectar?i=${encodeURIComponent(c.config.instancia)}`);
+  const hook = (await recebidos()).filter((r) => r.caminho === '/evo/instance/create').pop().corpo.webhook.url.replace('http://localhost:3100', '');
+  let n = 0;
+  const tel = '5527944445555';
+  const chegar = (texto) => fetch(API.replace(/\/api$/, '') + hook, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ event: 'messages.upsert', instance: c.config.instancia, data: { key: { remoteJid: `${tel}@s.whatsapp.net`, fromMe: false, id: `MULTI${++n}` }, pushName: 'Cliente Multi', message: { conversation: texto }, messageTimestamp: Math.floor(Date.now() / 1000) } }) });
+  const espera = (ms = 700) => new Promise((r) => setTimeout(r, ms));
+  const msgs = async () => {
+    const cv = (await ok('GET', `/crm/conversas?aba=todas&canalId=${c.id}`)).find((x) => x.telefone === tel);
+    return (await ok('GET', `/crm/conversas/${cv.id}/mensagens`)).mensagens;
+  };
+
+  // Especialistas sugeridos; não duplica se pedir de novo.
+  const lista = await ok('POST', '/crm/ia-agentes/sugeridos');
+  assert.deepEqual(lista.map((a) => a.funcao), ['vendas', 'recrutamento', 'revendedora']);
+  assert.equal((await ok('POST', '/crm/ia-agentes/sugeridos')).length, 3);
+  assert.equal((await chamar('POST', '/crm/ia-agentes', { funcao: 'vendas', nome: 'Outro', quando: 'Duplicado de propósito' })).status, 400);
+  assert.equal((await chamar('POST', '/crm/ia-agentes', { funcao: 'Pós Venda', nome: 'Pós', quando: 'Chave com espaço e maiúscula' })).status, 400);
+  const pos = await ok('POST', '/crm/ia-agentes', { funcao: 'posvenda', nome: 'Pós-venda', quando: 'Troca, defeito ou garantia de peça comprada.', ativo: false });
+  assert.equal((await ok('GET', '/crm/ia-agente')).especialistas.length, 4);
+  await ok('PUT', '/crm/ia-agente', { ativo: true, canais: [c.id], instrucoes: '', conhecimento: 'Vendemos semijoias.', maxRespostas: 8, nome: 'Ari', maxTransferencias: 2 });
+
+  // 1) Só "oi": a recepção pergunta (com o modelo barato).
+  await chegar('Oi');
+  await espera();
+  let m = await msgs();
+  assert.equal(m.at(-1).texto, 'Oi! Me conta o que você está procurando? 😊');
+  const triagem = (await recebidos()).filter((r) => r.caminho === '/claude/v1/messages' && r.corpo.system.includes('recepção do WhatsApp')).pop();
+  assert.equal(triagem.corpo.model, 'claude-haiku-5-5', 'recepção usa o modelo da triagem');
+  assert.ok(!triagem.corpo.system.includes('"posvenda"'), 'especialista desligado não entra na triagem');
+
+  // 2) Fala de peça: vai para Vendas, com recado interno, e Vendas responde.
+  await chegar('Queria ver brinco de argola');
+  await espera();
+  m = await msgs();
+  assert.ok(m.some((x) => x.direcao === 'interna' && x.texto.startsWith('🤖 Recepção → Vendas')));
+  assert.match(m.at(-1).texto, /^Temos várias argolas!/);
+
+  // 3) Muda de assunto: Vendas passa para "Quero revender" sem mandar nada, e ela responde com o mesmo nome.
+  await chegar('Na verdade eu quero revender');
+  await espera();
+  m = await msgs();
+  assert.ok(m.some((x) => x.direcao === 'interna' && x.texto.startsWith('🤖 Vendas → Quero revender')));
+  assert.equal(m.filter((x) => x.direcao === 'saida' && x.texto === '').length, 0, 'a troca não manda mensagem vazia');
+  assert.match(m.at(-1).texto, /aqui é a Ari! Em qual cidade/);
+
+  // 4) Pula de assunto de novo: passa do limite de 2 trocas e vai para a equipe.
+  await chegar('E a maleta, como funciona?');
+  await espera(1000);
+  m = await msgs();
+  assert.ok(m.some((x) => x.direcao === 'interna' && x.texto.startsWith('🤖 Quero revender → Vendas')));
+  assert.match(m.filter((x) => x.direcao === 'interna').at(-1).texto, /A IA passou esta conversa para a equipe\. Mudou de assunto mais de 2 vez/);
+
+  // A equipe assume e devolve para a fila: começa de novo pela recepção.
+  const cv = (await ok('GET', `/crm/conversas?aba=todas&canalId=${c.id}`)).find((x) => x.telefone === tel);
+  await ok('POST', `/crm/conversas/${cv.id}/ia`, { ativa: true });
+  await espera();
+  m = await msgs();
+  assert.ok(m.filter((x) => x.direcao === 'interna' && x.texto.startsWith('🤖 Recepção →')).length >= 2, 'religada, a IA começa de novo pela recepção (trocas zeradas)');
+  assert.equal(m.at(-1).direcao, 'saida', 'e responde quem estava esperando');
+
+  await ok('PATCH', `/crm/ia-agentes/${pos.id}`, { ativo: true, quando: 'Troca, defeito ou garantia de peça já comprada.' });
+  await ok('DELETE', `/crm/ia-agentes/${pos.id}`);
+  assert.equal((await ok('GET', '/crm/ia-agente')).especialistas.length, 3);
+  await ok('PUT', '/crm/ia-agente', { ativo: false, canais: [], instrucoes: '', conhecimento: '', maxRespostas: 10 });
+  for (const a of lista) await ok('DELETE', `/crm/ia-agentes/${a.id}`);
+  await ok('DELETE', `/crm/canais/${c.id}`);
+});
+
 test('RH e ponto: cadastro, login pelo CPF, batida com foto e GPS, ajustes, espelho, ciência, documentos, AFD/AEJ e contabilidade', async () => {
   const gestor = token;
   const hoje = new Date(Date.now() - 3 * 3600e3).toISOString().slice(0, 10);

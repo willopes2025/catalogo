@@ -31,7 +31,9 @@ import {
   crmTemplates,
   pessoas,
   usuarios,
+  iaAgentes,
 } from '../db/schema';
+import { ESPECIALISTAS_SUGERIDOS } from './especialistas';
 import { CrmService } from './crm.service';
 import { CanaisService } from './canais.service';
 import { TranscricaoService } from './transcricao.service';
@@ -616,17 +618,74 @@ export class AtendimentoController {
   @Get('crm/ia-agente')
   @Permissao('crm', 'ver')
   async agenteConfig() {
-    return { ...(await this.agente.config()), ligada: this.ia.texto };
+    return { ...(await this.agente.config()), ligada: this.ia.texto, especialistas: await this.agente.especialistas(true) };
   }
 
   @Put('crm/ia-agente')
   @Permissao('configuracoes', 'editar')
   async salvarAgente(@Usuario() u: UsuarioLogado, @Body() body: unknown) {
-    const d = validar(z.object({ ativo: z.boolean(), canais: z.array(uuid).max(50).default([]), instrucoes: z.string().max(6000).default(''), conhecimento: z.string().max(20000).default(''), maxRespostas: z.number().int().min(1).max(50).default(10) }), body);
+    const d = validar(z.object({ ativo: z.boolean(), canais: z.array(uuid).max(50).default([]), instrucoes: z.string().max(6000).default(''), conhecimento: z.string().max(20000).default(''), maxRespostas: z.number().int().min(1).max(50).default(10), nome: z.string().trim().max(40).default(''), maxTransferencias: z.number().int().min(0).max(5).default(2) }), body);
     if (d.ativo && !this.ia.texto) throw new BadRequestException('Cole a chave do Claude em Configurações › Integrações › Inteligência artificial antes de ligar o agente.');
     await this.agente.salvarConfig(d);
     await this.auditoria.registrar({ usuarioId: u.id, acao: d.ativo ? 'ligar' : 'configurar', entidade: 'ia_agente', dados: { ativo: d.ativo, canais: d.canais.length, maxRespostas: d.maxRespostas } });
     return { ...d, ligada: this.ia.texto };
+  }
+
+  // ───── Especialistas do agente (multiagentes) ─────
+
+  private especialistaSchema = z.object({
+    funcao: z.string().trim().toLowerCase().regex(/^[a-z][a-z0-9_]{1,29}$/, 'Use só letras minúsculas, sem espaço (ex.: vendas)'),
+    nome: z.string().trim().min(2, 'Dê um nome ao especialista').max(60),
+    quando: z.string().trim().min(10, 'Explique quando a recepção deve passar para ele').max(600),
+    instrucoes: z.string().max(6000).default(''),
+    conhecimento: z.string().max(20000).default(''),
+    ativo: z.boolean().default(true),
+    ordem: z.number().int().min(0).max(100).default(0),
+  });
+
+  @Post('crm/ia-agentes')
+  @Permissao('configuracoes', 'editar')
+  async criarEspecialista(@Usuario() u: UsuarioLogado, @Body() body: unknown) {
+    const d = validar(this.especialistaSchema, body);
+    const [ja] = await this.db.select({ id: iaAgentes.id }).from(iaAgentes).where(eq(iaAgentes.funcao, d.funcao));
+    if (ja) throw new BadRequestException(`Já existe um especialista com a chave "${d.funcao}".`);
+    const [a] = await this.db.insert(iaAgentes).values(d).returning();
+    await this.auditoria.registrar({ usuarioId: u.id, acao: 'criar', entidade: 'ia_agente', entidadeId: a.id, dados: { funcao: a.funcao } });
+    return a;
+  }
+
+  /** Cria os especialistas sugeridos (vendas, quero revender, revendedora) que ainda não existem. */
+  @Post('crm/ia-agentes/sugeridos')
+  @Permissao('configuracoes', 'editar')
+  async sugeridos(@Usuario() u: UsuarioLogado) {
+    const existentes = new Set((await this.db.select({ f: iaAgentes.funcao }).from(iaAgentes)).map((x) => x.f));
+    const novos = ESPECIALISTAS_SUGERIDOS.filter((e) => !existentes.has(e.funcao));
+    if (novos.length) await this.db.insert(iaAgentes).values(novos);
+    await this.auditoria.registrar({ usuarioId: u.id, acao: 'criar', entidade: 'ia_agente', dados: { sugeridos: novos.map((n) => n.funcao) } });
+    return this.agente.especialistas(true);
+  }
+
+  @Patch('crm/ia-agentes/:id')
+  @Permissao('configuracoes', 'editar')
+  async editarEspecialista(@Usuario() u: UsuarioLogado, @Param('id', ParseUUIDPipe) id: string, @Body() body: unknown) {
+    const d = validar(this.especialistaSchema.partial(), body);
+    if (d.funcao) {
+      const [ja] = await this.db.select({ id: iaAgentes.id }).from(iaAgentes).where(and(eq(iaAgentes.funcao, d.funcao), sql`${iaAgentes.id} <> ${id}`));
+      if (ja) throw new BadRequestException(`Já existe um especialista com a chave "${d.funcao}".`);
+    }
+    const [a] = await this.db.update(iaAgentes).set({ ...d, atualizadoEm: new Date() }).where(eq(iaAgentes.id, id)).returning();
+    if (!a) throw new NotFoundException('Especialista não encontrado.');
+    await this.auditoria.registrar({ usuarioId: u.id, acao: 'editar', entidade: 'ia_agente', entidadeId: id, dados: { funcao: a.funcao, ativo: a.ativo } });
+    return a;
+  }
+
+  @Delete('crm/ia-agentes/:id')
+  @Permissao('configuracoes', 'editar')
+  async excluirEspecialista(@Usuario() u: UsuarioLogado, @Param('id', ParseUUIDPipe) id: string) {
+    const [a] = await this.db.delete(iaAgentes).where(eq(iaAgentes.id, id)).returning();
+    if (!a) throw new NotFoundException('Especialista não encontrado.');
+    await this.auditoria.registrar({ usuarioId: u.id, acao: 'excluir', entidade: 'ia_agente', entidadeId: id, dados: { funcao: a.funcao } });
+    return { ok: true };
   }
 
   /** Liga ou pausa a IA nesta conversa ("Acionar IA"). */
