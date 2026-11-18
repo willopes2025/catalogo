@@ -53,12 +53,11 @@ function Transcricao({ m, conversaId, pode }: { m: Mensagem; conversaId: string;
       </div>
     );
   if (m.transcricaoStatus === 'pendente' || t.isPending) return <div className="transcricao muted">📝 Transcrevendo…</div>;
-  if (!pode) return null;
   return (
     <div className="transcricao">
       {m.transcricaoStatus === 'falhou' && <div className="muted" title={m.transcricaoErro ?? undefined}>Não deu para transcrever{m.transcricaoErro ? `: ${m.transcricaoErro}` : '.'}</div>}
       {t.error && <div className="muted">{(t.error as Error).message}</div>}
-      <button className="link" onClick={() => t.mutate()}>📝 {m.transcricaoStatus === 'falhou' ? 'Tentar de novo' : 'Transcrever'}</button>
+      <button className="link" onClick={() => t.mutate()} title={pode ? undefined : 'A transcrição usa a chave da OpenAI (Configurações › Integrações › Inteligência artificial)'}>📝 {m.transcricaoStatus === 'falhou' ? 'Tentar de novo' : 'Transcrever'}</button>
     </div>
   );
 }
