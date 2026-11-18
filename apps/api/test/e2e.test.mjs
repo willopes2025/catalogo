@@ -1761,6 +1761,62 @@ test('IA fora do chat: reconhecer peça pela foto, sugerir maleta e gerar foto d
   for (const r of ['agente', 'sugestao', 'reconhecer_peca', 'maleta', 'foto', 'teste']) assert.ok(uso.find((x) => x.recurso === r)?.chamadas >= 1, r);
 });
 
+test('transcrição de áudio no chat: sozinha quando chega, o agente responde ao que foi falado, botão para tentar de novo', async () => {
+  const c = await ok('POST', '/crm/canais', { nome: 'Áudios', tipo: 'evolution' });
+  await fetch(`${SIM}/__evo/conectar?i=${encodeURIComponent(c.config.instancia)}`);
+  const hook = (await recebidos()).filter((r) => r.caminho === '/evo/instance/create').pop().corpo.webhook.url.replace('http://localhost:3100', '');
+  let n = 0;
+  const chegar = (tel, message) => fetch(API.replace(/\/api$/, '') + hook, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ event: 'messages.upsert', instance: c.config.instancia, data: { key: { remoteJid: `${tel}@s.whatsapp.net`, fromMe: false, id: `AUD${++n}` }, pushName: 'Cliente do Áudio', message, messageTimestamp: Math.floor(Date.now() / 1000) } }) });
+  const espera = (ms = 900) => new Promise((r) => setTimeout(r, ms));
+  const conversa = async (tel) => (await ok('GET', `/crm/conversas?aba=todas&canalId=${c.id}`)).find((x) => x.telefone === tel);
+  const ia = (await ok('GET', '/integracoes')).find((i) => i.chave === 'ia');
+  assert.equal(ia.ambiente, 'Claude e OpenAI');
+  assert.ok(ia.campos.some((x) => x.nome === 'IA_TRANSCREVER_AUTO'));
+
+  // O agente atende este número: espera a transcrição e responde ao que foi falado.
+  await ok('PUT', '/crm/ia-agente', { ativo: true, canais: [c.id], instrucoes: '', conhecimento: 'Vendemos brincos, colares e anéis.', maxRespostas: 3 });
+  await chegar('5527933331111', { audioMessage: { mimetype: 'audio/ogg; codecs=opus', seconds: 6, ptt: true, url: 'https://mmg.whatsapp.net/audio-1' } });
+  await espera(1500);
+  let d = await ok('GET', `/crm/conversas/${(await conversa('5527933331111')).id}/mensagens`);
+  assert.equal(d.recursos.transcrever, true);
+  const audio = d.mensagens.find((m) => m.tipo === 'audio');
+  assert.deepEqual([audio.transcricaoStatus, audio.transcricao], ['feita', 'Oi, vocês têm brinco de argola dourado? Queria ver o preço.']);
+  assert.ok(d.mensagens.some((m) => m.ia && m.direcao === 'saida' && m.texto.startsWith('Temos sim!')), 'a IA respondeu ao conteúdo do áudio');
+  const chamada = (await recebidos()).filter((r) => r.caminho === '/openai/v1/audio/transcriptions').pop();
+  assert.ok(chamada, 'mandou o áudio para a OpenAI');
+  assert.match((await conversa('5527933331111')).ultimaMensagem ?? '', /^(🎤 Oi, vocês têm brinco|Temos sim)/, 'a lista mostra o que foi falado (ou a resposta da IA, que veio depois)');
+  await ok('PUT', '/crm/ia-agente', { ativo: false, canais: [], instrucoes: '', conhecimento: '', maxRespostas: 10 });
+
+  // Falha: fica marcado com o motivo, e o botão tenta de novo. Transcrição feita não chama a OpenAI outra vez.
+  await chegar('5527933332222', { audioMessage: { mimetype: 'audio/ogg; codecs=opus', url: 'https://mmg.whatsapp.net/audio-falha' } });
+  await espera();
+  const cv2 = (await conversa('5527933332222')).id;
+  const ruim = (await ok('GET', `/crm/conversas/${cv2}/mensagens`)).mensagens.find((m) => m.tipo === 'audio');
+  assert.equal(ruim.transcricaoStatus, 'falhou');
+  assert.match(ruim.transcricaoErro, /corrupted/);
+  const r2 = await chamar('POST', `/crm/conversas/${cv2}/mensagens/${ruim.id}/transcrever`);
+  assert.equal(r2.status, 400);
+  const antes = (await recebidos()).filter((r) => r.caminho === '/openai/v1/audio/transcriptions').length;
+  const r3 = await ok('POST', `/crm/conversas/${(await conversa('5527933331111')).id}/mensagens/${audio.id}/transcrever`);
+  assert.equal(r3.transcricao, audio.transcricao);
+  assert.equal((await recebidos()).filter((r) => r.caminho === '/openai/v1/audio/transcriptions').length, antes, 'não pagou de novo');
+  assert.equal((await chamar('POST', `/crm/conversas/${cv2}/mensagens/${audio.id}/transcrever`)).status, 404, 'mensagem de outra conversa');
+  const texto = (await ok('GET', `/crm/conversas/${cv2}/mensagens`)).mensagens.find((m) => m.tipo !== 'audio');
+  if (texto) assert.equal((await chamar('POST', `/crm/conversas/${cv2}/mensagens/${texto.id}/transcrever`)).status, 400);
+
+  // Desligado o automático: o áudio chega sem transcrição e só transcreve no clique.
+  await ok('PUT', '/integracoes/ia', { valores: { IA_TRANSCREVER_AUTO: 'nao' } });
+  await chegar('5527933333333', { audioMessage: { mimetype: 'audio/ogg; codecs=opus', url: 'https://mmg.whatsapp.net/audio-3' } });
+  await espera();
+  const cv3 = (await conversa('5527933333333')).id;
+  const manual = (await ok('GET', `/crm/conversas/${cv3}/mensagens`)).mensagens.find((m) => m.tipo === 'audio');
+  assert.equal(manual.transcricaoStatus, null);
+  assert.match((await ok('POST', `/crm/conversas/${cv3}/mensagens/${manual.id}/transcrever`)).transcricao, /argola/);
+  assert.ok((await ok('GET', '/ia/uso')).some((u) => u.recurso === 'transcricao'), 'aparece no consumo da IA');
+  await ok('PUT', '/integracoes/ia', { valores: { IA_TRANSCREVER_AUTO: 'sim' } });
+  await ok('DELETE', `/crm/canais/${c.id}`);
+});
+
 test('RH e ponto: cadastro, login pelo CPF, batida com foto e GPS, ajustes, espelho, ciência, documentos, AFD/AEJ e contabilidade', async () => {
   const gestor = token;
   const hoje = new Date(Date.now() - 3 * 3600e3).toISOString().slice(0, 10);

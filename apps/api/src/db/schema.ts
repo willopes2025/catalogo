@@ -1190,6 +1190,10 @@ export const crmMensagens = pgTable(
     apagadaEm: timestamp('apagada_em', { withTimezone: true }),
     /** Escrita pelo agente de IA. */
     ia: boolean('ia').notNull().default(false),
+    /** Áudio transcrito pela IA: o texto, a situação (pendente | feita | falhou) e o motivo da falha. */
+    transcricao: text('transcricao'),
+    transcricaoStatus: text('transcricao_status'),
+    transcricaoErro: text('transcricao_erro'),
     criadoEm: criadoEm(),
   },
   (t) => ({ porConversa: index('crm_mensagens_conversa_idx').on(t.conversaId, t.criadoEm), porExterno: index('crm_mensagens_externo_idx').on(t.idExterno) }),
@@ -1752,7 +1756,7 @@ export const iaUsos = pgTable(
   'ia_usos',
   {
     id: id(),
-    /** agente | sugestao | reconhecer_peca | maleta | foto | teste */
+    /** agente | sugestao | reconhecer_peca | maleta | foto | transcricao | teste */
     recurso: text('recurso').notNull(),
     modelo: text('modelo').notNull(),
     tokensEntrada: integer('tokens_entrada').notNull().default(0),

@@ -504,7 +504,7 @@ function AgenteIa() {
   );
 }
 
-const NOME_RECURSO: Record<string, string> = { agente: 'Agente no WhatsApp', sugestao: 'Sugestão de resposta', reconhecer_peca: 'Reconhecer peça pela foto', maleta: 'Sugestão de maleta', foto: 'Foto de catálogo', teste: 'Teste de conexão' };
+const NOME_RECURSO: Record<string, string> = { agente: 'Agente no WhatsApp', sugestao: 'Sugestão de resposta', reconhecer_peca: 'Reconhecer peça pela foto', maleta: 'Sugestão de maleta', foto: 'Foto de catálogo', transcricao: 'Transcrição de áudio', teste: 'Teste de conexão' };
 
 /** Quantas vezes a IA foi chamada neste mês (a cobrança é das empresas de IA, pelo consumo). */
 function UsoIa() {

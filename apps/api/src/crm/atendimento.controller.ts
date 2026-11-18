@@ -34,6 +34,7 @@ import {
 } from '../db/schema';
 import { CrmService } from './crm.service';
 import { CanaisService } from './canais.service';
+import { TranscricaoService } from './transcricao.service';
 import { AgenteService } from './agente.service';
 import { ErroIa, IaService } from '../ia/ia.service';
 import { AutomacaoService } from './automacao.service';
@@ -85,6 +86,7 @@ export class AtendimentoController {
     private readonly arquivos: ArquivosService,
     private readonly auditoria: AuditoriaService,
     private readonly segredos: SegredosService,
+    private readonly transcricao: TranscricaoService,
   ) {}
 
   // ───────────── Funis e etapas ─────────────
@@ -496,6 +498,9 @@ export class AtendimentoController {
         autor: usuarios.nome,
         automatica: sql<boolean>`(${crmMensagens.gatilhoId} is not null or ${crmMensagens.disparoId} is not null)`,
         ia: crmMensagens.ia,
+        transcricao: crmMensagens.transcricao,
+        transcricaoStatus: crmMensagens.transcricaoStatus,
+        transcricaoErro: crmMensagens.transcricaoErro,
         criadoEm: crmMensagens.criadoEm,
         reacoes: crmMensagens.reacoes,
         apagada: sql<boolean>`${crmMensagens.apagadaEm} is not null`,
@@ -517,9 +522,9 @@ export class AtendimentoController {
       conversa: { ...cv, canal: canal.nome, canalTipo: canal.tipo, dentroDaJanela: canal.tipo === 'oficial' ? this.canais.dentroDaJanela(cv) : true },
       contato,
       // Apagada para todos: o texto e o arquivo não aparecem mais.
-      mensagens: ms.reverse().map((m) => (m.apagada ? { ...m, texto: null, midia: null, midiaNome: null } : m)),
+      mensagens: ms.reverse().map((m) => (m.apagada ? { ...m, texto: null, midia: null, midiaNome: null, transcricao: null } : m)),
       // O que este tipo de número consegue fazer com uma mensagem.
-      recursos: { reagir: true, apagar: canal.tipo !== 'oficial', ia: this.ia.texto },
+      recursos: { reagir: true, apagar: canal.tipo !== 'oficial', ia: this.ia.texto, transcrever: this.ia.imagem },
       // A IA está atendendo esta conversa agora?
       iaAtendendo: this.ia.texto && (cv.iaAtiva === true || (cv.iaAtiva === null && cv.status === 'fila' && (await this.agente.config().then((a) => a.ativo && (!a.canais.length || a.canais.includes(cv.canalId)))))),
     };
@@ -576,6 +581,16 @@ export class AtendimentoController {
     const r = await this.conversaVisivel(u, id);
     if (r.cv.status === 'atendimento' && r.cv.atendenteId && r.cv.atendenteId !== u.id && !gestor(u)) throw new ForbiddenException('Esta conversa está com outro atendente.');
     return r;
+  }
+
+  /** Transcreve um áudio da conversa (ou tenta de novo, se falhou). */
+  @Post('crm/conversas/:id/mensagens/:mensagemId/transcrever')
+  @Permissao('crm', 'ver')
+  async transcrever(@Usuario() u: UsuarioLogado, @Param('id', ParseUUIDPipe) id: string, @Param('mensagemId', ParseUUIDPipe) mensagemId: string) {
+    await this.conversaVisivel(u, id);
+    const [m] = await this.db.select({ id: crmMensagens.id }).from(crmMensagens).where(and(eq(crmMensagens.id, mensagemId), eq(crmMensagens.conversaId, id)));
+    if (!m) throw new NotFoundException('Mensagem não encontrada nesta conversa.');
+    return this.transcricao.manual(mensagemId, u.id);
   }
 
   @Post('crm/conversas/:id/mensagens/:mensagemId/reagir')

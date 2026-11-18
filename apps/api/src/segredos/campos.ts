@@ -24,13 +24,15 @@ export const INTEGRACOES: Integracao[] = [
   {
     chave: 'ia',
     nome: 'Inteligência artificial',
-    descricao: 'Claude (Anthropic): agente que atende no WhatsApp, sugestão de resposta, montar maleta e reconhecer a peça pela foto. OpenAI: gerar a foto de catálogo do produto. Cada uma funciona sozinha; sem a chave, o recurso fica desligado.',
+    descricao: 'Claude (Anthropic): agente que atende no WhatsApp, sugestão de resposta, montar maleta e reconhecer a peça pela foto. OpenAI: gerar a foto de catálogo do produto e transcrever os áudios do chat. Cada uma funciona sozinha; sem a chave, o recurso fica desligado.',
     ondeConseguir: 'Claude: console.anthropic.com › API keys (precisa de créditos na conta). OpenAI: platform.openai.com › API keys (também com créditos; para gerar imagem a OpenAI pede a verificação da organização). O uso é cobrado por elas, conforme o consumo; o sistema mostra quantas chamadas foram feitas no mês.',
     campos: [
       { nome: 'ANTHROPIC_API_KEY', rotulo: 'Chave do Claude (Anthropic)', secreto: true, ajuda: 'Começa com sk-ant-' },
       { nome: 'IA_MODELO', rotulo: 'Modelo do Claude', ajuda: 'Deixe em branco para usar o padrão (claude-sonnet-5-5). Para gastar menos: claude-haiku-5-5.' },
       { nome: 'OPENAI_API_KEY', rotulo: 'Chave da OpenAI (fotos)', secreto: true, ajuda: 'Começa com sk-' },
       { nome: 'IA_MODELO_IMAGEM', rotulo: 'Modelo de imagem da OpenAI', ajuda: 'Deixe em branco para usar o padrão da OpenAI.' },
+      { nome: 'IA_TRANSCREVER_AUTO', rotulo: 'Áudios recebidos no chat', opcoes: [['sim', 'Transcrever sozinho todo áudio que chegar'], ['nao', 'Só quando clicar em "Transcrever"']] },
+      { nome: 'IA_MODELO_TRANSCRICAO', rotulo: 'Modelo de transcrição da OpenAI', ajuda: 'Deixe em branco para usar o padrão (gpt-4o-mini-transcribe). Mais preciso e mais caro: gpt-4o-transcribe.' },
     ],
   },
   {

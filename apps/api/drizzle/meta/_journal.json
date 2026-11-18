@@ -211,6 +211,13 @@
       "when": 1794908646521,
       "tag": "0029_cobranca",
       "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "7",
+      "when": 1795010884630,
+      "tag": "0030_transcricao",
+      "breakpoints": true
     }
   ]
 }

@@ -4,12 +4,12 @@ import { api, pode } from '../../api';
 import { Erro } from '../../componentes/ui';
 import { ha, ligar, meuId, telefoneBonito, useMidia, useRelogio, usarAtendentes, usarFunis, type Template } from './comum';
 
-interface Mensagem { id: string; direcao: 'entrada' | 'saida' | 'interna'; tipo: string; texto: string | null; midia: string | null; midiaNome: string | null; templateNome: string | null; status: string; erro: string | null; autor: string | null; automatica: boolean; criadoEm: string; ia: boolean; reacoes: { de: 'contato' | 'equipe'; emoji: string }[]; apagada: boolean; noWhatsApp: boolean; citada: { id: string; direcao: string; tipo: string; texto: string | null } | null }
+interface Mensagem { id: string; direcao: 'entrada' | 'saida' | 'interna'; tipo: string; texto: string | null; midia: string | null; midiaNome: string | null; templateNome: string | null; status: string; erro: string | null; autor: string | null; automatica: boolean; criadoEm: string; ia: boolean; transcricao: string | null; transcricaoStatus: 'pendente' | 'feita' | 'falhou' | null; transcricaoErro: string | null; reacoes: { de: 'contato' | 'equipe'; emoji: string }[]; apagada: boolean; noWhatsApp: boolean; citada: { id: string; direcao: string; tipo: string; texto: string | null } | null }
 interface Dados {
   conversa: { id: string; status: 'fila' | 'atendimento' | 'resolvida'; atendenteId: string | null; canalId: string; canal: string; canalTipo: 'oficial' | 'qrcode' | 'evolution'; dentroDaJanela: boolean; filaDesde: string | null; contatoId: string; fixada: boolean };
   contato: { id: string; nome: string; telefone: string; descadastrado: boolean };
   mensagens: Mensagem[];
-  recursos: { reagir: boolean; apagar: boolean; ia: boolean };
+  recursos: { reagir: boolean; apagar: boolean; ia: boolean; transcrever: boolean };
   iaAtendendo: boolean;
 }
 
@@ -34,6 +34,33 @@ function Midia({ m }: { m: Mensagem }) {
   if (m.tipo === 'audio') return <audio controls src={url} />;
   if (m.tipo === 'video') return <video controls src={url} />;
   return <a href={url} download={m.midiaNome ?? 'arquivo'}>📎 {m.midiaNome ?? 'Abrir arquivo'}</a>;
+}
+
+/** Texto do áudio (transcrito pela IA), ou o botão para transcrever. */
+function Transcricao({ m, conversaId, pode }: { m: Mensagem; conversaId: string; pode: boolean }) {
+  const qc = useQueryClient();
+  const [aberta, setAberta] = useState(true);
+  const t = useMutation({
+    mutationFn: () => api(`/crm/conversas/${conversaId}/mensagens/${m.id}/transcrever`, { corpo: {} }),
+    onSettled: () => qc.invalidateQueries({ queryKey: ['crm', 'msgs', conversaId] }),
+  });
+  if (m.tipo !== 'audio' || !m.midia || m.apagada) return null;
+  if (m.transcricaoStatus === 'feita' && m.transcricao)
+    return (
+      <div className="transcricao">
+        <button className="link" onClick={() => setAberta(!aberta)} aria-expanded={aberta}>📝 Transcrição {aberta ? '▾' : '▸'}</button>
+        {aberta && <div className="texto-transcrito">{m.transcricao}</div>}
+      </div>
+    );
+  if (m.transcricaoStatus === 'pendente' || t.isPending) return <div className="transcricao muted">📝 Transcrevendo…</div>;
+  if (!pode) return null;
+  return (
+    <div className="transcricao">
+      {m.transcricaoStatus === 'falhou' && <div className="muted" title={m.transcricaoErro ?? undefined}>Não deu para transcrever{m.transcricaoErro ? `: ${m.transcricaoErro}` : '.'}</div>}
+      {t.error && <div className="muted">{(t.error as Error).message}</div>}
+      <button className="link" onClick={() => t.mutate()}>📝 {m.transcricaoStatus === 'falhou' ? 'Tentar de novo' : 'Transcrever'}</button>
+    </div>
+  );
 }
 
 /** Abas "Notas" e "Tarefas" da conversa: as mesmas do card, sem sair do chat. */
@@ -427,7 +454,7 @@ export function Chat({ conversaId, leadId, aoMudar, abas, aoSair }: { conversaId
                     <span>{m.citada.texto ?? resumoTipo[m.citada.tipo] ?? 'Mensagem apagada'}</span>
                   </button>
                 )}
-                {m.apagada ? <i className="muted">🚫 Mensagem apagada</i> : <><Midia m={m} />{m.texto}</>}
+                {m.apagada ? <i className="muted">🚫 Mensagem apagada</i> : <><Midia m={m} /><Transcricao m={m} conversaId={conversaId} pode={q.data!.recursos.transcrever} />{m.texto}</>}
                 {/* Ações da mensagem: aparecem ao passar o mouse ou ao focar pelo teclado. */}
                 {editar && podeEscrever && !m.apagada && m.direcao !== 'interna' && m.noWhatsApp && (
                   <div className="acoes-msg">

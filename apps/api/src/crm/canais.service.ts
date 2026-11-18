@@ -6,6 +6,7 @@ import { SegredosService } from '../segredos/segredos.service';
 import { ArquivosService } from '../arquivos/arquivos.service';
 import { crmCanais, crmContatos, crmConversas, crmDisparoDestinos, crmMensagens, crmTemplates } from '../db/schema';
 import { CrmService } from './crm.service';
+import { TranscricaoService } from './transcricao.service';
 import { PEDIU_SAIR, preencherTexto, primeiroNome, variaveisDosCampos } from './telefone';
 import { ConexaoOficial } from './whatsapp/oficial';
 import { ConexaoZapi } from './whatsapp/zapi';
@@ -73,6 +74,7 @@ export class CanaisService implements OnModuleInit {
     private readonly segredos: SegredosService,
     private readonly arquivos: ArquivosService,
     private readonly crm: CrmService,
+    private readonly transcricao: TranscricaoService,
   ) {}
 
   // ───────────── Cadastro dos números ─────────────
@@ -554,7 +556,7 @@ export class CanaisService implements OnModuleInit {
     // ficaria "antes" dela na conversa. Mensagem que acabou de chegar nunca entra atrás da última.
     if (cv.ultimaMensagemEm && m.quando <= cv.ultimaMensagemEm && Date.now() - m.quando.getTime() < 60_000) m.quando = new Date(cv.ultimaMensagemEm.getTime() + 1);
     const citada = m.citaIdExterno ? await this.mensagemDoCanal(c.id, m.citaIdExterno) : null;
-    await this.db.insert(crmMensagens).values({
+    const [nova] = await this.db.insert(crmMensagens).values({
       citadaId: citada && citada.conversaId === cv.id ? citada.id : null,
       conversaId: cv.id,
       direcao: m.minha ? 'saida' : 'entrada',
@@ -565,7 +567,8 @@ export class CanaisService implements OnModuleInit {
       status: m.minha ? 'enviada' : 'recebida',
       idExterno: m.idExterno,
       criadoEm: m.quando,
-    });
+    }).returning({ id: crmMensagens.id });
+    if (m.tipo === 'audio' && midia) this.transcricao.aoChegar(nova.id, cv.id);
     const resumo = (texto ?? `[${m.tipo}]`).slice(0, 200);
     if (m.minha) {
       // Respondido pelo próprio celular (QR code).

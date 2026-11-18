@@ -3,7 +3,7 @@ import { DB, type Db } from '../comum/db.module';
 import { iaUsos } from '../db/schema';
 import { SegredosService } from '../segredos/segredos.service';
 
-export type Recurso = 'agente' | 'sugestao' | 'reconhecer_peca' | 'maleta' | 'foto' | 'teste';
+export type Recurso = 'agente' | 'sugestao' | 'reconhecer_peca' | 'maleta' | 'foto' | 'transcricao' | 'teste';
 export type Bloco = { type: 'text'; text: string } | { type: 'image'; source: { type: 'base64'; media_type: string; data: string } | { type: 'url'; url: string } };
 export interface MensagemIa {
   role: 'user' | 'assistant';
@@ -17,7 +17,7 @@ const MODELO_PADRAO = 'claude-sonnet-5-5';
 
 /**
  * Porta única para a inteligência artificial.
- * Texto e leitura de imagem: Claude (Anthropic). Geração de imagem: OpenAI.
+ * Texto e leitura de imagem: Claude (Anthropic). Geração de imagem e transcrição de áudio: OpenAI.
  * As chaves ficam em Configurações › Integrações › Inteligência artificial.
  */
 @Injectable()
@@ -115,5 +115,41 @@ export class IaService {
     if (!b64) throw new ErroIa('A OpenAI não devolveu a imagem. Tente de novo.');
     await this.registrar('foto', modelo || 'padrão da OpenAI', j.usage?.input_tokens ?? 0, j.usage?.output_tokens ?? 0, o.usuarioId);
     return Buffer.from(b64, 'base64');
+  }
+
+  /** Transcreve sozinho os áudios que chegam? (padrão: sim, se a chave da OpenAI estiver preenchida) */
+  get transcreverSozinho() {
+    return this.imagem && this.segredos.v('IA_TRANSCREVER_AUTO') !== 'nao';
+  }
+
+  /** Transcreve um áudio pela OpenAI (o Claude não ouve áudio). Devolve o texto. */
+  async transcrever(o: { conteudo: Buffer; extensao: string; usuarioId?: string | null }): Promise<string> {
+    const chave = this.segredos.v('OPENAI_API_KEY');
+    if (!chave) throw new ErroIa('A transcrição de áudio usa a OpenAI: cole a chave dela em Configurações › Integrações › Inteligência artificial.');
+    // A OpenAI aceita estes formatos; "weba" é webm com outro nome. AMR e AAC (áudios antigos) ela não lê.
+    const ext = ({ weba: 'webm', oga: 'ogg', opus: 'ogg' } as Record<string, string>)[o.extensao] ?? o.extensao;
+    if (!['ogg', 'mp3', 'm4a', 'mp4', 'mpeg', 'mpga', 'wav', 'webm', 'flac'].includes(ext)) throw new ErroIa(`A OpenAI não lê áudio no formato ${o.extensao.toUpperCase()}.`);
+    if (o.conteudo.length > 25_000_000) throw new ErroIa('Áudio grande demais para transcrever (o limite é 25 MB, uns 25 minutos).');
+    const modelo = this.segredos.v('IA_MODELO_TRANSCRICAO')?.trim() || 'gpt-4o-mini-transcribe';
+    const corpo = new FormData();
+    corpo.append('file', new Blob([new Uint8Array(o.conteudo)]), `audio.${ext}`);
+    corpo.append('model', modelo);
+    corpo.append('language', 'pt');
+    corpo.append('response_format', 'json');
+    let res: Response;
+    try {
+      res = await fetch(`${(process.env.IA_OPENAI_URL ?? 'https://api.openai.com').replace(/\/$/, '')}/v1/audio/transcriptions`, { method: 'POST', headers: { authorization: `Bearer ${chave}` }, body: corpo, signal: AbortSignal.timeout(120_000) });
+    } catch (e) {
+      throw new ErroIa(`A transcrição não respondeu (${(e as Error).message}). Tente de novo.`);
+    }
+    const j = (await res.json().catch(() => ({}))) as { text?: string; usage?: { input_tokens?: number; output_tokens?: number; seconds?: number }; error?: { message?: string } };
+    if (!res.ok) {
+      if (res.status === 401) throw new ErroIa('A chave da OpenAI foi recusada. Confira a chave em Configurações › Integrações › Inteligência artificial.');
+      if (res.status === 429) throw new ErroIa(/quota|billing/i.test(j.error?.message ?? '') ? 'A conta da OpenAI está sem créditos.' : 'A OpenAI está no limite de uso agora. Tente de novo em um minuto.');
+      if (res.status === 404 || /model/i.test(j.error?.message ?? '')) throw new ErroIa(`O modelo de transcrição "${modelo}" não existe nesta conta. Deixe o campo em branco para usar o padrão.`);
+      throw new ErroIa(`A OpenAI recusou o áudio: ${j.error?.message ?? res.status}`);
+    }
+    await this.registrar('transcricao', modelo, j.usage?.input_tokens ?? Math.round(j.usage?.seconds ?? 0), j.usage?.output_tokens ?? 0, o.usuarioId);
+    return (j.text ?? '').trim();
   }
 }

@@ -273,6 +273,8 @@ http
       if (r === 'chat/getBase64FromMediaMessage') {
         // Como o servidor real com o banco de mensagens desligado: só acha a mídia se receber a mensagem inteira.
         if (!corpo?.message?.message) return responder(res, 400, { status: 400, error: 'Bad Request', response: { message: ['Message not found'] } });
+        const audio = corpo.message.message.audioMessage;
+        if (audio) return responder(res, 201, { mediaType: 'audioMessage', mimetype: 'audio/ogg; codecs=opus', base64: Buffer.from(`OggS${/falha/.test(audio.url ?? '') ? 'AUDIO-FALHA' : 'fala-do-cliente'}${audio.url ?? ''}`).toString('base64') });
         return responder(res, 201, { mediaType: 'imageMessage', mimetype: 'image/jpeg', base64: Buffer.from('ffd8ffe000104a46494600010100000100010000ffd9', 'hex').toString('base64') });
       }
       return responder(res, 404, { status: 404, error: 'Not Found', response: { message: ['rota'] } });
@@ -302,7 +304,7 @@ http
       let saida;
       if (corpo.system.includes('"passar"')) {
         if (/sobrecarga/i.test(texto)) return responder(res, 529, { type: 'error', error: { type: 'overloaded_error', message: 'Overloaded' } });
-        saida = /atendente|reclama/i.test(texto) ? '{"resposta": "Claro! Vou chamar alguém da equipe para continuar com você.", "passar": true, "motivo": "Pediu para falar com atendente."}' : `Aqui está:\n\`\`\`json\n{"resposta": "Oi! ${fotos ? 'Que peça linda na foto! ' : ''}Como posso ajudar?", "passar": false}\n\`\`\``;
+        saida = /transcrito: ".*argola/.test(texto) ? '{"resposta": "Temos sim! Vou te mandar as argolas douradas com o preço.", "passar": false}' : /atendente|reclama/i.test(texto) ? '{"resposta": "Claro! Vou chamar alguém da equipe para continuar com você.", "passar": true, "motivo": "Pediu para falar com atendente."}' : `Aqui está:\n\`\`\`json\n{"resposta": "Oi! ${fotos ? 'Que peça linda na foto! ' : ''}Como posso ajudar?", "passar": false}\n\`\`\``;
       } else if (corpo.system.includes('SOMENTE com um JSON') && corpo.system.includes('descreva')) {
         saida = '{"tipo": "brinco", "descricao": "Brinco de argola dourado, liso", "palavras": ["brinco", "argola", "dourado"]}';
       } else if (corpo.system.includes('qual delas é a mesma peça')) {
@@ -313,6 +315,12 @@ http
         saida = JSON.stringify({ itens: [...refs.slice(0, 3).map((ref) => ({ ref, qtd: 2 })), { ref: 'NAO-EXISTE', qtd: 1 }, { ref: refs[0], qtd: 9999 }], resumo: 'Mais brincos, que é o que ela mais vende.' });
       } else saida = '"Oi! Posso te ajudar com mais alguma coisa?"';
       return responder(res, 200, { id: 'msg_teste', type: 'message', role: 'assistant', model: corpo.model, content: [{ type: 'text', text: saida }], stop_reason: 'end_turn', usage: { input_tokens: 1200 + fotos * 800, output_tokens: 60 } });
+    }
+    if (url.pathname === '/openai/v1/audio/transcriptions') {
+      if (req.headers.authorization !== 'Bearer chave-openai-teste') return responder(res, 401, { error: { message: 'Incorrect API key provided' } });
+      if (!/name="file"; filename="audio\.(ogg|mp3|m4a|webm|wav)"/.test(txt) || !/name="language"\r\n\r\npt/.test(txt)) return responder(res, 400, { error: { message: 'multipart inválido' } });
+      if (/AUDIO-FALHA/.test(txt)) return responder(res, 400, { error: { message: 'Audio file might be corrupted or unsupported' } });
+      return responder(res, 200, { text: 'Oi, vocês têm brinco de argola dourado? Queria ver o preço.', usage: { type: 'tokens', input_tokens: 120, output_tokens: 18 } });
     }
     if (url.pathname === '/openai/v1/images/edits') {
       if (req.headers.authorization !== 'Bearer chave-openai-teste') return responder(res, 401, { error: { message: 'Incorrect API key provided', code: 'invalid_api_key' } });
