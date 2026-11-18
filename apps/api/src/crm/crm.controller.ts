@@ -209,7 +209,17 @@ export class CrmController {
     return this.db.transaction(async (tx) => {
       const [c] = await tx.select().from(candidaturas).where(eq(candidaturas.id, id)).for('update');
       if (!c) throw new NotFoundException('Candidata não encontrada.');
-      if (c.pessoaId) throw new BadRequestException('Candidata já aprovada.');
+      // Já aprovada (o card foi arrastado de volta sem querer): só devolve o card para "Aprovada", sem criar outra revendedora.
+      if (c.pessoaId) {
+        const [card] = await tx.select().from(crmLeads).where(eq(crmLeads.candidaturaId, id));
+        const alvo = await this.crmSvc.etapaAuto('recrutamento', 'aprovada', tx);
+        if (c.etapa !== 'aprovada') await tx.update(candidaturas).set({ etapa: 'aprovada', atualizadoEm: new Date() }).where(eq(candidaturas.id, id));
+        if (card && alvo && card.etapaId !== alvo.etapaId) {
+          await this.crmSvc.moverLead(card.id, alvo.etapaId, { usuarioId: u.id, origem: 'manual', motivo: 'Já aprovada: card devolvido para Aprovada' }, tx);
+          await tx.insert(candidaturaNotas).values({ candidaturaId: id, usuarioId: u.id, texto: 'Card devolvido para "Aprovada" (a revendedora já existia).' });
+        }
+        return { pessoaId: c.pessoaId, jaAprovada: true };
+      }
       if (c.cpf) {
         const [dup] = await tx.select({ id: pessoas.id, nome: pessoas.nome }).from(pessoas).where(and(eq(pessoas.documento, c.cpf), eq(pessoas.tipo, 'representante')));
         if (dup) throw new BadRequestException(`Já existe representante com este CPF: ${dup.nome}.`);

@@ -214,7 +214,9 @@ export function Aprovar({ leadId, nome, fechar }: { leadId: string; nome: string
     <div className="modal-fundo" onClick={fechar}>
       <div className="cartao modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 460 }}>
         <h3 style={{ marginTop: 0 }}>Aprovar {nome}</h3>
-        {lead.data && !lead.data.candidaturaId ? (
+        {lead.data?.candidatura?.pessoaId ? (
+          <p className="muted">Ela já foi aprovada e a revendedora já existe. O card só volta para "Aprovada"; nada é criado de novo.</p>
+        ) : lead.data && !lead.data.candidaturaId ? (
           <p className="muted">Este card não veio do formulário de candidatas. Cadastre a revendedora em Rede › Nova revendedora.</p>
         ) : (
           <>
@@ -226,7 +228,7 @@ export function Aprovar({ leadId, nome, fechar }: { leadId: string; nome: string
         )}
         {m.error && <Erro erro={m.error} />}
         <div className="flex" style={{ marginTop: 12 }}>
-          {lead.data?.candidaturaId && <button className="botao" disabled={m.isPending} onClick={() => m.mutate()}>Aprovar e criar revendedora</button>}
+          {lead.data?.candidaturaId && <button className="botao" disabled={m.isPending} onClick={() => m.mutate()}>{lead.data.candidatura?.pessoaId ? 'Voltar para Aprovada' : 'Aprovar e criar revendedora'}</button>}
           <button className="botao claro" onClick={fechar}>Voltar</button>
         </div>
       </div>

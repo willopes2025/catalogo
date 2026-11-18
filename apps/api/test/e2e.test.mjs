@@ -737,7 +737,18 @@ test('CRM: formulário público, quadro, recusa e aprovação que vira represent
   const p = await ok('GET', `/pessoas/${r.pessoaId}`);
   assert.equal(p.status, 'ativo');
   assert.equal(p.telefone1, '27998881234');
-  assert.equal((await chamar('POST', `/crm/candidaturas/${id}/aprovar`, { modeloTrabalho: 'consignado' })).status, 400);
+  // Card arrastado de volta sem querer: "aprovar" de novo só devolve o card para Aprovada, sem criar outra revendedora.
+  const funilRec = (await ok('GET', '/crm/funis')).find((f) => f.tipo === 'recrutamento');
+  const etapa = (ch) => funilRec.etapas.find((e) => e.chave === ch).id;
+  let card = null;
+  for (const l of await ok('GET', `/crm/leads?funilId=${funilRec.id}&busca=Formulário`)) if ((await ok('GET', `/crm/leads/${l.id}`)).candidaturaId === id) card = l;
+  assert.ok(card, 'card da candidata no recrutamento');
+  assert.equal((await ok('GET', `/crm/leads/${card.id}`)).etapaId, etapa('aprovada'));
+  await ok('PATCH', `/crm/leads/${card.id}`, { etapaId: etapa('documentos') });
+  const r2 = await ok('POST', `/crm/candidaturas/${id}/aprovar`, { modeloTrabalho: 'consignado' });
+  assert.deepEqual([r2.pessoaId, r2.jaAprovada], [r.pessoaId, true]);
+  assert.equal((await ok('GET', `/crm/leads/${card.id}`)).etapaId, etapa('aprovada'), 'card voltou para Aprovada');
+  assert.equal((await ok('GET', `/crm/candidaturas/${id}`)).pessoaId, r.pessoaId, 'continua ligada à mesma revendedora');
   const res = await ok('GET', '/crm/resumo');
   assert.ok(res.porOrigem.some((o) => o.origem === 'instagram' && o.aprovadas === 1));
 });
