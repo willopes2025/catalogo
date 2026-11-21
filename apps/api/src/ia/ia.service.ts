@@ -14,7 +14,11 @@ export interface MensagemIa {
 export type BlocoFerramenta =
   | { type: 'text'; text: string }
   | { type: 'tool_use'; id: string; name: string; input: Record<string, unknown> }
-  | { type: 'tool_result'; tool_use_id: string; content: string; is_error?: boolean };
+  | { type: 'tool_result'; tool_use_id: string; content: string; is_error?: boolean }
+  /** Anexo guardado na conversa (vira imagem, documento ou texto na hora de mandar ao Claude). */
+  | { type: 'anexo'; anexoId: string; nome: string; mime: string }
+  | { type: 'image'; source: { type: 'base64'; media_type: string; data: string } }
+  | { type: 'document'; source: { type: 'base64'; media_type: 'application/pdf'; data: string }; title?: string };
 export interface MensagemFerramentas {
   role: 'user' | 'assistant';
   content: BlocoFerramenta[];
@@ -24,6 +28,12 @@ export interface DefinicaoFerramenta {
   description: string;
   input_schema: Record<string, unknown>;
 }
+
+/** Marcações de emoção que o assistente pode usar na conversa falada (o modelo v3 da ElevenLabs interpreta). */
+export const TAGS_VOZ = ['excited', 'warmly', 'cheerfully', 'laughs', 'chuckles', 'sighs', 'curious', 'thoughtful', 'reassuring', 'happy', 'surprised', 'serious'];
+const RE_TAGS = new RegExp(`\\[(?:${TAGS_VOZ.join('|')})\\]\\s*`, 'gi');
+/** Tira as marcações de emoção (para a tela e para vozes que não as entendem). */
+export const semTagsDeVoz = (t: string) => t.replace(RE_TAGS, '').replace(/\s{2,}/g, ' ').trim();
 
 /** A IA respondeu com erro (chave errada, sem crédito, fora do ar). A mensagem já está pronta para a tela. */
 export class ErroIa extends Error {}
@@ -177,48 +187,71 @@ export class IaService {
     return !!this.segredos.v('ELEVENLABS_API_KEY');
   }
 
-  /** Transforma o texto em fala (MP3). */
+  /** Transforma o texto em fala (MP3). Na ElevenLabs v3, as marcações de emoção ([warmly], [laughs]…) dão o tom; nas outras vozes, saem do texto. */
   async falar(o: { texto: string; provedor: 'elevenlabs' | 'openai'; voz: string; usuarioId?: string | null }): Promise<Buffer> {
-    const texto = o.texto.slice(0, 2500);
-    let res: Response;
-    let modelo: string;
-    try {
-      if (o.provedor === 'elevenlabs') {
-        const chave = this.segredos.v('ELEVENLABS_API_KEY');
-        if (!chave) throw new ErroIa('Cole a chave da ElevenLabs em Configurações › Integrações › Inteligência artificial.');
-        modelo = this.segredos.v('IA_MODELO_VOZ')?.trim() || 'eleven_multilingual_v2';
-        res = await fetch(`${(process.env.ELEVENLABS_URL ?? 'https://api.elevenlabs.io').replace(/\/$/, '')}/v1/text-to-speech/${encodeURIComponent(o.voz)}?output_format=mp3_44100_128`, {
-          method: 'POST',
-          headers: { 'content-type': 'application/json', 'xi-api-key': chave, accept: 'audio/mpeg' },
-          body: JSON.stringify({ text: texto, model_id: modelo, language_code: 'pt', voice_settings: { stability: 0.45, similarity_boost: 0.8, style: 0.15, use_speaker_boost: true } }),
-          signal: AbortSignal.timeout(60_000),
-        });
-      } else {
-        const chave = this.segredos.v('OPENAI_API_KEY');
-        if (!chave) throw new ErroIa('Cole a chave da OpenAI em Configurações › Integrações › Inteligência artificial.');
-        modelo = 'gpt-4o-mini-tts';
-        res = await fetch(`${(process.env.IA_OPENAI_URL ?? 'https://api.openai.com').replace(/\/$/, '')}/v1/audio/speech`, {
-          method: 'POST',
-          headers: { 'content-type': 'application/json', authorization: `Bearer ${chave}` },
-          body: JSON.stringify({ model: modelo, voice: o.voz, input: texto, response_format: 'mp3', instructions: 'Fale em português do Brasil, com sotaque brasileiro neutro, tom natural, simpático e profissional, ritmo de conversa, como um colega de trabalho experiente.' }),
-          signal: AbortSignal.timeout(60_000),
-        });
+    if (o.provedor === 'elevenlabs') {
+      const modelo = this.segredos.v('IA_MODELO_VOZ')?.trim() || 'eleven_v3';
+      try {
+        return await this.falarElevenlabs(o, modelo);
+      } catch (e) {
+        // Conta ou voz sem o v3: tenta o modelo anterior, sem as marcações.
+        if (modelo === 'eleven_v3' && e instanceof ErroIa && !/chave|créditos|limite/i.test(e.message)) return this.falarElevenlabs({ ...o, texto: semTagsDeVoz(o.texto) }, 'eleven_multilingual_v2');
+        throw e;
       }
+    }
+    return this.falarOpenai({ ...o, texto: semTagsDeVoz(o.texto) });
+  }
+
+  private async erroVoz(res: Response, quem: string, provedor: string) {
+    const j = (await res.json().catch(() => ({}))) as { detail?: { status?: string; message?: string } | string; error?: { message?: string } };
+    const msg = typeof j.detail === 'object' ? (j.detail?.message ?? j.detail?.status) : (j.detail ?? j.error?.message);
+    if (res.status === 401) return new ErroIa(`A chave da ${quem} foi recusada. Confira em Configurações › Integrações › Inteligência artificial.`);
+    if (res.status === 429 || /quota|credit/i.test(String(msg ?? ''))) return new ErroIa(`A ${quem} está sem créditos ou no limite de uso agora.`);
+    if (res.status === 404 || /voice_not_found|voice.*not found/i.test(String(msg ?? ''))) return new ErroIa(`A voz escolhida não está disponível na conta da ${quem}. ${provedor === 'elevenlabs' ? 'Adicione a voz em "My Voices" na ElevenLabs ou escolha outra no Assistente › Configurar.' : 'Escolha outra no Assistente › Configurar.'}`);
+    return new ErroIa(`A ${quem} recusou o pedido de voz: ${msg ?? res.status}`);
+  }
+
+  private async falarElevenlabs(o: { texto: string; voz: string; usuarioId?: string | null }, modelo: string) {
+    const chave = this.segredos.v('ELEVENLABS_API_KEY');
+    if (!chave) throw new ErroIa('Cole a chave da ElevenLabs em Configurações › Integrações › Inteligência artificial.');
+    const v3 = modelo === 'eleven_v3';
+    const texto = (v3 ? o.texto : semTagsDeVoz(o.texto)).slice(0, v3 ? 3000 : 2500);
+    let res: Response;
+    try {
+      res = await fetch(`${(process.env.ELEVENLABS_URL ?? 'https://api.elevenlabs.io').replace(/\/$/, '')}/v1/text-to-speech/${encodeURIComponent(o.voz)}?output_format=mp3_44100_128`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'xi-api-key': chave, accept: 'audio/mpeg' },
+        // v3: estabilidade "natural" (0,5) deixa a emoção aparecer sem perder a voz.
+        body: JSON.stringify(v3 ? { text: texto, model_id: modelo, voice_settings: { stability: 0.5 } } : { text: texto, model_id: modelo, language_code: 'pt', voice_settings: { stability: 0.4, similarity_boost: 0.8, style: 0.3, use_speaker_boost: true } }),
+        signal: AbortSignal.timeout(60_000),
+      });
     } catch (e) {
-      if (e instanceof ErroIa) throw e;
       throw new ErroIa(`A voz não respondeu (${(e as Error).message}). Tente de novo.`);
     }
-    if (!res.ok) {
-      const j = (await res.json().catch(() => ({}))) as { detail?: { status?: string; message?: string } | string; error?: { message?: string } };
-      const msg = typeof j.detail === 'object' ? (j.detail?.message ?? j.detail?.status) : (j.detail ?? j.error?.message);
-      const quem = o.provedor === 'elevenlabs' ? 'ElevenLabs' : 'OpenAI';
-      if (res.status === 401) throw new ErroIa(`A chave da ${quem} foi recusada. Confira em Configurações › Integrações › Inteligência artificial.`);
-      if (res.status === 404 || /voice/i.test(String(msg ?? ''))) throw new ErroIa(`A voz escolhida não está disponível na conta da ${quem}. ${o.provedor === 'elevenlabs' ? 'Adicione a voz em "My Voices" na ElevenLabs ou escolha outra no Assistente › Configurar.' : 'Escolha outra no Assistente › Configurar.'}`);
-      if (res.status === 429 || /quota|credit/i.test(String(msg ?? ''))) throw new ErroIa(`A ${quem} está sem créditos ou no limite de uso agora.`);
-      throw new ErroIa(`A ${quem} recusou o pedido de voz: ${msg ?? res.status}`);
-    }
+    if (!res.ok) throw await this.erroVoz(res, 'ElevenLabs', 'elevenlabs');
     const audio = Buffer.from(await res.arrayBuffer());
-    await this.registrar('voz', `${o.provedor}:${modelo}`, texto.length, 0, o.usuarioId);
+    await this.registrar('voz', `elevenlabs:${modelo}`, texto.length, 0, o.usuarioId);
+    return audio;
+  }
+
+  private async falarOpenai(o: { texto: string; voz: string; usuarioId?: string | null }) {
+    const chave = this.segredos.v('OPENAI_API_KEY');
+    if (!chave) throw new ErroIa('Cole a chave da OpenAI em Configurações › Integrações › Inteligência artificial.');
+    const texto = o.texto.slice(0, 2500);
+    let res: Response;
+    try {
+      res = await fetch(`${(process.env.IA_OPENAI_URL ?? 'https://api.openai.com').replace(/\/$/, '')}/v1/audio/speech`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${chave}` },
+        body: JSON.stringify({ model: 'gpt-4o-mini-tts', voice: o.voz, input: texto, response_format: 'mp3', instructions: 'Fale em português do Brasil, com sotaque brasileiro neutro, como numa conversa de verdade entre colegas: expressivo, caloroso, com variação de entonação e emoção conforme o conteúdo (animado com boas notícias, cuidadoso com as ruins), ritmo natural com pequenas pausas.' }),
+        signal: AbortSignal.timeout(60_000),
+      });
+    } catch (e) {
+      throw new ErroIa(`A voz não respondeu (${(e as Error).message}). Tente de novo.`);
+    }
+    if (!res.ok) throw await this.erroVoz(res, 'OpenAI', 'openai');
+    const audio = Buffer.from(await res.arrayBuffer());
+    await this.registrar('voz', 'openai:gpt-4o-mini-tts', texto.length, 0, o.usuarioId);
     return audio;
   }
 

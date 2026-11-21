@@ -13,6 +13,7 @@ export const TIPOS_MIDIA: Record<string, string> = {
   'video/mp4': 'mp4', 'video/3gpp': '3gp', 'application/pdf': 'pdf',
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx', 'application/msword': 'doc',
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'xlsx', 'application/vnd.ms-excel': 'xls', 'text/plain': 'txt',
+  'text/csv': 'csv', 'video/quicktime': 'mov', 'video/webm': 'webm', 'audio/wav': 'wav', 'audio/x-m4a': 'm4a',
 };
 export const NOME_MIDIA = /^[a-f0-9]{40}\.[a-z0-9]{2,5}$/;
 

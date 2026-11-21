@@ -239,6 +239,13 @@
       "when": 1795301703773,
       "tag": "0033_assistente_rotinas",
       "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1795303070668,
+      "tag": "0034_assistente_aprovacao_anexos",
+      "breakpoints": true
     }
   ]
 }

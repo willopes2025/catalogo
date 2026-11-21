@@ -10,6 +10,7 @@ import { assistentePedidos, chamados, usuarios } from '../db/schema';
 import { ErroIa, IaService } from '../ia/ia.service';
 import { AssistenteService, VOZES_ELEVENLABS, VOZES_OPENAI } from './assistente.service';
 import { FerramentasAssistente } from './ferramentas';
+import { AgenteService } from '../crm/agente.service';
 
 const EXTENSOES: Record<string, string> = { 'audio/webm': 'webm', 'audio/ogg': 'ogg', 'audio/mp4': 'm4a', 'audio/mpeg': 'mp3', 'audio/wav': 'wav', 'audio/x-m4a': 'm4a', 'audio/aac': 'm4a' };
 
@@ -21,6 +22,7 @@ export class AssistenteController {
     private readonly assistente: AssistenteService,
     private readonly ferramentas: FerramentasAssistente,
     private readonly ia: IaService,
+    private readonly agente: AgenteService,
   ) {}
 
   /** Estado para a tela: IA ligada, voz ligada, nome e o que esta pessoa consegue pedir. */
@@ -35,6 +37,7 @@ export class AssistenteController {
       vozResposta: await this.assistente.provedorVoz(cfg),
       ferramentas: this.ferramentas.lista.filter((f) => f.permitido(u)).map((f) => ({ nome: f.nome, risco: f.risco })),
       podeConfigurar: temPermissao(u.permissoes, 'configuracoes', 'editar'),
+      podeAutomatico: this.assistente.podeAutomatico(u, cfg),
     };
   }
 
@@ -52,6 +55,7 @@ export class AssistenteController {
         nome: z.string().trim().min(2, 'Dê um nome ao assistente').max(40),
         instrucoes: z.string().max(6000).default(''),
         voz: z.enum(['automatica', 'elevenlabs', 'openai', 'navegador']).default('automatica'),
+        aprovacaoAutomatica: z.enum(['gestao', 'todos', 'ninguem']).default('gestao'),
         vozElevenlabs: z.string().trim().regex(/^[A-Za-z0-9]{10,40}$/, 'Id de voz da ElevenLabs inválido').default(VOZES_ELEVENLABS[0].id),
         vozOpenai: z.enum(VOZES_OPENAI.map((v) => v.id) as [string, ...string[]]).default('ash'),
       }),
@@ -78,6 +82,14 @@ export class AssistenteController {
     return this.assistente.sessao(u, id);
   }
 
+  /** "Pedir aprovação" ou "Aprovar automaticamente" nesta conversa. */
+  @Patch('sessoes/:id')
+  @Permissao('assistente', 'ver')
+  mudarSessao(@Usuario() u: UsuarioLogado, @Param('id', ParseUUIDPipe) id: string, @Body() body: unknown) {
+    const d = validar(z.object({ aprovacao: z.enum(['perguntar', 'automatico']) }), body);
+    return this.assistente.mudarAprovacao(u, id, d.aprovacao);
+  }
+
   @Delete('sessoes/:id')
   @Permissao('assistente', 'ver')
   excluir(@Usuario() u: UsuarioLogado, @Param('id', ParseUUIDPipe) id: string) {
@@ -87,8 +99,28 @@ export class AssistenteController {
   @Post('sessoes/:id/mensagens')
   @Permissao('assistente', 'ver')
   enviar(@Usuario() u: UsuarioLogado, @Param('id', ParseUUIDPipe) id: string, @Body() body: unknown) {
-    const d = validar(z.object({ texto: z.string().trim().min(1, 'Escreva ou fale o que precisa').max(8000), origem: z.enum(['texto', 'voz']).default('texto') }), body);
-    return this.assistente.enviar(u, id, d.texto, d.origem);
+    const d = validar(z.object({ texto: z.string().trim().max(8000).default(''), origem: z.enum(['texto', 'voz']).default('texto'), anexos: z.array(z.string().uuid()).max(10).default([]) }), body);
+    if (!d.texto && !d.anexos.length) throw new BadRequestException('Escreva, fale ou anexe o que precisa.');
+    return this.assistente.enviar(u, id, d.texto, d.origem, d.anexos);
+  }
+
+  /** Anexo da conversa (foto, PDF, planilha, documento, vídeo, áudio), em base64. Devolve o id para mandar junto com a mensagem. */
+  @Post('anexos')
+  @Permissao('assistente', 'ver')
+  anexar(@Usuario() u: UsuarioLogado, @Body() body: unknown) {
+    const d = validar(z.object({ nome: z.string().trim().min(1).max(200), mime: z.string().max(120).default(''), conteudo: z.string().min(4, 'Arquivo vazio').max(25_000_000, 'Arquivo grande demais (máximo de 18 MB)') }), body);
+    return this.assistente.anexar(u, { nome: d.nome, mime: d.mime, conteudo: Buffer.from(d.conteudo, 'base64') });
+  }
+
+  @Get('anexos/:id')
+  @Permissao('assistente', 'ver')
+  async baixarAnexo(@Usuario() u: UsuarioLogado, @Param('id', ParseUUIDPipe) id: string, @Res() res: Response) {
+    const a = await this.assistente.anexo(u, id);
+    res.setHeader('content-type', a.mime);
+    res.setHeader('content-disposition', `inline; filename*=UTF-8''${encodeURIComponent(a.nome)}`);
+    res.setHeader('x-content-type-options', 'nosniff');
+    res.setHeader('cache-control', 'private, max-age=3600');
+    res.sendFile(a.caminho);
   }
 
   /** Áudio gravado no microfone da tela: devolve o texto (a tela mostra e envia). */
@@ -129,6 +161,19 @@ export class AssistenteController {
     return this.assistente.cancelar(u, id);
   }
 
+  /** Todos os agentes numa lista: os agendados (rotinas) e os que atendem no WhatsApp. */
+  @Get('agentes')
+  @Permissao('assistente', 'ver')
+  async agentes(@Usuario() u: UsuarioLogado) {
+    const veWhatsapp = temPermissao(u.permissoes, 'crm', 'ver');
+    const cfg = veWhatsapp ? await this.agente.config() : null;
+    return {
+      rotinas: await this.assistente.rotinas(u),
+      whatsapp: cfg ? { ligado: cfg.ativo, nome: cfg.nome, maxRespostas: cfg.maxRespostas, especialistas: await this.agente.especialistas(true) } : null,
+      podeEditarWhatsapp: temPermissao(u.permissoes, 'configuracoes', 'editar'),
+    };
+  }
+
   // ───── Rotinas agendadas ─────
 
   @Get('rotinas')
@@ -140,8 +185,8 @@ export class AssistenteController {
   @Patch('rotinas/:id')
   @Permissao('assistente', 'ver')
   mudarRotina(@Usuario() u: UsuarioLogado, @Param('id', ParseUUIDPipe) id: string, @Body() body: unknown) {
-    const d = validar(z.object({ ativa: z.boolean() }), body);
-    return this.assistente.mudarRotina(u, id, d.ativa);
+    const d = validar(z.object({ ativa: z.boolean().optional(), aprovacao: z.enum(['perguntar', 'automatico']).optional() }), body);
+    return this.assistente.mudarRotina(u, id, d);
   }
 
   @Delete('rotinas/:id')

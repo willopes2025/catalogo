@@ -108,6 +108,10 @@ Os módulos da Versão 2 aparecem no menu marcados com “V2”.
 | **Rotinas (agentes agendados)** | “Todo dia às 8h me manda por e-mail os inadimplentes”, “de hora em hora, das 8h às 18h, em dias úteis…”: o assistente cria a rotina (com confirmação) e executa sozinho com as permissões atuais de quem criou. Cada execução vira uma conversa; e-mail (com planilha anexa) sai sozinho só para os endereços autorizados na criação, o resto espera confirmação. Aba Rotinas: rodar agora, duplicar, pausar e excluir. |
 | **Agentes do WhatsApp** | Pela conversa ele entrevista, escreve e cria, edita, duplica, liga ou desliga especialistas do agente de atendimento (com confirmação). Em CRM › Configurar há também o botão Duplicar. |
 | **Pedidos** | O que o sistema ainda não faz vira pedido (configuração ou desenvolvimento) com especificação e plano, e abre um chamado de melhoria para a Wide. Aba Pedidos acompanha a situação. |
+| **Aprovação** | Em cada conversa e em cada rotina: **Pedir aprovação** (padrão, cartão de confirmação) ou **Aprovar automaticamente** (executa direto, dentro das permissões). Quem pode usar o automático é regra da empresa em Configurar (padrão: só a gestão). |
+| **Anexos** | Fotos, PDFs, Word, Excel, CSV, vídeos e áudios pelo clipe, Ctrl+V ou arrastando. Ele vê fotos e PDFs, lê o texto de planilhas e documentos e a transcrição de vídeos e áudios; pode encaminhar anexos por e-mail. |
+| **Agentes** | Aba com todos os agentes: os agendados (horário, o que fazem, aprovação, próxima execução) e os de atendimento no WhatsApp (quando atendem, o que fazem, ligado/desligado), com duplicar e criar com ajuda do assistente. |
+| **Conversa falada** | Se a pessoa fala, ele responde no formato de conversa (frases curtas, números por extenso, com emoção na voz pela ElevenLabs v3) e já responde em áudio; se escreve, responde em texto. Título da conversa gerado pelo assunto. |
 | **Configurar** | Nome do assistente e orientações da empresa. Modelo: `IA_MODELO_ASSISTENTE` (padrão: o mesmo do agente). Para outros grupos usarem, marque o módulo **Assistente** em Configurações › Grupos. |
 
 ## Decisões técnicas

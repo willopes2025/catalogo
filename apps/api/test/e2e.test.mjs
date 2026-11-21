@@ -2918,7 +2918,7 @@ test('Assistente: consulta inadimplentes, prepara envio em lote, confirma por vo
   await ok('POST', `/assistente/sessoes/${s.id}/mensagens`, { texto: 'manda whatsapp pros inadimplentes Zuleica', origem: 'voz' });
   assert.equal((await chamar('POST', `/assistente/sessoes/${s.id}/mensagens`, { texto: 'outra coisa' })).status, 409, 'um pedido por vez');
   let v = await esperar(s.id, (x) => !x.ocupada);
-  assert.equal(v.titulo, 'manda whatsapp pros inadimplentes Zuleica');
+  assert.equal(v.titulo, 'Cobrança dos inadimplentes', 'título pelo assunto, gerado depois da primeira resposta');
   const consulta = v.acoes.find((a) => a.ferramenta === 'consultar_inadimplentes');
   assert.equal(consulta.status, 'concluida');
   assert.equal(consulta.resultado.pessoas[0].nome, 'Zuleica Assistente');
@@ -3046,6 +3046,71 @@ test('Assistente: consulta inadimplentes, prepara envio em lote, confirma por vo
   assert.equal(dup2.funcao, 'posvenda_copia2');
   assert.equal(dup1.ativo, false);
   assert.equal(dup1.instrucoes, pos.instrucoes);
+  // Falou por voz → resposta em formato de conversa falada (com marcação de emoção só na voz); escreveu → formato de texto.
+  const ultimoSistema = async () => {
+    const c = (await sim()).filter((r) => r.caminho === '/claude/v1/messages' && Array.isArray(r.corpo.system) && r.corpo.system[0].text.includes('assistente de operação')).at(-1);
+    return c.corpo.system[0].text;
+  };
+  await ok('POST', `/assistente/sessoes/${s.id}/mensagens`, { texto: 'como foi o mês?', origem: 'voz' });
+  v = await esperar(s.id, (x) => !x.ocupada);
+  assert.match(await ultimoSistema(), /FORMATO: CONVERSA FALADA/);
+  assert.match(v.mensagens.at(-1).texto, /^No período vendemos/, 'na tela, sem a marcação');
+  assert.match(v.mensagens.at(-1).fala, /^\[excited\] No período vendemos/, 'para a voz, com a marcação');
+  await ok('POST', `/assistente/sessoes/${s.id}/mensagens`, { texto: 'como foi o mês?' });
+  v = await esperar(s.id, (x) => !x.ocupada);
+  assert.match(await ultimoSistema(), /FORMATO: TEXTO/);
+  assert.equal(v.mensagens.at(-1).fala, null);
+  // Aprovação automática: executa sem cartão (e a empresa pode proibir).
+  assert.equal(s.aprovacao, 'perguntar');
+  assert.equal((await ok('GET', '/assistente/estado')).podeAutomatico, true);
+  await ok('PATCH', `/assistente/sessoes/${s.id}`, { aprovacao: 'automatico' });
+  await ok('POST', `/assistente/sessoes/${s.id}/mensagens`, { texto: 'muda a multa da cobrança para 4' });
+  v = await esperar(s.id, (x) => !x.ocupada);
+  const auto = v.acoes.filter((x) => x.ferramenta === 'alterar_regras').at(-1);
+  assert.equal(auto.status, 'concluida');
+  assert.match(auto.resumo, /→ 4%.*\(aprovado automaticamente\)$/);
+  assert.equal((await ok('GET', '/cobranca/config')).multaPb, 400);
+  assert.match(await ultimoSistema(), /MODO DE APROVAÇÃO: AUTOMÁTICO/);
+  // Envio em lote no automático: roda em segundo plano direto.
+  await ok('POST', `/assistente/sessoes/${s.id}/mensagens`, { texto: 'manda whatsapp pros inadimplentes Zuleica' });
+  v = await esperar(s.id, (x) => !x.ocupada && /^Terminei/.test(x.mensagens.at(-1).texto));
+  assert.equal(v.acoes.filter((x) => x.ferramenta === 'enviar_whatsapp_em_lote').at(-1).status, 'concluida');
+  assert.equal((await ok('POST', '/assistente/sessoes')).aprovacao, 'automatico', 'conversa nova herda o modo');
+  await ok('PUT', '/assistente/config', { nome: 'Assistente', aprovacaoAutomatica: 'ninguem' });
+  assert.equal((await ok('GET', '/assistente/estado')).podeAutomatico, false);
+  assert.equal((await chamar('PATCH', `/assistente/sessoes/${s.id}`, { aprovacao: 'automatico' })).status, 400);
+  // Com a regra "ninguém", a conversa que estava no automático volta a pedir confirmação na prática.
+  await ok('POST', `/assistente/sessoes/${s.id}/mensagens`, { texto: 'muda a multa da cobrança para 3' });
+  v = await esperar(s.id, (x) => !x.ocupada);
+  assert.equal(v.acoes.filter((x) => x.ferramenta === 'alterar_regras').at(-1).status, 'aguardando');
+  await ok('PUT', '/assistente/config', { nome: 'Assistente', aprovacaoAutomatica: 'gestao' });
+  await ok('PATCH', `/assistente/sessoes/${s.id}`, { aprovacao: 'perguntar' });
+  // Anexos: foto, PDF, CSV e Word (lidos pelo assistente); tipo não aceito é recusado.
+  const { zipSync, strToU8 } = createRequire(import.meta.url)('fflate');
+  const docx = Buffer.from(zipSync({ 'word/document.xml': strToU8('<w:document><w:body><w:p><w:r><w:t>Contrato da Zuleica &amp; cia</w:t></w:r></w:p></w:body></w:document>') })).toString('base64');
+  const anexar = (nome, mime, conteudo) => ok('POST', '/assistente/anexos', { nome, mime, conteudo });
+  const png = await anexar('colado.png', 'image/png', 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==');
+  const pdf = await anexar('nota.pdf', 'application/pdf', Buffer.from('%PDF-1.4 teste').toString('base64'));
+  const planilha = await anexar('vendas.csv', '', Buffer.from('\uFEFFNome;Total\nAna;100').toString('base64'));
+  const word = await anexar('contrato.docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', docx);
+  assert.equal(png.leitura, 'completa');
+  assert.equal(planilha.mime, 'text/csv', 'tipo pelo nome quando o navegador não diz');
+  assert.equal(word.leitura, 'texto extraído');
+  assert.equal((await chamar('POST', '/assistente/anexos', { nome: 'virus.exe', mime: 'application/x-msdownload', conteudo: 'TVqQ' })).status, 400);
+  const sAnexo = await ok('POST', '/assistente/sessoes');
+  await ok('POST', `/assistente/sessoes/${sAnexo.id}/mensagens`, { texto: 'o que tem nesses anexos?', anexos: [png.id, pdf.id, planilha.id, word.id] });
+  const vAnexo = await esperar(sAnexo.id, (x) => !x.ocupada);
+  assert.equal(vAnexo.mensagens.find((m) => m.papel === 'user').anexos.length, 4);
+  assert.equal(vAnexo.mensagens.at(-1).texto, 'Recebi: image | document | texto:Nome;Total | texto:Contrato da Zuleica & cia');
+  const baixado = await fetch(API + `/assistente/anexos/${png.id}`, { headers: { authorization: `Bearer ${token}` } });
+  assert.equal(baixado.headers.get('content-type'), 'image/png');
+  assert.equal((await chamar('POST', `/assistente/sessoes/${sAnexo.id}/mensagens`, { texto: '', anexos: [] })).status, 400);
+  // Aba Agentes: agendados e do WhatsApp numa lista.
+  const painelAg = await ok('GET', '/assistente/agentes');
+  assert.ok(painelAg.rotinas.length >= 1);
+  assert.ok(painelAg.rotinas.every((r) => typeof r.quando === 'string'));
+  assert.ok(painelAg.whatsapp.especialistas.some((x) => x.funcao === 'posvenda'));
+  assert.equal(painelAg.podeEditarWhatsapp, true);
   // Voz: sem ElevenLabs, fala pela OpenAI; com a chave, pela ElevenLabs. Links e marcadores não são lidos.
   const falarAudio = async (corpo) => {
     const r = await fetch(API + '/assistente/falar', { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` }, body: JSON.stringify(corpo) });
@@ -3064,7 +3129,12 @@ test('Assistente: consulta inadimplentes, prepara envio em lote, confirma por vo
   a = await falarAudio({ texto: 'Vendas subiram 12%.' });
   assert.equal(a.status, 201);
   assert.equal(a.corpo, 'ID3fake-mp3-audio');
-  assert.ok((await sim()).some((r) => r.caminho.startsWith('/elevenlabs/v1/text-to-speech/ec54d9BmuMSN4IinPrjv') && r.corpo.model_id === 'eleven_multilingual_v2'));
+  assert.ok((await sim()).some((r) => r.caminho.startsWith('/elevenlabs/v1/text-to-speech/ec54d9BmuMSN4IinPrjv') && r.corpo.model_id === 'eleven_v3'));
+  // Voz que não aceita o v3: cai para o multilingual, sem as marcações de emoção.
+  a = await falarAudio({ texto: '[excited] Deu certo!', provedor: 'elevenlabs', voz: 'semv3voz1234' });
+  assert.equal(a.status, 201);
+  const tentativas = (await sim()).filter((r) => r.caminho.startsWith('/elevenlabs/v1/text-to-speech/semv3voz1234'));
+  assert.deepEqual(tentativas.map((r) => [r.corpo.model_id, r.corpo.text]), [['eleven_v3', '[excited] Deu certo!'], ['eleven_multilingual_v2', 'Deu certo!']]);
   // Ouvir de novo não gera de novo.
   const antesEleven = (await sim()).filter((r) => r.caminho.startsWith('/elevenlabs')).length;
   await falarAudio({ texto: 'Vendas subiram 12%.' });

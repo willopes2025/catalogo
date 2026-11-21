@@ -53,3 +53,28 @@
 
 .assistente-rotina.pausada { opacity: 0.7; }
 .link-texto { border: 0; background: none; padding: 0; font: inherit; color: var(--dourado-t); cursor: pointer; text-decoration: underline; }
+
+.assistente-aprovacao { font: inherit; font-size: 13px; padding: 5px 8px; border: 1px solid var(--linha); border-radius: 8px; background: var(--papel); color: var(--tinta); }
+.assistente-aprovacao.auto { border-color: var(--alerta); background: var(--alerta-fundo); color: var(--alerta); font-weight: 600; }
+.assistente-faixa-auto { background: var(--alerta-fundo); color: var(--alerta); font-size: 13px; padding: 6px 16px; border-top: 1px solid var(--linha); }
+
+.assistente-chat.arrastando { outline: 3px dashed var(--dourado); outline-offset: -6px; }
+.assistente-anexos-msg { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
+.assistente-miniatura { max-width: 180px; max-height: 140px; border-radius: 8px; cursor: zoom-in; display: block; background: var(--papel); }
+.assistente-chip { display: inline-flex; align-items: center; gap: 4px; font: inherit; font-size: 13px; background: var(--papel); color: var(--tinta); border: 1px solid var(--linha); border-radius: 8px; padding: 4px 8px; cursor: pointer; max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.assistente-pendentes { display: flex; flex-wrap: wrap; gap: 8px; padding: 8px 16px 0; background: var(--papel); border-top: 1px solid var(--linha); }
+.assistente-pendente { display: flex; align-items: center; gap: 8px; border: 1px solid var(--linha); border-radius: 10px; padding: 4px 6px 4px 4px; background: var(--creme); max-width: 280px; }
+.assistente-pendente.com-erro { border-color: var(--erro); background: var(--erro-fundo); }
+.assistente-pendente img { width: 40px; height: 40px; object-fit: cover; border-radius: 6px; }
+.assistente-pendente-icone { width: 40px; height: 40px; display: grid; place-items: center; font-size: 20px; background: var(--papel); border-radius: 6px; }
+.assistente-pendente-texto { display: flex; flex-direction: column; min-width: 0; font-size: 13px; }
+.assistente-pendente-texto span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.assistente-pendente-texto small { color: var(--suave); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.assistente-pendente-tirar { border: 0; background: none; cursor: pointer; color: var(--suave); padding: 2px 4px; }
+.assistente-clipe { padding: 9px 12px; font-size: 16px; }
+.assistente .fala.minha .assistente-chip { background: rgba(255, 255, 255, 0.15); color: #faf6ef; border-color: rgba(255, 255, 255, 0.3); }
+
+.assistente-agentes-topo { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.assistente-agentes-topo .espaco { flex: 1; }
+.secao small { font-weight: 400; letter-spacing: 0; text-transform: none; margin-left: 6px; }
+.acoes-linha .assistente-aprovacao, .assistente-topo .assistente-aprovacao { width: auto; flex: 0 0 auto; }
