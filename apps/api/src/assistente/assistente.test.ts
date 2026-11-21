@@ -78,3 +78,10 @@ describe('paraFala', () => {
     expect(paraFala('Resumo:\n- **Vendas**: R$ 1.200,00\n- Boleto: https://asaas.com/x/1\n\nQuer mais?')).toBe('Resumo:, Vendas: R$ 1.200,00, Boleto: o link. Quer mais?');
   });
 });
+
+import { semTagsDeVoz } from '../ia/ia.service';
+describe('semTagsDeVoz', () => {
+  it('tira só as marcações de emoção conhecidas', () => {
+    expect(semTagsDeVoz('[excited] Subiu 15%! [laughs] Ótimo. [Confirmou no botão]')).toBe('Subiu 15%! Ótimo. [Confirmou no botão]');
+  });
+});

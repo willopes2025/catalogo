@@ -297,6 +297,7 @@ http
     if (url.pathname.startsWith('/elevenlabs/v1/text-to-speech/')) {
       if (req.headers['xi-api-key'] !== 'chave-eleven-teste') return responder(res, 401, { detail: { status: 'invalid_api_key', message: 'Invalid API key' } });
       if (url.pathname.endsWith('/naoexiste12345')) return responder(res, 404, { detail: { status: 'voice_not_found', message: 'A voice with the voice_id was not found.' } });
+      if (url.pathname.includes('/semv3voz1234') && corpo?.model_id === 'eleven_v3') return responder(res, 400, { detail: { status: 'model_not_supported', message: 'This voice does not support eleven_v3' } });
       res.writeHead(200, { 'content-type': 'audio/mpeg' });
       return res.end(mp3);
     }
@@ -315,6 +316,7 @@ http
       if (/user,user|assistant,assistant/.test(papeis) || corpo.messages[0].role !== 'user') return responder(res, 400, { type: 'error', error: { type: 'invalid_request_error', message: 'roles must alternate' } });
       // ── Assistente da equipe (com ferramentas) ──
       const sistemaTxt = Array.isArray(corpo.system) ? corpo.system.map((b) => b.text).join('\n') : String(corpo.system ?? '');
+      if (sistemaTxt.includes('Dê um título curto')) return responder(res, 200, { content: [{ type: 'text', text: '"Cobrança dos inadimplentes".' }], stop_reason: 'end_turn', usage: { input_tokens: 20, output_tokens: 5 } });
       if (sistemaTxt.includes('assistente de operação')) {
         // Como a API: todo uso de ferramenta tem de ser respondido logo na mensagem seguinte.
         for (let i = 0; i < corpo.messages.length; i++) {
@@ -346,11 +348,15 @@ http
           }
           if (uso?.name === 'resumo_negocio') {
             const d = JSON.parse(c);
-            return resp([{ type: 'text', text: `No período vendemos ${d.vendas.liquido} (${d.vendas.variacao}); inadimplência hoje: ${d.hoje.inadimplencia}.` }]);
+            return resp([{ type: 'text', text: `${sistemaTxt.includes('CONVERSA FALADA') ? '[excited] ' : ''}No período vendemos ${d.vendas.liquido} (${d.vendas.variacao}); inadimplência hoje: ${d.hoje.inadimplencia}.` }]);
           }
           return resp([{ type: 'text', text: `Resultado: ${resultado.is_error ? 'erro ' : ''}${c.slice(0, 120)}` }]);
         }
         const fala = ult.filter((b) => b.type === 'text').map((b) => b.text).join(' ');
+        if (ult.some((x) => x.type === 'image' || x.type === 'document') || /\[arquivo anexado/.test(fala)) {
+          const tipos = ult.map((x) => (x.type === 'text' && x.text.startsWith('[arquivo anexado') ? `texto:${x.text.split('\n')[1]?.slice(0, 30)}` : x.type)).filter((t) => t !== 'text');
+          return resp([{ type: 'text', text: `Recebi: ${tipos.join(' | ')}` }]);
+        }
         if (/a pessoa confirmou/.test(fala)) return resp([{ type: 'text', text: 'Feito!' }]);
         if (fala.includes('[Rotina agendada')) return resp([{ type: 'tool_use', id: `tu_${++wa.n}`, name: 'consultar_inadimplentes', input: { limite: 5 } }], 'tool_use');
         const agenda = /todo dia às (\d+) me manda e-?mail com os inadimplentes para (\S+)/i.exec(fala);

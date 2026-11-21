@@ -35,7 +35,7 @@ export const INTEGRACOES: Integracao[] = [
       { nome: 'IA_TRANSCREVER_AUTO', rotulo: 'Áudios recebidos no chat', opcoes: [['sim', 'Transcrever sozinho todo áudio que chegar'], ['nao', 'Só quando clicar em "Transcrever"']] },
       { nome: 'IA_MODELO_TRANSCRICAO', rotulo: 'Modelo de transcrição da OpenAI', ajuda: 'Deixe em branco para usar o padrão (gpt-4o-mini-transcribe). Mais preciso e mais caro: gpt-4o-transcribe.' },
       { nome: 'ELEVENLABS_API_KEY', rotulo: 'Chave da ElevenLabs (voz do assistente)', secreto: true, ajuda: 'Voz mais natural para o Assistente falar. Sem ela, a voz vem da OpenAI. elevenlabs.io › Developers › API keys.' },
-      { nome: 'IA_MODELO_VOZ', rotulo: 'Modelo de voz da ElevenLabs', ajuda: 'Em branco: eleven_multilingual_v2 (mais natural). Mais rápido e barato: eleven_flash_v2_5.' },
+      { nome: 'IA_MODELO_VOZ', rotulo: 'Modelo de voz da ElevenLabs', ajuda: 'Em branco: eleven_v3 (o mais expressivo, com emoção; se a conta ou a voz não aceitar, usa eleven_multilingual_v2 sozinho). Mais rápido e barato: eleven_flash_v2_5.' },
     ],
   },
   {

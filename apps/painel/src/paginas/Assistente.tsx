@@ -1,14 +1,51 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, lerSessao } from '../api';
+import { Link } from 'react-router-dom';
 import { dataHora } from '../formato';
 import { Abas, Campo, Carregando, Erro, Topo } from '../componentes/ui';
 import './assistente.css';
 
-interface Mensagem { id: string; papel: 'user' | 'assistant'; texto: string; origem: string | null; criadoEm: string }
+interface AnexoInfo { id: string; nome: string; mime: string }
+interface Mensagem { id: string; papel: 'user' | 'assistant'; texto: string; fala: string | null; origem: string | null; criadoEm: string; anexos: AnexoInfo[] }
+interface Pendente { chave: string; nome: string; mime: string; tamanho: number; previa: string | null; id?: string; leitura?: string; erro?: string }
+
+const BASE_API = import.meta.env.VITE_API_URL ?? '/api';
+const icone = (mime: string) => (mime.startsWith('image/') ? '🖼' : mime === 'application/pdf' ? '📄' : mime.startsWith('video/') ? '🎬' : mime.startsWith('audio/') ? '🎵' : mime.includes('sheet') || mime === 'text/csv' ? '📊' : '📝');
+const tamanhoLegivel = (b: number) => (b > 1_000_000 ? `${(b / 1_000_000).toFixed(1).replace('.', ',')} MB` : `${Math.max(1, Math.round(b / 1000))} KB`);
+
+/** Anexo só sai com login: baixa com o token e mostra por um link local. */
+function useAnexo(id: string, ligado = true) {
+  const [url, setUrl] = useState<string | null>(null);
+  useEffect(() => {
+    if (!ligado) return;
+    let solto: string | null = null;
+    fetch(`${BASE_API}/assistente/anexos/${id}`, { headers: { authorization: `Bearer ${lerSessao()?.token ?? ''}` } })
+      .then((r) => (r.ok ? r.blob() : null))
+      .then((b) => {
+        if (b) setUrl((solto = URL.createObjectURL(b)));
+      })
+      .catch(() => undefined);
+    return () => {
+      if (solto) URL.revokeObjectURL(solto);
+    };
+  }, [id, ligado]);
+  return url;
+}
+
+function AnexoNaMensagem({ a }: { a: AnexoInfo }) {
+  const imagem = a.mime.startsWith('image/');
+  const url = useAnexo(a.id, imagem);
+  const abrir = async () => {
+    const r = await fetch(`${BASE_API}/assistente/anexos/${a.id}`, { headers: { authorization: `Bearer ${lerSessao()?.token ?? ''}` } });
+    if (r.ok) window.open(URL.createObjectURL(await r.blob()), '_blank');
+  };
+  if (imagem) return url ? <img className="assistente-miniatura" src={url} alt={a.nome} title={a.nome} onClick={() => window.open(url, '_blank')} /> : <span className="assistente-chip">{icone(a.mime)} {a.nome}</span>;
+  return <button className="assistente-chip" title="Abrir" onClick={abrir}>{icone(a.mime)} {a.nome}</button>;
+}
 interface Acao { id: string; ferramenta: string; risco: string; status: string; resumo: string | null; previa: any; resultado: any; erro: string | null; progresso: { feitos: number; total: number; falhas: number } | null; criadoEm: string }
-interface Sessao { id: string; titulo: string; ocupada: boolean; mensagens: Mensagem[]; acoes: Acao[] }
-interface Estado { ligado: boolean; voz: boolean; vozResposta: 'elevenlabs' | 'openai' | 'navegador'; nome: string; ferramentas: { nome: string; risco: string }[]; podeConfigurar: boolean }
+interface Sessao { id: string; titulo: string; ocupada: boolean; aprovacao: 'perguntar' | 'automatico'; mensagens: Mensagem[]; acoes: Acao[] }
+interface Estado { ligado: boolean; voz: boolean; vozResposta: 'elevenlabs' | 'openai' | 'navegador'; nome: string; ferramentas: { nome: string; risco: string }[]; podeConfigurar: boolean; podeAutomatico: boolean }
 
 const ROTULO: Record<string, string> = {
   consultar_inadimplentes: 'Consultou os inadimplentes',
@@ -85,18 +122,18 @@ async function falar(texto: string, modo: Estado['vozResposta'] = 'navegador', e
 }
 
 export function Assistente() {
-  const [aba, setAba] = useState<'conversa' | 'rotinas' | 'pedidos' | 'config'>('conversa');
+  const [aba, setAba] = useState<'conversa' | 'agentes' | 'pedidos' | 'config'>('conversa');
   const [sel, setSel] = useState<string | null>(null);
   const estado = useQuery({ queryKey: ['assistente', 'estado'], queryFn: () => api<Estado>('/assistente/estado') });
-  const abas: ['conversa' | 'rotinas' | 'pedidos' | 'config', string][] = [['conversa', 'Conversa'], ['rotinas', 'Rotinas'], ['pedidos', 'Pedidos']];
+  const abas: ['conversa' | 'agentes' | 'pedidos' | 'config', string][] = [['conversa', 'Conversa'], ['agentes', 'Agentes'], ['pedidos', 'Pedidos']];
   if (estado.data?.podeConfigurar) abas.push(['config', 'Configurar']);
   return (
     <>
-      <Topo eb="Assistente" titulo={estado.data?.nome ?? 'Assistente'} sub="Fale ou escreva o que precisa: ele consulta o sistema, analisa os resultados com você e executa ações (com a sua confirmação)." />
+      <Topo eb="Sistema" titulo="Assistente" sub={`${estado.data?.nome && estado.data.nome !== 'Assistente' ? `Você está falando com ${estado.data.nome}. ` : ''}Fale, escreva ou anexe o que precisa: ele consulta o sistema, analisa os resultados com você e executa ações.`} />
       <Abas abas={abas} ativa={aba} mudar={setAba} />
       {estado.isLoading ? <Carregando /> : !estado.data?.ligado ? (
         <div className="aviso alerta">A inteligência artificial não está ligada. Cole a chave do Claude em Configurações › Integrações › Inteligência artificial.</div>
-      ) : aba === 'conversa' ? <Conversas estado={estado.data} sel={sel} setSel={setSel} /> : aba === 'rotinas' ? <Rotinas abrir={(id) => { setSel(id); setAba('conversa'); }} /> : aba === 'pedidos' ? <Pedidos podeMudar={estado.data.podeConfigurar} /> : <Configurar />}
+      ) : aba === 'conversa' ? <Conversas estado={estado.data} sel={sel} setSel={setSel} /> : aba === 'agentes' ? <Agentes podeAutomatico={estado.data.podeAutomatico} abrir={(id) => { setSel(id); setAba('conversa'); }} /> : aba === 'pedidos' ? <Pedidos podeMudar={estado.data.podeConfigurar} /> : <Configurar />}
     </>
   );
 }
@@ -145,6 +182,9 @@ function Conversas({ estado, sel, setSel }: { estado: Estado; sel: string | null
 function Chat({ id, estado, aoApagar }: { id: string; estado: Estado; aoApagar: () => void }) {
   const qc = useQueryClient();
   const [texto, setTexto] = useState('');
+  const [pendentes, setPendentes] = useState<Pendente[]>([]);
+  const [arrastando, setArrastando] = useState(false);
+  const seletor = useRef<HTMLInputElement>(null);
   const [ouvir, setOuvir] = useState(() => localStorage.getItem('aritana.assistente.ouvir') === '1');
   const fim = useRef<HTMLDivElement>(null);
   const faladas = useRef<Set<string> | null>(null);
@@ -157,14 +197,19 @@ function Chat({ id, estado, aoApagar }: { id: string; estado: Estado; aoApagar: 
     },
   });
   const enviar = useMutation({
-    mutationFn: (d: { texto: string; origem: 'texto' | 'voz' }) => api(`/assistente/sessoes/${id}/mensagens`, { corpo: d }),
-    onSuccess: () => { setTexto(''); qc.invalidateQueries({ queryKey: ['assistente', 'sessao', id] }); qc.invalidateQueries({ queryKey: ['assistente', 'sessoes'] }); },
+    mutationFn: (d: { texto: string; origem: 'texto' | 'voz'; anexos: string[] }) => api(`/assistente/sessoes/${id}/mensagens`, { corpo: d }),
+    onSuccess: () => { setTexto(''); setPendentes((p) => { p.forEach((x) => x.previa && URL.revokeObjectURL(x.previa)); return []; }); qc.invalidateQueries({ queryKey: ['assistente', 'sessao', id] }); qc.invalidateQueries({ queryKey: ['assistente', 'sessoes'] }); },
   });
   const decidir = useMutation({
     mutationFn: (d: { acaoId: string; confirmar: boolean }) => api(`/assistente/acoes/${d.acaoId}/${d.confirmar ? 'confirmar' : 'cancelar'}`, { corpo: {} }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['assistente', 'sessao', id] }),
   });
   const apagar = useMutation({ mutationFn: () => api(`/assistente/sessoes/${id}`, { metodo: 'DELETE' }), onSuccess: () => { qc.invalidateQueries({ queryKey: ['assistente', 'sessoes'] }); aoApagar(); } });
+  const aprovacao = useMutation({ mutationFn: (modo: 'perguntar' | 'automatico') => api(`/assistente/sessoes/${id}`, { metodo: 'PATCH', corpo: { aprovacao: modo } }), onSuccess: () => qc.invalidateQueries({ queryKey: ['assistente', 'sessao', id] }) });
+  const mudarAprovacao = (modo: 'perguntar' | 'automatico') => {
+    if (modo === 'automatico' && !window.confirm('Aprovar automaticamente?\n\nNesta conversa, o assistente vai mandar mensagens, emitir cobranças e alterar configurações SEM pedir sua confirmação (sempre dentro das suas permissões). Você pode voltar para "Pedir aprovação" a qualquer momento.')) return;
+    aprovacao.mutate(modo);
+  };
 
   // Mensagens e ações na ordem em que aconteceram.
   const linha = useMemo(() => {
@@ -193,21 +238,64 @@ function Chat({ id, estado, aoApagar }: { id: string; estado: Estado; aoApagar: 
     }
     const novas = respostas.filter((m) => !faladas.current!.has(m.id));
     novas.forEach((m) => faladas.current!.add(m.id));
-    if (ouvir && novas.length) void falar(novas.map((m) => m.texto).join('. '), estado.vozResposta);
+    // Conversa por voz: se a pessoa falou, ele responde falando (mesmo com "Ouvir respostas" desligado).
+    const falouPorVoz = s.data.mensagens.filter((m) => m.papel === 'user' && (m.origem === 'voz' || m.origem === 'texto')).at(-1)?.origem === 'voz';
+    if ((ouvir || falouPorVoz) && novas.length) void falar(novas.map((m) => m.fala ?? m.texto).join(' '), estado.vozResposta);
   }, [s.data, ouvir, estado.vozResposta]);
 
+  const enviandoAnexo = pendentes.some((p) => !p.id && !p.erro);
+  const prontos = pendentes.filter((p) => p.id).map((p) => p.id!);
   const mandar = (t: string, origem: 'texto' | 'voz') => {
-    if (!t.trim() || s.data?.ocupada) return;
-    enviar.mutate({ texto: t.trim(), origem });
+    if ((!t.trim() && !prontos.length) || s.data?.ocupada || enviandoAnexo) return;
+    enviar.mutate({ texto: t.trim(), origem, anexos: prontos });
   };
+
+  /** Anexa arquivos (clipe, Ctrl+V ou arrastar): sobe na hora e mostra a prévia. */
+  const adicionar = (arquivos: File[]) => {
+    for (const f of arquivos.slice(0, 10 - pendentes.length)) {
+      const chave = `${Date.now()}-${Math.random()}`;
+      const nome = f.name && f.name !== 'image.png' ? f.name : `colado-${new Date().toLocaleTimeString('pt-BR').replace(/:/g, '')}.${(f.type.split('/')[1] ?? 'png').replace('jpeg', 'jpg')}`;
+      const item: Pendente = { chave, nome, mime: f.type, tamanho: f.size, previa: f.type.startsWith('image/') ? URL.createObjectURL(f) : null };
+      if (f.size > 18_000_000) item.erro = 'Grande demais (máximo de 18 MB)';
+      setPendentes((p) => [...p, item]);
+      if (item.erro) continue;
+      const leitor = new FileReader();
+      leitor.onload = async () => {
+        try {
+          const r = await api<{ id: string; leitura: string }>('/assistente/anexos', { corpo: { nome, mime: f.type, conteudo: String(leitor.result).split(',')[1] ?? '' } });
+          setPendentes((p) => p.map((x) => (x.chave === chave ? { ...x, id: r.id, leitura: r.leitura } : x)));
+        } catch (e) {
+          setPendentes((p) => p.map((x) => (x.chave === chave ? { ...x, erro: (e as Error).message } : x)));
+        }
+      };
+      leitor.onerror = () => setPendentes((p) => p.map((x) => (x.chave === chave ? { ...x, erro: 'Não consegui ler o arquivo.' } : x)));
+      leitor.readAsDataURL(f);
+    }
+  };
+  const tirar = (chave: string) => setPendentes((p) => p.filter((x) => { if (x.chave === chave && x.previa) URL.revokeObjectURL(x.previa); return x.chave !== chave; }));
 
   if (s.isLoading) return <Carregando />;
   if (!s.data) return <Erro erro={s.error} />;
   return (
-    <section className="assistente-chat cartao">
+    <section
+      className={`assistente-chat cartao ${arrastando ? 'arrastando' : ''}`}
+      onDragOver={(e) => { if (e.dataTransfer.types.includes('Files')) { e.preventDefault(); setArrastando(true); } }}
+      onDragLeave={(e) => { if (e.currentTarget === e.target) setArrastando(false); }}
+      onDrop={(e) => { e.preventDefault(); setArrastando(false); adicionar([...e.dataTransfer.files]); }}
+    >
       <div className="assistente-topo">
         <b>{s.data.titulo}</b>
         <span className="espaco" />
+        <select
+          className={`assistente-aprovacao ${s.data.aprovacao === 'automatico' ? 'auto' : ''}`}
+          value={s.data.aprovacao}
+          disabled={aprovacao.isPending}
+          title={estado.podeAutomatico ? 'Como as ações que mandam, cobram ou alteram são aprovadas' : 'Só a gestão pode ligar a aprovação automática'}
+          onChange={(e) => mudarAprovacao(e.target.value as 'perguntar' | 'automatico')}
+        >
+          <option value="perguntar">🛡 Pedir aprovação</option>
+          <option value="automatico" disabled={!estado.podeAutomatico}>⚡ Aprovar automaticamente{estado.podeAutomatico ? '' : ' (sem permissão)'}</option>
+        </select>
         <label className="muted assistente-ouvir">
           <input type="checkbox" checked={ouvir} onChange={(e) => { setOuvir(e.target.checked); localStorage.setItem('aritana.assistente.ouvir', e.target.checked ? '1' : '0'); if (!e.target.checked) calar(); }} /> Ouvir respostas
         </label>
@@ -221,9 +309,10 @@ function Chat({ id, estado, aoApagar }: { id: string; estado: Estado; aoApagar: 
         )}
         {linha.map((x) => (x.tipo === 'msg' ? (
           <div key={x.m.id} className={`fala ${x.m.papel === 'user' ? 'minha' : 'dele'}`}>
+            {x.m.anexos?.length > 0 && <div className="assistente-anexos-msg">{x.m.anexos.map((a) => <AnexoNaMensagem key={a.id} a={a} />)}</div>}
             {x.m.origem === 'voz' && <span className="muted" title="Falado">🎤 </span>}
             {x.m.texto}
-            {x.m.papel === 'assistant' && <button className="assistente-falar" title="Ouvir" onClick={() => void falar(x.m.texto, estado.vozResposta)}>🔊</button>}
+            {x.m.papel === 'assistant' && <button className="assistente-falar" title="Ouvir" onClick={() => void falar(x.m.fala ?? x.m.texto, estado.vozResposta)}>🔊</button>}
           </div>
         ) : (
           <CartaoAcao key={x.a.id} a={x.a} decidir={(confirmar) => decidir.mutate({ acaoId: x.a.id, confirmar })} ocupado={decidir.isPending} />
@@ -233,16 +322,41 @@ function Chat({ id, estado, aoApagar }: { id: string; estado: Estado; aoApagar: 
         <div ref={fim} />
       </div>
       {enviar.error && <Erro erro={enviar.error} />}
+      {aprovacao.error && <Erro erro={aprovacao.error} />}
+      {s.data.aprovacao === 'automatico' && <div className="assistente-faixa-auto">⚡ Aprovação automática ligada: as ações são executadas sem pedir confirmação.</div>}
+      {pendentes.length > 0 && (
+        <div className="assistente-pendentes">
+          {pendentes.map((p) => (
+            <div key={p.chave} className={`assistente-pendente ${p.erro ? 'com-erro' : ''}`} title={p.erro ?? p.leitura ?? 'Enviando…'}>
+              {p.previa ? <img src={p.previa} alt="" /> : <span className="assistente-pendente-icone">{icone(p.mime)}</span>}
+              <div className="assistente-pendente-texto">
+                <span>{p.nome}</span>
+                <small>{p.erro ? p.erro : p.id ? `${tamanhoLegivel(p.tamanho)} · ${p.leitura}` : 'enviando…'}</small>
+              </div>
+              <button className="assistente-pendente-tirar" aria-label={`Tirar ${p.nome}`} onClick={() => tirar(p.chave)}>✕</button>
+            </div>
+          ))}
+        </div>
+      )}
       <div className="assistente-entrada">
+        <input ref={seletor} type="file" multiple hidden accept="image/*,application/pdf,video/*,audio/*,.docx,.xlsx,.csv,.txt" onChange={(e) => { adicionar([...(e.target.files ?? [])]); e.target.value = ''; }} />
+        <button className="botao claro assistente-clipe" title="Anexar arquivo (ou cole com Ctrl+V, ou arraste para cá)" aria-label="Anexar arquivo" disabled={pendentes.length >= 10} onClick={() => seletor.current?.click()}>📎</button>
         <textarea
+          onPaste={(e) => {
+            const arquivos = [...e.clipboardData.files];
+            if (arquivos.length) {
+              e.preventDefault();
+              adicionar(arquivos);
+            }
+          }}
           rows={2}
           value={texto}
-          placeholder={s.data.ocupada ? 'Aguarde terminar…' : 'Escreva ou aperte o microfone e fale'}
+          placeholder={s.data.ocupada ? 'Aguarde terminar…' : 'Escreva, fale ou cole/arraste arquivos (Ctrl+V)'}
           onChange={(e) => setTexto(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); mandar(texto, 'texto'); } }}
         />
         {estado.voz && <Microfone desativado={s.data.ocupada || enviar.isPending} aoTranscrever={(t) => mandar(t, 'voz')} />}
-        <button className="botao" disabled={!texto.trim() || s.data.ocupada || enviar.isPending} onClick={() => mandar(texto, 'texto')}>Enviar</button>
+        <button className="botao" disabled={(!texto.trim() && !prontos.length) || s.data.ocupada || enviar.isPending || enviandoAnexo} onClick={() => mandar(texto, 'texto')}>Enviar</button>
       </div>
     </section>
   );
@@ -266,7 +380,7 @@ function CartaoAcao({ a, decidir, ocupado }: { a: Acao; decidir: (confirmar: boo
     <div className={`cartao assistente-acao ${a.status}`}>
       <div className="assistente-acao-topo">
         <b>{nome}</b>
-        <span className={`etiqueta ${a.status === 'concluida' ? 'ok' : a.status === 'erro' ? 'erro' : a.status === 'cancelada' ? 'neutra' : 'alerta'}`}>{{ aguardando: 'Esperando sua confirmação', executando: 'Executando', concluida: 'Concluída', cancelada: 'Cancelada', erro: 'Erro' }[a.status] ?? a.status}</span>
+        <span className={`etiqueta ${a.status === 'concluida' ? 'ok' : a.status === 'erro' ? 'erro' : a.status === 'cancelada' ? 'neutra' : 'alerta'}`}>{{ aguardando: 'Esperando sua confirmação', executando: 'Executando', concluida: a.resumo?.includes('(aprovado automaticamente)') ? 'Concluída · automática' : 'Concluída', cancelada: 'Cancelada', erro: 'Erro' }[a.status] ?? a.status}</span>
       </div>
       {a.resumo && <p>{a.resumo}</p>}
       {previa.length > 0 && (
@@ -362,30 +476,105 @@ function Microfone({ desativado, aoTranscrever }: { desativado: boolean; aoTrans
   );
 }
 
-interface Rotina { id: string; titulo: string; instrucao: string; quando: string; ativa: boolean; proximaEm: string; ultimaEm: string | null; ultimaSessaoId: string | null; ultimoErro: string | null; emails: string[] }
+interface Especialista { id: string; funcao: string; nome: string; quando: string; instrucoes: string; ativo: boolean; ordem: number }
+interface PainelAgentes { rotinas: Rotina[]; whatsapp: { ligado: boolean; nome: string; maxRespostas: number; especialistas: Especialista[] } | null; podeEditarWhatsapp: boolean }
+
+/** Todos os agentes numa lista: os agendados (rotinas) e os que atendem no WhatsApp, com o horário e o que cada um faz. */
+function Agentes({ abrir, podeAutomatico }: { abrir: (sessaoId: string) => void; podeAutomatico: boolean }) {
+  const qc = useQueryClient();
+  const q = useQuery({ queryKey: ['assistente', 'agentes'], queryFn: () => api<PainelAgentes>('/assistente/agentes'), refetchInterval: 15_000 });
+  const criar = useMutation({
+    mutationFn: async (pedido: string) => {
+      const s = await api<{ id: string }>('/assistente/sessoes', { corpo: {} });
+      await api(`/assistente/sessoes/${s.id}/mensagens`, { corpo: { texto: pedido } });
+      return s.id;
+    },
+    onSuccess: (id) => { qc.invalidateQueries({ queryKey: ['assistente', 'sessoes'] }); abrir(id); },
+  });
+  const especialista = useMutation({
+    mutationFn: (d: { e: Especialista; o: 'ligar' | 'duplicar' }) => (d.o === 'duplicar' ? api(`/crm/ia-agentes/${d.e.id}/duplicar`, { corpo: {} }) : api(`/crm/ia-agentes/${d.e.id}`, { metodo: 'PATCH', corpo: { ativo: !d.e.ativo } })),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['assistente', 'agentes'] }); qc.invalidateQueries({ queryKey: ['crm', 'ia-agente'] }); },
+  });
+  if (q.isLoading) return <Carregando />;
+  const d = q.data!;
+  const totalWhats = d.whatsapp?.especialistas.length ?? 0;
+  return (
+    <div className="coluna" style={{ marginTop: 14 }}>
+      <div className="assistente-agentes-topo">
+        <span className="muted">{d.rotinas.length} agente(s) agendado(s){d.whatsapp ? ` · ${totalWhats} agente(s) de atendimento no WhatsApp` : ''}</span>
+        <span className="espaco" />
+        <button className="botao claro" disabled={criar.isPending} onClick={() => criar.mutate('Quero criar um agente agendado (uma rotina que trabalha sozinha). Me ajuda a montar?')}>+ Agente agendado</button>
+        {d.whatsapp && d.podeEditarWhatsapp && <button className="botao claro" disabled={criar.isPending} onClick={() => criar.mutate('Quero criar um novo agente de atendimento no WhatsApp. Me ajuda a montar?')}>+ Agente do WhatsApp</button>}
+      </div>
+      {criar.error && <Erro erro={criar.error} />}
+
+      <div className="secao">Agentes agendados <small className="muted">trabalham sozinhos no horário ou a cada X tempo</small></div>
+      <Rotinas podeAutomatico={podeAutomatico} abrir={abrir} />
+
+      {d.whatsapp && (
+        <>
+          <div className="secao">Agentes de atendimento no WhatsApp <small className="muted">respondem clientes e revendedoras quando chega mensagem</small></div>
+          <div className="cartao">
+            <div className="assistente-acao-topo">
+              <div><b>Recepção{d.whatsapp.nome ? ` · se apresenta como ${d.whatsapp.nome}` : ''}</b><div className="muted">Lê a conversa e passa para o especialista do assunto · até {d.whatsapp.maxRespostas} respostas seguidas, depois chama a equipe</div></div>
+              <span className={`etiqueta ${d.whatsapp.ligado ? 'ok' : 'neutra'}`}>{d.whatsapp.ligado ? 'Atendendo' : 'Desligado'}</span>
+            </div>
+            {totalWhats === 0 ? <p className="muted">Nenhum especialista: um agente só atende tudo com as instruções gerais.</p> : (
+              <table className="tabela" style={{ marginTop: 10 }}>
+                <thead><tr><th>Agente</th><th>Quando atende</th><th>O que faz</th><th>Situação</th><th></th></tr></thead>
+                <tbody>
+                  {d.whatsapp.especialistas.map((e) => (
+                    <tr key={e.id} style={e.ativo ? undefined : { opacity: 0.6 }}>
+                      <td><b>{e.nome}</b><div className="muted" style={{ fontSize: 12 }}>{e.funcao}</div></td>
+                      <td style={{ fontSize: 13 }}>{e.quando}</td>
+                      <td style={{ fontSize: 13 }}>{e.instrucoes ? `${e.instrucoes.slice(0, 180)}${e.instrucoes.length > 180 ? '…' : ''}` : <span className="muted">usa só as instruções gerais</span>}</td>
+                      <td><span className={`etiqueta ${e.ativo ? 'ok' : 'neutra'}`}>{e.ativo ? 'Ligado' : 'Desligado'}</span></td>
+                      <td style={{ whiteSpace: 'nowrap' }}>
+                        {d.podeEditarWhatsapp && <button className="botao claro pequeno" disabled={especialista.isPending} onClick={() => especialista.mutate({ e, o: 'ligar' })}>{e.ativo ? 'Desligar' : 'Ligar'}</button>}{' '}
+                        {d.podeEditarWhatsapp && <button className="botao claro pequeno" disabled={especialista.isPending} onClick={() => especialista.mutate({ e, o: 'duplicar' })}>Duplicar</button>}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+            {especialista.error && <Erro erro={especialista.error} />}
+            <p className="muted" style={{ marginBottom: 0 }}>Para editar as instruções e o conhecimento de cada um: <Link to="/crm?aba=configurar">CRM › Configurar</Link>, ou peça na conversa.</p>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+interface Rotina { id: string; titulo: string; instrucao: string; quando: string; ativa: boolean; aprovacao: 'perguntar' | 'automatico'; proximaEm: string; ultimaEm: string | null; ultimaSessaoId: string | null; ultimoErro: string | null; emails: string[] }
 
 /** Agentes agendados: rodam sozinhos no horário ou a cada X tempo. Criados pela conversa ("todo dia às 8h…"). */
-function Rotinas({ abrir }: { abrir: (sessaoId: string) => void }) {
+function Rotinas({ abrir, podeAutomatico }: { abrir: (sessaoId: string) => void; podeAutomatico: boolean }) {
   const qc = useQueryClient();
   const lista = useQuery({ queryKey: ['assistente', 'rotinas'], queryFn: () => api<Rotina[]>('/assistente/rotinas'), refetchInterval: 15_000 });
-  const atualizar = () => { qc.invalidateQueries({ queryKey: ['assistente', 'rotinas'] }); qc.invalidateQueries({ queryKey: ['assistente', 'sessoes'] }); };
+  const atualizar = () => { qc.invalidateQueries({ queryKey: ['assistente', 'rotinas'] }); qc.invalidateQueries({ queryKey: ['assistente', 'agentes'] }); qc.invalidateQueries({ queryKey: ['assistente', 'sessoes'] }); };
   const acao = useMutation({
-    mutationFn: (d: { r: Rotina; o: 'rodar' | 'duplicar' | 'pausar' | 'retomar' | 'excluir' }) =>
-      d.o === 'rodar' ? api(`/assistente/rotinas/${d.r.id}/executar`, { corpo: {} })
+    mutationFn: (d: { r: Rotina; o: 'rodar' | 'duplicar' | 'pausar' | 'retomar' | 'excluir' | 'automatico' | 'perguntar' }) =>
+      d.o === 'automatico' || d.o === 'perguntar' ? api(`/assistente/rotinas/${d.r.id}`, { metodo: 'PATCH', corpo: { aprovacao: d.o } })
+      : d.o === 'rodar' ? api(`/assistente/rotinas/${d.r.id}/executar`, { corpo: {} })
         : d.o === 'duplicar' ? api(`/assistente/rotinas/${d.r.id}/duplicar`, { corpo: {} })
           : d.o === 'excluir' ? api(`/assistente/rotinas/${d.r.id}`, { metodo: 'DELETE' })
             : api(`/assistente/rotinas/${d.r.id}`, { metodo: 'PATCH', corpo: { ativa: d.o === 'retomar' } }),
     onSuccess: atualizar,
   });
   if (lista.isLoading) return <Carregando />;
-  if (!lista.data?.length) return <div className="cartao vazio">Nenhuma rotina ainda. Peça na conversa, por exemplo: “todo dia às 8h me manda por e-mail os inadimplentes” ou “de hora em hora, das 8h às 18h, me avise se entrou candidata nova”.</div>;
+  if (!lista.data?.length) return <div className="cartao vazio">Nenhum agente agendado ainda. Peça na conversa, por exemplo: “todo dia às 8h me manda por e-mail os inadimplentes” ou “de hora em hora, das 8h às 18h, me avise se entrou candidata nova”.</div>;
   return (
     <div className="coluna">
       {lista.data.map((r) => (
         <div key={r.id} className={`cartao assistente-rotina ${r.ativa ? '' : 'pausada'}`}>
           <div className="assistente-acao-topo">
             <div><b>{r.titulo}</b><div className="muted">{r.quando}{r.emails.length ? ` · e-mail para ${r.emails.join(', ')}` : ''}</div></div>
-            <span className={`etiqueta ${r.ativa ? 'ok' : 'neutra'}`}>{r.ativa ? 'Ativa' : 'Pausada'}</span>
+            <span>
+              {r.aprovacao === 'automatico' && <span className="etiqueta alerta" title="Executa tudo sem esperar confirmação">⚡ Automática</span>}{' '}
+              <span className={`etiqueta ${r.ativa ? 'ok' : 'neutra'}`}>{r.ativa ? 'Ativa' : 'Pausada'}</span>
+            </span>
           </div>
           <p className="assistente-texto">{r.instrucao}</p>
           <div className="muted" style={{ fontSize: 13 }}>
@@ -397,12 +586,25 @@ function Rotinas({ abrir }: { abrir: (sessaoId: string) => void }) {
             <button className="botao pequeno" disabled={acao.isPending} onClick={() => acao.mutate({ r, o: 'rodar' })}>Rodar agora</button>
             <button className="botao claro pequeno" disabled={acao.isPending} onClick={() => acao.mutate({ r, o: 'duplicar' })}>Duplicar</button>
             <button className="botao claro pequeno" disabled={acao.isPending} onClick={() => acao.mutate({ r, o: r.ativa ? 'pausar' : 'retomar' })}>{r.ativa ? 'Pausar' : 'Retomar'}</button>
+            <select
+              className={`assistente-aprovacao ${r.aprovacao === 'automatico' ? 'auto' : ''}`}
+              value={r.aprovacao}
+              disabled={acao.isPending}
+              onChange={(e) => {
+                const o = e.target.value as 'perguntar' | 'automatico';
+                if (o === 'automatico' && !window.confirm(`Aprovar automaticamente a rotina "${r.titulo}"?\n\nEla vai mandar WhatsApp, emitir cobranças e alterar o que a instrução pedir, sozinha, sem esperar sua confirmação.`)) return;
+                acao.mutate({ r, o });
+              }}
+            >
+              <option value="perguntar">🛡 Pedir aprovação</option>
+              <option value="automatico" disabled={!podeAutomatico}>⚡ Aprovar automaticamente{podeAutomatico ? '' : ' (sem permissão)'}</option>
+            </select>
             <button className="botao perigo pequeno" disabled={acao.isPending} onClick={() => window.confirm(`Excluir a rotina "${r.titulo}"?`) && acao.mutate({ r, o: 'excluir' })}>Excluir</button>
           </div>
         </div>
       ))}
       {acao.error && <Erro erro={acao.error} />}
-      <p className="muted">Para mudar horário, intervalo, dias ou o que a rotina faz, peça na conversa (ex.: “muda a rotina dos inadimplentes para dias úteis às 7h30”). A cópia nasce pausada para você ajustar.</p>
+      <p className="muted">Para mudar horário, intervalo, dias ou o que o agente faz, peça na conversa (ex.: “muda a rotina dos inadimplentes para dias úteis às 7h30”). A cópia nasce pausada para você ajustar.</p>
     </div>
   );
 }
@@ -450,7 +652,7 @@ function Pedidos({ podeMudar }: { podeMudar: boolean }) {
   );
 }
 
-interface ConfigTela { nome: string; instrucoes: string; voz: 'automatica' | 'elevenlabs' | 'openai' | 'navegador'; vozElevenlabs: string; vozOpenai: string }
+interface ConfigTela { nome: string; instrucoes: string; aprovacaoAutomatica: 'gestao' | 'todos' | 'ninguem'; voz: 'automatica' | 'elevenlabs' | 'openai' | 'navegador'; vozElevenlabs: string; vozOpenai: string }
 interface ConfigResposta extends ConfigTela { opcoes: { elevenlabs: { id: string; nome: string }[]; openai: { id: string; nome: string }[] }; chaves: { elevenlabs: boolean; openai: boolean } }
 
 function Configurar() {
@@ -462,7 +664,7 @@ function Configurar() {
   const salvar = useMutation({ mutationFn: (d: ConfigTela) => api('/assistente/config', { metodo: 'PUT', corpo: d }), onSuccess: () => { qc.invalidateQueries({ queryKey: ['assistente'] }); } });
   if (cfg.isLoading) return <Carregando />;
   const c = cfg.data!;
-  const v: ConfigTela = f ?? { nome: c.nome, instrucoes: c.instrucoes, voz: c.voz, vozElevenlabs: c.vozElevenlabs, vozOpenai: c.vozOpenai };
+  const v: ConfigTela = f ?? { nome: c.nome, instrucoes: c.instrucoes, aprovacaoAutomatica: c.aprovacaoAutomatica, voz: c.voz, vozElevenlabs: c.vozElevenlabs, vozOpenai: c.vozOpenai };
   const provedor = v.voz === 'automatica' ? (c.chaves.elevenlabs ? 'elevenlabs' : c.chaves.openai ? 'openai' : 'navegador') : v.voz;
   const personalizada = outra || !c.opcoes.elevenlabs.some((o) => o.id === v.vozElevenlabs);
   const ouvirExemplo = async () => {
@@ -478,9 +680,21 @@ function Configurar() {
   };
   return (
     <div className="cartao form">
-      <Campo rotulo="Nome do assistente" ajuda="Como ele se apresenta para a equipe (ex.: Cláudio)."><input value={v.nome} onChange={(e) => setF({ ...v, nome: e.target.value })} /></Campo>
+      <div className="l4 aviso">
+        Aqui você configura <b>o próprio assistente</b>: o que conversa com a equipe nesta tela. <b>Não é aqui que se criam agentes.</b> Agentes que atendem clientes no WhatsApp ficam em <b>CRM › Configurar › Especialistas</b>; agentes que trabalham sozinhos por horário ficam na aba <b>Rotinas</b>. Os dois você também cria pedindo na conversa (ex.: “me ajuda a criar um agente de pós-venda”).
+      </div>
+      <div className="secao l4">Identidade</div>
+      <Campo rotulo="Nome do assistente" className="l2" ajuda="O nome com que ele se apresenta para a equipe aqui no sistema (ex.: Cláudio). Não muda o nome do agente do WhatsApp, que é configurado no CRM."><input value={v.nome} onChange={(e) => setF({ ...v, nome: e.target.value })} placeholder="Ex.: Cláudio" /></Campo>
       <Campo rotulo="Orientações da empresa" className="l4" ajuda="Tom, prioridades e o que ele nunca deve fazer. Ex.: “Em cobrança, sempre ofereça a 2ª via com o vencimento para daqui a 3 dias.”">
         <textarea rows={6} value={v.instrucoes} onChange={(e) => setF({ ...v, instrucoes: e.target.value })} />
+      </Campo>
+      <div className="secao l4">Aprovação das ações</div>
+      <Campo rotulo="Quem pode usar “Aprovar automaticamente”" className="l2" ajuda="No modo automático, o assistente manda mensagens, emite cobranças e altera configurações sem pedir confirmação (sempre dentro das permissões de quem pediu). Cada pessoa liga ou desliga na conversa e em cada rotina.">
+        <select value={v.aprovacaoAutomatica} onChange={(e) => setF({ ...v, aprovacaoAutomatica: e.target.value as ConfigTela['aprovacaoAutomatica'] })}>
+          <option value="gestao">Só a gestão (quem edita as Configurações)</option>
+          <option value="todos">Todos que usam o Assistente</option>
+          <option value="ninguem">Ninguém (sempre pede confirmação)</option>
+        </select>
       </Campo>
       <div className="secao l4">Voz das respostas</div>
       <Campo rotulo="Quem fala">

@@ -5,7 +5,7 @@ import { calcularEncargos, formatarReais, preencherTexto } from '@aritana/regras
 import { DB, type Db } from '../comum/db.module';
 import { temPermissao, type UsuarioLogado } from '../comum/auth';
 import { AuditoriaService } from '../comum/auditoria.service';
-import { assistentePedidos, assistenteRotinas, chamadoMensagens, iaAgentes, chamados, crmCanais, crmTemplates, empresas, maletas, pessoas, titulos, vendas } from '../db/schema';
+import { assistenteAnexos, assistentePedidos, assistenteRotinas, chamadoMensagens, iaAgentes, chamados, crmCanais, crmTemplates, empresas, maletas, pessoas, titulos, vendas } from '../db/schema';
 import { CanaisService } from '../crm/canais.service';
 import { CobrancaService } from '../cobranca/cobranca.service';
 import { CobrancaConfigService } from '../cobranca/cobranca-config.service';
@@ -17,6 +17,8 @@ import { regrasSchema } from '../configuracoes/configuracoes.controller';
 import { AgenteService } from '../crm/agente.service';
 import { duplicarEspecialista } from '../crm/especialistas';
 import { IaService } from '../ia/ia.service';
+import { ArquivosService } from '../arquivos/arquivos.service';
+import { readFile } from 'node:fs/promises';
 import type { DefinicaoFerramenta } from '../ia/ia.service';
 import { csv, descreverAgenda, proximaDaRotina, type Agenda } from './rotinas';
 
@@ -33,7 +35,9 @@ export interface Contexto {
   /** Avança o progresso das ações em segundo plano (envio em lote). */
   progresso?: (feitos: number, total: number, falhas: number) => Promise<void>;
   /** Execução automática de uma rotina (ninguém acompanhando): e-mails para os endereços autorizados saem sem confirmação. */
-  rotina?: { id: string; emails: string[] };
+  rotina?: { id: string; emails: string[]; aprovacao?: string };
+  /** Quem está falando pode ligar a aprovação automática (regra da empresa em Assistente › Configurar). */
+  podeAutomatico?: boolean;
 }
 
 export interface Preparo {
@@ -87,6 +91,7 @@ export class FerramentasAssistente {
     private readonly configuracoes: ConfiguracoesService,
     private readonly agente: AgenteService,
     private readonly ia: IaService,
+    private readonly arquivos: ArquivosService,
   ) {
     this.lista = [
       this.consultarInadimplentes(),
@@ -856,6 +861,7 @@ export class FerramentasAssistente {
       .object({ nome: z.string().trim().min(1).max(60), colunas: z.array(z.string().max(60)).min(1).max(20), linhas: z.array(z.array(z.union([z.string(), z.number(), z.null()]))).max(500) })
       .optional()
       .describe('Outra tabela pequena para anexar como planilha'),
+    anexosDaConversa: z.array(uuid).max(5).optional().describe('Arquivos que a pessoa anexou na conversa (anexoId) para encaminhar'),
   });
 
   private enviarEmail(): Ferramenta {
@@ -868,7 +874,9 @@ export class FerramentasAssistente {
       permitido: pode('assistente', 'ver'),
       preparar: async (e: z.infer<FerramentasAssistente['emailSchema']>, ctx) => {
         if (e.anexo === 'inadimplentes' && !temPermissao(ctx.usuario.permissoes, 'cobranca', 'ver')) return { resumo: '', impedimento: 'Anexar a lista de inadimplentes exige acesso à Cobrança.' };
-        const anexos = [e.anexo === 'inadimplentes' ? 'planilha de inadimplentes' : null, e.tabela ? `planilha "${e.tabela.nome}"` : null].filter(Boolean);
+        const daConversa = e.anexosDaConversa?.length ? await this.db.select({ nome: assistenteAnexos.nome }).from(assistenteAnexos).where(and(inArray(assistenteAnexos.id, e.anexosDaConversa), eq(assistenteAnexos.usuarioId, ctx.usuario.id))) : [];
+        if (daConversa.length !== (e.anexosDaConversa?.length ?? 0)) return { resumo: '', impedimento: 'Algum anexo da conversa não foi encontrado.' };
+        const anexos = [e.anexo === 'inadimplentes' ? 'planilha de inadimplentes' : null, e.tabela ? `planilha "${e.tabela.nome}"` : null, ...daConversa.map((a) => `"${a.nome}"`)].filter(Boolean);
         return { resumo: `Enviar e-mail para ${e.para.join(', ')}: "${e.assunto}"${anexos.length ? `, com ${anexos.join(' e ')}` : ''}.`, previa: [{ nome: e.assunto, telefone: e.para.join(', '), texto: e.texto.slice(0, 3000) }] };
       },
       executar: async (e: z.infer<FerramentasAssistente['emailSchema']>, ctx) => {
@@ -887,6 +895,14 @@ export class FerramentasAssistente {
           });
         }
         if (e.tabela) anexos.push({ nome: `${e.tabela.nome.replace(/[^\w\- ]+/g, '').trim() || 'planilha'}-${dia}.csv`, mime: 'text/csv', conteudo: csv(e.tabela.colunas, e.tabela.linhas) });
+        if (e.anexosDaConversa?.length) {
+          const linhas = await this.db.select().from(assistenteAnexos).where(and(inArray(assistenteAnexos.id, e.anexosDaConversa), eq(assistenteAnexos.usuarioId, ctx.usuario.id)));
+          for (const a of linhas) {
+            const caminho = this.arquivos.caminhoMidia(a.arquivo);
+            if (caminho) anexos.push({ nome: a.nome, mime: a.mime, conteudo: await readFile(caminho) });
+          }
+        }
+        if (anexos.reduce((t, a) => t + a.conteudo.length, 0) > 20_000_000) throw new BadRequestException('Os anexos passam de 20 MB: o e-mail seria recusado.');
         const r = await this.email.enviar(e.para.join(', '), e.assunto, e.texto, anexos);
         await this.auditoria.registrar({ usuarioId: ctx.usuario.id, acao: ctx.rotina ? 'assistente_email_rotina' : 'assistente_email', entidade: 'email', entidadeId: null, dados: { para: e.para, assunto: e.assunto, anexos: anexos.map((a) => a.nome), rotinaId: ctx.rotina?.id ?? null } });
         return { enviado: true, para: e.para, anexos: anexos.map((a) => a.nome), ...((r as { simulado?: boolean }).simulado ? { aviso: 'O servidor de e-mail (SMTP) não está configurado: o envio foi só simulado. Configure em Configurações › Integrações › E-mail.' } : {}) };
@@ -918,6 +934,7 @@ export class FerramentasAssistente {
       instrucao: z.string().trim().min(20).max(4000).describe('O que fazer em CADA execução, completo e sem depender desta conversa: o que consultar, como montar e para quem enviar (com os e-mails).'),
       ...this.agendaSchema,
       emails: z.array(z.string().trim().toLowerCase().email()).max(10).optional().describe('E-mails que podem receber o que a rotina mandar, sem pedir confirmação a cada execução'),
+      aprovarAutomaticamente: z.boolean().optional().describe('true = a rotina executa tudo sozinha (WhatsApp, cobrança, alterações) sem esperar confirmação. Só se a pessoa pedir.'),
     });
     const quando = (d: Date) => d.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo', weekday: 'short', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
     return {
@@ -927,11 +944,12 @@ export class FerramentasAssistente {
       schema,
       risco: 'confirmar',
       permitido: pode('assistente', 'ver'),
-      preparar: async (e: z.infer<typeof schema>) => {
+      preparar: async (e: z.infer<typeof schema>, ctx) => {
+        if (e.aprovarAutomaticamente && !ctx.podeAutomatico) return { resumo: '', impedimento: 'Você não pode ligar a aprovação automática (regra da empresa em Assistente › Configurar).' };
         try {
           const a = this.montarAgenda(e);
           return {
-            resumo: `Criar a rotina "${e.titulo}": ${descreverAgenda(a)} (primeira: ${quando(proximaDaRotina(a))}).${e.emails?.length ? ` E-mails autorizados: ${e.emails.join(', ')}.` : ''}`,
+            resumo: `Criar a rotina "${e.titulo}": ${descreverAgenda(a)} (primeira: ${quando(proximaDaRotina(a))}).${e.emails?.length ? ` E-mails autorizados: ${e.emails.join(', ')}.` : ''}${e.aprovarAutomaticamente ? ' Aprovação AUTOMÁTICA: executa tudo sozinha, sem esperar confirmação.' : ' Ações que mandam mensagem, cobram ou alteram vão esperar sua confirmação.'}`,
             previa: [{ nome: 'O que vai fazer em cada execução', texto: e.instrucao }],
           };
         } catch (err) {
@@ -940,7 +958,8 @@ export class FerramentasAssistente {
       },
       executar: async (e: z.infer<typeof schema>, ctx) => {
         const a = this.montarAgenda(e);
-        const [r] = await this.db.insert(assistenteRotinas).values({ usuarioId: ctx.usuario.id, titulo: e.titulo, instrucao: e.instrucao, ...a, emails: e.emails ?? [], proximaEm: proximaDaRotina(a) }).returning();
+        if (e.aprovarAutomaticamente && !ctx.podeAutomatico) throw new BadRequestException('Sem permissão para aprovação automática.');
+        const [r] = await this.db.insert(assistenteRotinas).values({ usuarioId: ctx.usuario.id, titulo: e.titulo, instrucao: e.instrucao, ...a, emails: e.emails ?? [], aprovacao: e.aprovarAutomaticamente ? 'automatico' : 'perguntar', proximaEm: proximaDaRotina(a) }).returning();
         await this.auditoria.registrar({ usuarioId: ctx.usuario.id, acao: 'criar_rotina', entidade: 'assistente_rotina', entidadeId: r.id, dados: { titulo: e.titulo, agenda: descreverAgenda(a), emails: e.emails ?? [] } });
         return { criada: true, rotinaId: r.id, quando: descreverAgenda(a), primeiraExecucao: quando(r.proximaEm), observacao: 'A pessoa acompanha, duplica e pausa na aba Rotinas do Assistente.' };
       },
@@ -955,6 +974,7 @@ export class FerramentasAssistente {
       instrucao: z.string().trim().min(20).max(4000).optional().describe('duplicar/editar: nova instrução'),
       ...this.agendaSchema,
       emails: z.array(z.string().trim().toLowerCase().email()).max(10).optional(),
+      aprovarAutomaticamente: z.boolean().optional().describe('editar/duplicar: liga (true) ou desliga (false) a aprovação automática da rotina'),
     });
     return {
       nome: 'gerenciar_rotinas',
@@ -966,14 +986,15 @@ export class FerramentasAssistente {
         const fmt = (d: Date | null) => d?.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' }) ?? null;
         if (e.acao === 'listar') {
           const rs = await this.db.select().from(assistenteRotinas).where(eq(assistenteRotinas.usuarioId, ctx.usuario.id)).orderBy(asc(assistenteRotinas.criadoEm));
-          return { rotinas: rs.map((r) => ({ rotinaId: r.id, titulo: r.titulo, quando: descreverAgenda(r), ativa: r.ativa, proxima: r.ativa ? fmt(r.proximaEm) : null, ultima: fmt(r.ultimaEm), emails: r.emails, instrucao: r.instrucao })) };
+          return { rotinas: rs.map((r) => ({ rotinaId: r.id, titulo: r.titulo, quando: descreverAgenda(r), ativa: r.ativa, aprovacao: r.aprovacao === 'automatico' ? 'automática' : 'pede confirmação', proxima: r.ativa ? fmt(r.proximaEm) : null, ultima: fmt(r.ultimaEm), emails: r.emails, instrucao: r.instrucao })) };
         }
         if (!e.rotinaId) throw new BadRequestException('Diga qual rotina (rotinaId).');
         const [r] = await this.db.select().from(assistenteRotinas).where(and(eq(assistenteRotinas.id, e.rotinaId), eq(assistenteRotinas.usuarioId, ctx.usuario.id)));
         if (!r) throw new BadRequestException('Rotina não encontrada.');
         const mudouAgenda = e.horario || e.intervaloMinutos || e.janela || e.dias;
         const agenda: Agenda = mudouAgenda ? this.montarAgenda({ horario: e.horario ?? (e.intervaloMinutos ? undefined : r.horario), intervaloMinutos: e.intervaloMinutos ?? (e.horario ? undefined : (r.intervaloMin ?? undefined)), janela: e.janela ?? (r.janelaInicio && r.janelaFim ? { inicio: r.janelaInicio, fim: r.janelaFim } : undefined), dias: e.dias ?? r.dias }) : r;
-        const campos = { titulo: e.titulo ?? r.titulo, instrucao: e.instrucao ?? r.instrucao, tipo: agenda.tipo, horario: agenda.horario, intervaloMin: agenda.intervaloMin ?? null, janelaInicio: agenda.janelaInicio ?? null, janelaFim: agenda.janelaFim ?? null, dias: agenda.dias, emails: e.emails ?? r.emails };
+        if (e.aprovarAutomaticamente && !ctx.podeAutomatico) throw new BadRequestException('Você não pode ligar a aprovação automática (regra da empresa em Assistente › Configurar).');
+        const campos = { aprovacao: e.aprovarAutomaticamente === undefined ? r.aprovacao : e.aprovarAutomaticamente ? 'automatico' : 'perguntar', titulo: e.titulo ?? r.titulo, instrucao: e.instrucao ?? r.instrucao, tipo: agenda.tipo, horario: agenda.horario, intervaloMin: agenda.intervaloMin ?? null, janelaInicio: agenda.janelaInicio ?? null, janelaFim: agenda.janelaFim ?? null, dias: agenda.dias, emails: e.emails ?? r.emails };
         if (e.acao === 'duplicar') {
           const [c] = await this.db.insert(assistenteRotinas).values({ usuarioId: ctx.usuario.id, ...campos, titulo: e.titulo ?? `${r.titulo} (cópia)`, ativa: false, proximaEm: proximaDaRotina(agenda) }).returning();
           return { duplicada: true, rotinaId: c.id, titulo: c.titulo, quando: descreverAgenda(c), ativa: false, observacao: 'A cópia nasce pausada: retome quando estiver certa.' };

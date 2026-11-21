@@ -1957,6 +1957,8 @@ export const assistenteSessoes = pgTable(
     titulo: text('titulo').notNull().default('Nova conversa'),
     /** O assistente está trabalhando nesta conversa agora (a tela acompanha). */
     ocupada: boolean('ocupada').notNull().default(false),
+    /** perguntar = ações que mandam, cobram ou alteram esperam confirmação; automatico = executa direto. */
+    aprovacao: text('aprovacao').notNull().default('perguntar'),
     criadoEm: criadoEm(),
     atualizadoEm: atualizadoEm(),
   },
@@ -1976,7 +1978,9 @@ export const assistenteMensagens = pgTable(
     conteudo: jsonb('conteudo').$type<unknown[]>().notNull(),
     /** O que aparece na tela (vazio quando a mensagem é só uso/resultado de ferramenta). */
     texto: text('texto'),
-    /** texto | voz | sistema */
+    /** Resposta com as marcações de emoção para a voz (a tela mostra `texto`, sem elas). */
+    fala: text('fala'),
+    /** texto | voz | sistema | rotina */
     origem: text('origem'),
     criadoEm: criadoEm(),
   },
@@ -2060,9 +2064,27 @@ export const assistenteRotinas = pgTable('assistente_rotinas', {
   /** E-mails autorizados a receber o que a rotina mandar (sem pedir confirmação a cada vez). */
   emails: jsonb('emails').$type<string[]>().notNull().default([]),
   ativa: boolean('ativa').notNull().default(true),
+  /** perguntar = WhatsApp, cobrança e alterações esperam confirmação na conversa da execução; automatico = executa tudo. */
+  aprovacao: text('aprovacao').notNull().default('perguntar'),
   proximaEm: timestamp('proxima_em', { withTimezone: true }).notNull(),
   ultimaEm: timestamp('ultima_em', { withTimezone: true }),
   ultimaSessaoId: uuid('ultima_sessao_id').references(() => assistenteSessoes.id, { onDelete: 'set null' }),
   ultimoErro: text('ultimo_erro'),
+  criadoEm: criadoEm(),
+});
+
+/** Arquivo anexado numa conversa com o assistente (foto, PDF, planilha, documento, vídeo ou áudio). */
+export const assistenteAnexos = pgTable('assistente_anexos', {
+  id: id(),
+  usuarioId: uuid('usuario_id')
+    .notNull()
+    .references(() => usuarios.id, { onDelete: 'cascade' }),
+  /** Nome do arquivo guardado (pasta de mídias, só sai com login). */
+  arquivo: text('arquivo').notNull(),
+  nome: text('nome').notNull(),
+  mime: text('mime').notNull(),
+  tamanho: integer('tamanho').notNull(),
+  /** Texto tirado do arquivo (planilha, documento) ou a transcrição do vídeo/áudio, para o assistente ler. */
+  extrato: text('extrato'),
   criadoEm: criadoEm(),
 });
