@@ -3,11 +3,26 @@ import { DB, type Db } from '../comum/db.module';
 import { iaUsos } from '../db/schema';
 import { SegredosService } from '../segredos/segredos.service';
 
-export type Recurso = 'agente' | 'triagem' | 'sugestao' | 'reconhecer_peca' | 'maleta' | 'foto' | 'transcricao' | 'teste';
+export type Recurso = 'agente' | 'triagem' | 'sugestao' | 'reconhecer_peca' | 'maleta' | 'foto' | 'transcricao' | 'teste' | 'assistente';
 export type Bloco = { type: 'text'; text: string } | { type: 'image'; source: { type: 'base64'; media_type: string; data: string } | { type: 'url'; url: string } };
 export interface MensagemIa {
   role: 'user' | 'assistant';
   content: string | Bloco[];
+}
+
+/** Blocos da conversa com ferramentas (formato da API do Claude). */
+export type BlocoFerramenta =
+  | { type: 'text'; text: string }
+  | { type: 'tool_use'; id: string; name: string; input: Record<string, unknown> }
+  | { type: 'tool_result'; tool_use_id: string; content: string; is_error?: boolean };
+export interface MensagemFerramentas {
+  role: 'user' | 'assistant';
+  content: BlocoFerramenta[];
+}
+export interface DefinicaoFerramenta {
+  name: string;
+  description: string;
+  input_schema: Record<string, unknown>;
 }
 
 /** A IA respondeu com erro (chave errada, sem crédito, fora do ar). A mensagem já está pronta para a tela. */
@@ -46,23 +61,22 @@ export class IaService {
     await this.db.insert(iaUsos).values({ recurso, modelo, tokensEntrada: entrada, tokensSaida: saida, usuarioId: usuarioId ?? null }).catch((e) => this.log.warn(`Uso não registrado: ${(e as Error).message}`));
   }
 
-  /** Pergunta ao Claude e devolve o texto da resposta. */
-  async perguntar(o: { recurso: Recurso; sistema: string; mensagens: MensagemIa[]; maxTokens?: number; usuarioId?: string | null; modelo?: string }): Promise<string> {
+  /** Chamada à API do Claude, com as mensagens de erro já prontas para a tela. */
+  private async requisitar(recurso: Recurso, modelo: string, corpo: Record<string, unknown>, usuarioId?: string | null) {
     const chave = this.segredos.v('ANTHROPIC_API_KEY');
     if (!chave) throw new ServiceUnavailableException({ mensagem: 'A inteligência artificial não está ligada. Cole a chave do Claude em Configurações › Integrações › Inteligência artificial.' });
-    const modelo = o.modelo || this.modelo;
     let res: Response;
     try {
       res = await fetch(`${(process.env.IA_CLAUDE_URL ?? 'https://api.anthropic.com').replace(/\/$/, '')}/v1/messages`, {
         method: 'POST',
         headers: { 'content-type': 'application/json', 'x-api-key': chave, 'anthropic-version': '2023-06-01' },
-        body: JSON.stringify({ model: modelo, max_tokens: o.maxTokens ?? 1024, system: o.sistema, messages: o.mensagens }),
-        signal: AbortSignal.timeout(90_000),
+        body: JSON.stringify({ model: modelo, ...corpo }),
+        signal: AbortSignal.timeout(120_000),
       });
     } catch (e) {
       throw new ErroIa(`A IA não respondeu (${(e as Error).message}). Tente de novo.`);
     }
-    const j = (await res.json().catch(() => ({}))) as { content?: { type: string; text?: string }[]; usage?: { input_tokens?: number; output_tokens?: number }; error?: { type?: string; message?: string }; stop_reason?: string };
+    const j = (await res.json().catch(() => ({}))) as { content?: { type: string; text?: string; id?: string; name?: string; input?: Record<string, unknown> }[]; usage?: { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number }; error?: { type?: string; message?: string }; stop_reason?: string };
     if (!res.ok) {
       const tipo = j.error?.type ?? '';
       if (res.status === 401) throw new ErroIa('A chave do Claude foi recusada. Confira a chave em Configurações › Integrações › Inteligência artificial.');
@@ -72,9 +86,41 @@ export class IaService {
       if (res.status >= 500 || tipo === 'overloaded_error') throw new ErroIa('A IA está sobrecarregada agora. Tente de novo em instantes.');
       throw new ErroIa(`A IA recusou o pedido: ${j.error?.message ?? res.status}`);
     }
-    await this.registrar(o.recurso, modelo, j.usage?.input_tokens ?? 0, j.usage?.output_tokens ?? 0, o.usuarioId);
+    const u = j.usage ?? {};
+    await this.registrar(recurso, modelo, (u.input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0), u.output_tokens ?? 0, usuarioId);
     if (j.stop_reason === 'refusal') throw new ErroIa('A IA não quis responder a este pedido.');
+    return j;
+  }
+
+  /** Pergunta ao Claude e devolve o texto da resposta. */
+  async perguntar(o: { recurso: Recurso; sistema: string; mensagens: MensagemIa[]; maxTokens?: number; usuarioId?: string | null; modelo?: string }): Promise<string> {
+    const j = await this.requisitar(o.recurso, o.modelo || this.modelo, { max_tokens: o.maxTokens ?? 1024, system: o.sistema, messages: o.mensagens }, o.usuarioId);
     return (j.content ?? []).filter((b) => b.type === 'text').map((b) => b.text ?? '').join('').trim();
+  }
+
+  /** Modelo do assistente da equipe (orquestrador). */
+  get modeloAssistente() {
+    return this.segredos.v('IA_MODELO_ASSISTENTE')?.trim() || this.modelo;
+  }
+
+  /**
+   * Uma rodada da conversa com ferramentas: o Claude responde com texto e/ou pede ferramentas.
+   * As instruções e a lista de ferramentas vão em cache (a parte fixa fica bem mais barata nas rodadas seguintes).
+   */
+  async comFerramentas(o: { recurso: Recurso; sistema: string; mensagens: MensagemFerramentas[]; ferramentas: DefinicaoFerramenta[]; maxTokens?: number; usuarioId?: string | null; modelo?: string }) {
+    const ferramentas = o.ferramentas.map((f, i) => (i === o.ferramentas.length - 1 ? { ...f, cache_control: { type: 'ephemeral' } } : f));
+    const j = await this.requisitar(
+      o.recurso,
+      o.modelo || this.modeloAssistente,
+      { max_tokens: o.maxTokens ?? 2048, system: [{ type: 'text', text: o.sistema, cache_control: { type: 'ephemeral' } }], messages: o.mensagens, ...(ferramentas.length ? { tools: ferramentas } : {}) },
+      o.usuarioId,
+    );
+    const content: BlocoFerramenta[] = [];
+    for (const b of j.content ?? []) {
+      if (b.type === 'text' && b.text) content.push({ type: 'text', text: b.text });
+      else if (b.type === 'tool_use' && b.id && b.name) content.push({ type: 'tool_use', id: b.id, name: b.name, input: b.input ?? {} });
+    }
+    return { content, parada: j.stop_reason ?? 'end_turn' };
   }
 
   /** Pergunta esperando JSON de volta. Aceita o JSON puro ou dentro de um bloco de código. */

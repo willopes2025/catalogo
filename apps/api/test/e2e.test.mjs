@@ -2892,6 +2892,80 @@ test('protesto pela CRA: confere, envia a remessa, protocolo, protestado, pagame
   assert.equal((await ok('GET', '/cobranca/protestos?status=recusado')).itens.length, 1);
 });
 
+test('Assistente: consulta inadimplentes, prepara envio em lote, confirma por voz, resume o negócio e respeita permissões', async () => {
+  await ok('PUT', '/integracoes/ia', { valores: { ANTHROPIC_API_KEY: 'chave-claude-teste' } });
+  const estado = await ok('GET', '/assistente/estado');
+  assert.equal(estado.ligado, true);
+  assert.ok(estado.ferramentas.some((f) => f.nome === 'resumo_negocio'));
+  assert.equal(estado.ferramentas.find((f) => f.nome === 'enviar_whatsapp_em_lote').risco, 'confirmar');
+  const sim = async () => (await (await fetch('http://localhost:3199/__recebidos')).json()).filter((r) => !r.caminho.startsWith('/__'));
+  const dia = (n) => new Date(Date.now() - 3 * 3600_000 + n * 86400_000).toISOString().slice(0, 10);
+  const emp = (await ok('GET', '/empresas'))[0];
+  const p = await ok('POST', '/pessoas', { tipo: 'cliente', nome: 'Zuleica Assistente', telefone1: '27999990001' });
+  await ok('POST', '/financeiro/titulos', { empresaId: emp.id, tipo: 'receber', pessoaId: p.id, descricao: 'Parcela do assistente', valor: 10000, vencimento: dia(-12) });
+  // Um número por QR code ativo para enviar.
+  const canais = await ok('GET', '/crm/canais');
+  if (!canais.some((c) => c.tipo === 'qrcode' && c.ativo && !c.excluidoEm)) await ok('POST', '/crm/canais', { nome: 'QR do assistente', tipo: 'qrcode', config: { instancia: 'I1', token: 'T1', clientToken: 'CT1' } });
+  const esperar = async (id, cond) => {
+    for (let i = 0; i < 80; i++) {
+      const s = await ok('GET', `/assistente/sessoes/${id}`);
+      if (cond(s)) return s;
+      await new Promise((r) => setTimeout(r, 250));
+    }
+    assert.fail('o assistente não terminou a tempo');
+  };
+  const s = await ok('POST', '/assistente/sessoes');
+  await ok('POST', `/assistente/sessoes/${s.id}/mensagens`, { texto: 'manda whatsapp pros inadimplentes Zuleica', origem: 'voz' });
+  assert.equal((await chamar('POST', `/assistente/sessoes/${s.id}/mensagens`, { texto: 'outra coisa' })).status, 409, 'um pedido por vez');
+  let v = await esperar(s.id, (x) => !x.ocupada);
+  assert.equal(v.titulo, 'manda whatsapp pros inadimplentes Zuleica');
+  const consulta = v.acoes.find((a) => a.ferramenta === 'consultar_inadimplentes');
+  assert.equal(consulta.status, 'concluida');
+  assert.equal(consulta.resultado.pessoas[0].nome, 'Zuleica Assistente');
+  const lote = v.acoes.find((a) => a.ferramenta === 'enviar_whatsapp_em_lote');
+  assert.equal(lote.status, 'aguardando', 'não envia sem confirmação');
+  assert.equal(lote.previa.length, 1);
+  assert.match(lote.previa[0].texto, /^Oi, Zuleica! Sua parcela de R\$\s?1\d\d,\d\d está 12 dias em atraso\.$/);
+  assert.equal(v.mensagens.at(-1).texto, 'Preparei o envio. Confirma?');
+  const antes = (await sim()).filter((r) => r.caminho.includes('/send-text')).length;
+  // "pode mandar" por voz vale como o botão.
+  await ok('POST', `/assistente/sessoes/${s.id}/mensagens`, { texto: 'pode mandar', origem: 'voz' });
+  v = await esperar(s.id, (x) => x.acoes.find((a) => a.id === lote.id).status === 'concluida' && /^Terminei/.test(x.mensagens.at(-1).texto));
+  const feito = v.acoes.find((a) => a.id === lote.id);
+  assert.equal(feito.resultado.enviados, 1);
+  assert.deepEqual(feito.progresso, { feitos: 1, total: 1, falhas: 0 });
+  const envios = (await sim()).filter((r) => r.caminho.includes('/send-text'));
+  assert.equal(envios.length, antes + 1);
+  assert.match(envios.at(-1).corpo.message, /Oi, Zuleica!/);
+  assert.equal((await chamar('POST', `/assistente/acoes/${lote.id}/confirmar`)).status, 409, 'confirmar de novo não envia duas vezes');
+  // Conversa sobre resultados.
+  await ok('POST', `/assistente/sessoes/${s.id}/mensagens`, { texto: 'como foi o mês?' });
+  v = await esperar(s.id, (x) => !x.ocupada);
+  assert.match(v.mensagens.at(-1).texto, /^No período vendemos R\$/);
+  // Ferramenta que não existe (ou sem permissão) volta como erro para a IA, sem quebrar.
+  await ok('POST', `/assistente/sessoes/${s.id}/mensagens`, { texto: 'use a ferramenta inexistente' });
+  v = await esperar(s.id, (x) => !x.ocupada);
+  assert.match(v.mensagens.at(-1).texto, /^Resultado: erro .*não está disponível/);
+  // Cancelar pelo botão.
+  await ok('POST', `/assistente/sessoes/${s.id}/mensagens`, { texto: 'manda whatsapp pros inadimplentes Zuleica' });
+  v = await esperar(s.id, (x) => !x.ocupada);
+  const outro = v.acoes.filter((a) => a.ferramenta === 'enviar_whatsapp_em_lote').at(-1);
+  assert.equal(outro.status, 'aguardando');
+  await ok('POST', `/assistente/acoes/${outro.id}/cancelar`);
+  v = await ok('GET', `/assistente/sessoes/${s.id}`);
+  assert.equal(v.acoes.find((a) => a.id === outro.id).status, 'cancelada');
+  // A conversa é só de quem abriu; quem não tem o módulo nem entra.
+  // O grupo Financeiro não tem o módulo Assistente: não entra.
+  const salvo = token;
+  token = ctx.finToken;
+  assert.equal((await chamar('GET', '/assistente/sessoes')).status, 403);
+  assert.equal((await chamar('GET', `/assistente/sessoes/${s.id}`)).status, 403);
+  token = salvo;
+  // Configuração: nome do assistente.
+  await ok('PUT', '/assistente/config', { nome: 'Cláudio', instrucoes: 'Seja direto.' });
+  assert.equal((await ok('GET', '/assistente/estado')).nome, 'Cláudio');
+});
+
 test('implantação: apagar dados de teste exige APAGAR e mantém o que é configuração', async () => {
   assert.equal((await chamar('POST', '/implantacao/apagar-dados-de-teste', { confirmacao: 'apagar' })).status, 400);
   const bloq = await chamar('POST', '/implantacao/apagar-dados-de-teste', { confirmacao: 'APAGAR', manterProdutos: true });

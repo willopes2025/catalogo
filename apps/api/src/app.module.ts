@@ -82,6 +82,9 @@ import { DistribuicaoController } from './crm/distribuicao.controller';
 import { ArquivosController } from './arquivos/arquivos.controller';
 import { ArquivosService } from './arquivos/arquivos.service';
 import { JueriService } from './jueri/jueri.service';
+import { AssistenteController } from './assistente/assistente.controller';
+import { AssistenteService } from './assistente/assistente.service';
+import { FerramentasAssistente } from './assistente/ferramentas';
 
 const segredo = process.env.JWT_SECRET;
 if (!segredo || (process.env.NODE_ENV === 'production' && segredo.length < 32)) {
@@ -134,6 +137,7 @@ if (!segredo || (process.env.NODE_ENV === 'production' && segredo.length < 32)) 
     MetaController,
     IaController,
     CobrancaController,
+    AssistenteController,
   ],
   providers: [
     SegredosService,
@@ -171,6 +175,8 @@ if (!segredo || (process.env.NODE_ENV === 'production' && segredo.length < 32)) 
     CobrancaConfigService,
     CobrancaService,
     CraService,
+    FerramentasAssistente,
+    AssistenteService,
     ConsultasController,
     { provide: APP_GUARD, useClass: AuthGuard },
     { provide: APP_FILTER, useClass: ErrosFilter },

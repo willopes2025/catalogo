@@ -225,6 +225,13 @@
       "when": 1795034415631,
       "tag": "0031_multiagentes",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1795296374039,
+      "tag": "0032_assistente",
+      "breakpoints": true
     }
   ]
 }

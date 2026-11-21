@@ -52,6 +52,7 @@ import { Marketing } from './paginas/Marketing';
 import { Cadastro } from './paginas/Cadastro';
 import { Cobranca } from './paginas/cobranca/Cobranca';
 import { Devedor } from './paginas/cobranca/Devedor';
+import { Assistente } from './paginas/Assistente';
 
 const cliente = new QueryClient({ defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: false, staleTime: 15_000 } } });
 
@@ -85,6 +86,7 @@ ReactDOM.createRoot(document.getElementById('raiz')!).render(
             }
           >
             <Route index element={pode('inicio', 'ver') ? <Inicio /> : <Navigate to={pode('cobranca', 'ver') ? '/cobranca' : '/meu-ponto'} replace />} />
+            <Route path="assistente" element={<Assistente />} />
             <Route path="meu-ponto" element={<MeuPonto />} />
             <Route path="agenda" element={<Agenda />} />
             <Route path="rh" element={<Rh />} />

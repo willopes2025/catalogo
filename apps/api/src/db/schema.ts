@@ -1940,3 +1940,96 @@ export const iaAgentes = pgTable('ia_agentes', {
   criadoEm: criadoEm(),
   atualizadoEm: timestamp('atualizado_em', { withTimezone: true }).notNull().defaultNow(),
 });
+
+// ───────────────────────── Assistente (orquestrador) ─────────────────────────
+
+/**
+ * Conversa de alguém da equipe com o assistente do sistema (por texto ou voz).
+ * O assistente consulta, executa ações com as permissões de quem pediu e registra pedidos de configuração/desenvolvimento.
+ */
+export const assistenteSessoes = pgTable(
+  'assistente_sessoes',
+  {
+    id: id(),
+    usuarioId: uuid('usuario_id')
+      .notNull()
+      .references(() => usuarios.id, { onDelete: 'cascade' }),
+    titulo: text('titulo').notNull().default('Nova conversa'),
+    /** O assistente está trabalhando nesta conversa agora (a tela acompanha). */
+    ocupada: boolean('ocupada').notNull().default(false),
+    criadoEm: criadoEm(),
+    atualizadoEm: atualizadoEm(),
+  },
+  (t) => ({ porUsuario: index('assistente_sessoes_usuario_idx').on(t.usuarioId, t.atualizadoEm) }),
+);
+
+/** Mensagens no formato da API do Claude (texto, uso de ferramenta e resultado), para retomar a conversa. */
+export const assistenteMensagens = pgTable(
+  'assistente_mensagens',
+  {
+    id: id(),
+    sessaoId: uuid('sessao_id')
+      .notNull()
+      .references(() => assistenteSessoes.id, { onDelete: 'cascade' }),
+    /** user | assistant */
+    papel: text('papel').notNull(),
+    conteudo: jsonb('conteudo').$type<unknown[]>().notNull(),
+    /** O que aparece na tela (vazio quando a mensagem é só uso/resultado de ferramenta). */
+    texto: text('texto'),
+    /** texto | voz | sistema */
+    origem: text('origem'),
+    criadoEm: criadoEm(),
+  },
+  (t) => ({ porSessao: index('assistente_mensagens_sessao_idx').on(t.sessaoId, t.criadoEm) }),
+);
+
+/** Cada ferramenta que o assistente usou: consulta, ação direta ou ação que espera a confirmação de quem pediu. */
+export const assistenteAcoes = pgTable(
+  'assistente_acoes',
+  {
+    id: id(),
+    sessaoId: uuid('sessao_id')
+      .notNull()
+      .references(() => assistenteSessoes.id, { onDelete: 'cascade' }),
+    usuarioId: uuid('usuario_id').references(() => usuarios.id, { onDelete: 'set null' }),
+    ferramenta: text('ferramenta').notNull(),
+    entrada: jsonb('entrada').notNull(),
+    /** leitura | acao | confirmar */
+    risco: text('risco').notNull(),
+    /** concluida | aguardando | executando | cancelada | erro */
+    status: text('status').notNull(),
+    /** Frase do que vai ser feito (mostrada no cartão de confirmação). */
+    resumo: text('resumo'),
+    /** Lista do que vai acontecer (ex.: cada mensagem do envio em lote). */
+    previa: jsonb('previa'),
+    resultado: jsonb('resultado'),
+    erro: text('erro'),
+    progresso: jsonb('progresso').$type<{ feitos: number; total: number; falhas: number }>(),
+    criadoEm: criadoEm(),
+    concluidaEm: timestamp('concluida_em', { withTimezone: true }),
+  },
+  (t) => ({ porSessao: index('assistente_acoes_sessao_idx').on(t.sessaoId, t.criadoEm) }),
+);
+
+/**
+ * Necessidade que o assistente não resolve com o que já existe: vira um pedido com especificação e plano.
+ * "configurar" = dá para montar com as configurações do sistema; "desenvolver" = precisa de código novo (vai para a Wide).
+ */
+export const assistentePedidos = pgTable('assistente_pedidos', {
+  id: id(),
+  numero: serial('numero').notNull(),
+  sessaoId: uuid('sessao_id').references(() => assistenteSessoes.id, { onDelete: 'set null' }),
+  usuarioId: uuid('usuario_id').references(() => usuarios.id, { onDelete: 'set null' }),
+  /** configurar | desenvolver */
+  tipo: text('tipo').notNull(),
+  titulo: text('titulo').notNull(),
+  especificacao: text('especificacao').notNull(),
+  plano: jsonb('plano').$type<string[]>().notNull().default([]),
+  modulo: text('modulo'),
+  prioridade: text('prioridade').notNull().default('normal'),
+  /** novo | em_analise | em_andamento | pronto | recusado */
+  status: text('status').notNull().default('novo'),
+  chamadoId: uuid('chamado_id').references(() => chamados.id, { onDelete: 'set null' }),
+  criadoEm: criadoEm(),
+  atualizadoEm: atualizadoEm(),
+});

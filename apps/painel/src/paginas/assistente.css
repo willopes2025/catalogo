@@ -1,0 +1,47 @@
+/* Assistente: conversa por texto e voz, cartões de ação e pedidos */
+.assistente { display: grid; grid-template-columns: 260px 1fr; gap: 16px; align-items: start; margin-top: 14px; }
+.assistente-lista { display: flex; flex-direction: column; gap: 6px; position: sticky; top: 12px; max-height: calc(100vh - 160px); overflow: auto; }
+.assistente-item { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; text-align: left; background: var(--papel); border: 1px solid var(--linha); border-radius: 8px; padding: 8px 10px; font: inherit; cursor: pointer; color: var(--tinta); }
+.assistente-item span { font-size: 14px; line-height: 1.25; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.assistente-item.ativo { border-color: var(--dourado); background: var(--creme-2); }
+.assistente-chat { display: flex; flex-direction: column; height: calc(100vh - 170px); min-height: 460px; padding: 0; overflow: hidden; }
+.assistente-topo { display: flex; align-items: center; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--linha); }
+.assistente-topo .espaco { flex: 1; }
+.assistente-ouvir { display: flex; align-items: center; gap: 6px; font-size: 14px; cursor: pointer; white-space: nowrap; }
+.assistente-mensagens { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 10px; }
+.assistente .fala { max-width: 78%; padding: 10px 14px; border-radius: 14px; white-space: pre-wrap; line-height: 1.45; font-size: 15px; position: relative; }
+.assistente .fala.minha { align-self: flex-end; background: var(--marrom); color: #faf6ef; border-bottom-right-radius: 4px; }
+.assistente .fala.dele { align-self: flex-start; background: var(--creme-2); border-bottom-left-radius: 4px; }
+.assistente-falar { border: 0; background: none; cursor: pointer; margin-left: 6px; font-size: 13px; opacity: 0.55; }
+.assistente-falar:hover { opacity: 1; }
+.assistente-passo { align-self: flex-start; font-size: 13px; color: var(--suave); }
+.assistente-passo.erro { color: var(--erro); }
+.assistente .link { border: 0; background: none; padding: 0; font: inherit; color: var(--dourado-t); cursor: pointer; }
+.assistente .link:hover { text-decoration: underline; }
+.assistente-json { background: var(--papel); border: 1px solid var(--linha); border-radius: 8px; padding: 8px; max-height: 260px; overflow: auto; font-size: 12px; white-space: pre-wrap; }
+.assistente-acao { align-self: stretch; border-left: 4px solid var(--alerta); padding: 12px 16px; }
+.assistente-acao.concluida { border-left-color: var(--ok); }
+.assistente-acao.erro { border-left-color: var(--erro); }
+.assistente-acao.cancelada { border-left-color: var(--linha); opacity: 0.75; }
+.assistente-acao p { margin: 8px 0; }
+.assistente-acao-topo { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.assistente-previa { margin-top: 8px; max-height: 280px; overflow: auto; display: flex; flex-direction: column; gap: 8px; border-top: 1px solid var(--linha); padding-top: 8px; font-size: 14px; }
+.assistente-previa .com-problema { opacity: 0.7; }
+.assistente-texto { white-space: pre-wrap; color: var(--suave); }
+.assistente .erro-texto { color: var(--erro); font-size: 14px; }
+.assistente .acoes-linha { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 8px; }
+.assistente-progresso { margin: 8px 0; }
+.assistente-progresso .barra { height: 8px; background: var(--creme-2); border-radius: 99px; overflow: hidden; }
+.assistente-progresso .barra div { height: 100%; background: var(--ok); transition: width 0.4s; }
+.assistente-entrada { display: flex; gap: 8px; align-items: flex-end; padding: 12px 16px; border-top: 1px solid var(--linha); background: var(--papel); }
+.assistente-entrada textarea { flex: 1; resize: none; font: inherit; padding: 9px 12px; border: 1px solid var(--linha); border-radius: 8px; }
+.assistente-mic { display: flex; flex-direction: column; gap: 4px; }
+.assistente .botao.gravando { background: var(--erro); border-color: var(--erro); animation: assistente-pulso 1.2s infinite; }
+@keyframes assistente-pulso { 50% { opacity: 0.7; } }
+.assistente-sugestoes { display: flex; flex-wrap: wrap; gap: 8px; margin: auto 0; justify-content: center; }
+.assistente-sugestoes .botao { white-space: normal; text-align: left; }
+@media (max-width: 860px) {
+  .assistente { grid-template-columns: 1fr; }
+  .assistente-lista { position: static; max-height: 180px; }
+  .assistente .fala { max-width: 92%; }
+}
