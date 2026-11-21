@@ -1,4 +1,5 @@
-import { BadRequestException, Body, Controller, Delete, Get, Param, ParseUUIDPipe, Patch, Post, Put, Query } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Delete, Get, Param, ParseUUIDPipe, Patch, Post, Put, Query, Res } from '@nestjs/common';
+import type { Response } from 'express';
 import { and, desc, eq } from 'drizzle-orm';
 import { Inject } from '@nestjs/common';
 import { z } from 'zod';
@@ -7,7 +8,7 @@ import { Permissao, Usuario, temPermissao, type UsuarioLogado } from '../comum/a
 import { validar } from '../comum/validacao';
 import { assistentePedidos, chamados, usuarios } from '../db/schema';
 import { ErroIa, IaService } from '../ia/ia.service';
-import { AssistenteService } from './assistente.service';
+import { AssistenteService, VOZES_ELEVENLABS, VOZES_OPENAI } from './assistente.service';
 import { FerramentasAssistente } from './ferramentas';
 
 const EXTENSOES: Record<string, string> = { 'audio/webm': 'webm', 'audio/ogg': 'ogg', 'audio/mp4': 'm4a', 'audio/mpeg': 'mp3', 'audio/wav': 'wav', 'audio/x-m4a': 'm4a', 'audio/aac': 'm4a' };
@@ -31,6 +32,7 @@ export class AssistenteController {
       ligado: this.ia.texto,
       voz: this.ia.imagem,
       nome: cfg.nome,
+      vozResposta: await this.assistente.provedorVoz(cfg),
       ferramentas: this.ferramentas.lista.filter((f) => f.permitido(u)).map((f) => ({ nome: f.nome, risco: f.risco })),
       podeConfigurar: temPermissao(u.permissoes, 'configuracoes', 'editar'),
     };
@@ -38,14 +40,23 @@ export class AssistenteController {
 
   @Get('config')
   @Permissao('configuracoes', 'ver')
-  config() {
-    return this.assistente.config();
+  async config() {
+    return { ...(await this.assistente.config()), opcoes: { elevenlabs: VOZES_ELEVENLABS, openai: VOZES_OPENAI }, chaves: { elevenlabs: this.ia.temElevenlabs, openai: this.ia.imagem } };
   }
 
   @Put('config')
   @Permissao('configuracoes', 'editar')
   salvarConfig(@Body() body: unknown) {
-    const d = validar(z.object({ nome: z.string().trim().min(2, 'Dê um nome ao assistente').max(40), instrucoes: z.string().max(6000).default('') }), body);
+    const d = validar(
+      z.object({
+        nome: z.string().trim().min(2, 'Dê um nome ao assistente').max(40),
+        instrucoes: z.string().max(6000).default(''),
+        voz: z.enum(['automatica', 'elevenlabs', 'openai', 'navegador']).default('automatica'),
+        vozElevenlabs: z.string().trim().regex(/^[A-Za-z0-9]{10,40}$/, 'Id de voz da ElevenLabs inválido').default(VOZES_ELEVENLABS[0].id),
+        vozOpenai: z.enum(VOZES_OPENAI.map((v) => v.id) as [string, ...string[]]).default('ash'),
+      }),
+      body,
+    );
     return this.assistente.salvarConfig(d);
   }
 
@@ -93,6 +104,17 @@ export class AssistenteController {
       if (e instanceof ErroIa) throw new BadRequestException(e.message);
       throw e;
     }
+  }
+
+  /** Resposta falada (MP3), na voz configurada. Com "provedor" e "voz", toca um exemplo antes de salvar. */
+  @Post('falar')
+  @Permissao('assistente', 'ver')
+  async falar(@Usuario() u: UsuarioLogado, @Body() body: unknown, @Res() res: Response) {
+    const d = validar(z.object({ texto: z.string().trim().min(1).max(6000), provedor: z.enum(['elevenlabs', 'openai']).optional(), voz: z.string().trim().max(40).optional() }), body);
+    const audio = await this.assistente.falar(u, d.texto, d.provedor && d.voz ? { provedor: d.provedor, voz: d.voz } : undefined);
+    res.setHeader('content-type', 'audio/mpeg');
+    res.setHeader('cache-control', 'private, max-age=600');
+    res.send(audio);
   }
 
   @Post('acoes/:id/confirmar')

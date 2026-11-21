@@ -24,7 +24,7 @@ export const INTEGRACOES: Integracao[] = [
   {
     chave: 'ia',
     nome: 'Inteligência artificial',
-    descricao: 'Claude (Anthropic): agente que atende no WhatsApp, sugestão de resposta, montar maleta e reconhecer a peça pela foto. OpenAI: gerar a foto de catálogo do produto e transcrever os áudios do chat. Cada uma funciona sozinha; sem a chave, o recurso fica desligado.',
+    descricao: 'Claude (Anthropic): agente que atende no WhatsApp, sugestão de resposta, montar maleta e reconhecer a peça pela foto. OpenAI: gerar a foto de catálogo do produto, transcrever os áudios do chat e a voz do Assistente. ElevenLabs (opcional): voz mais natural para o Assistente. Cada uma funciona sozinha; sem a chave, o recurso fica desligado.',
     ondeConseguir: 'Claude: console.anthropic.com › API keys (precisa de créditos na conta). OpenAI: platform.openai.com › API keys (também com créditos; para gerar imagem a OpenAI pede a verificação da organização). O uso é cobrado por elas, conforme o consumo; o sistema mostra quantas chamadas foram feitas no mês.',
     campos: [
       { nome: 'ANTHROPIC_API_KEY', rotulo: 'Chave do Claude (Anthropic)', secreto: true, ajuda: 'Começa com sk-ant-' },
@@ -34,6 +34,8 @@ export const INTEGRACOES: Integracao[] = [
       { nome: 'IA_MODELO_IMAGEM', rotulo: 'Modelo de imagem da OpenAI', ajuda: 'Deixe em branco para usar o padrão da OpenAI.' },
       { nome: 'IA_TRANSCREVER_AUTO', rotulo: 'Áudios recebidos no chat', opcoes: [['sim', 'Transcrever sozinho todo áudio que chegar'], ['nao', 'Só quando clicar em "Transcrever"']] },
       { nome: 'IA_MODELO_TRANSCRICAO', rotulo: 'Modelo de transcrição da OpenAI', ajuda: 'Deixe em branco para usar o padrão (gpt-4o-mini-transcribe). Mais preciso e mais caro: gpt-4o-transcribe.' },
+      { nome: 'ELEVENLABS_API_KEY', rotulo: 'Chave da ElevenLabs (voz do assistente)', secreto: true, ajuda: 'Voz mais natural para o Assistente falar. Sem ela, a voz vem da OpenAI. elevenlabs.io › Developers › API keys.' },
+      { nome: 'IA_MODELO_VOZ', rotulo: 'Modelo de voz da ElevenLabs', ajuda: 'Em branco: eleven_multilingual_v2 (mais natural). Mais rápido e barato: eleven_flash_v2_5.' },
     ],
   },
   {

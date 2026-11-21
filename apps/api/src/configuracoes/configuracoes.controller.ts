@@ -7,7 +7,7 @@ import { AuditoriaService } from '../comum/auditoria.service';
 import { ConfiguracoesService } from './configuracoes.service';
 
 const pb = z.number().int().min(0).max(10000);
-const regrasSchema = z.object({
+export const regrasSchema = z.object({
   prazoAcertoDias: z.number().int().min(1).max(120),
   comissaoAvistaPb: pb,
   comissaoPrazoPb: pb,

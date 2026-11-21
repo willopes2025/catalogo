@@ -11,8 +11,32 @@ export interface ConfigAssistente {
   nome: string;
   /** Orientações da empresa (tom, prioridades, o que nunca fazer). */
   instrucoes: string;
+  /** Quem fala as respostas: automática = ElevenLabs se tiver a chave, senão OpenAI, senão o navegador. */
+  voz: 'automatica' | 'elevenlabs' | 'openai' | 'navegador';
+  /** Id da voz na ElevenLabs. */
+  vozElevenlabs: string;
+  /** Voz da OpenAI. */
+  vozOpenai: string;
 }
-const PADRAO: ConfigAssistente = { nome: 'Assistente', instrucoes: '' };
+
+/** Vozes brasileiras da biblioteca da ElevenLabs boas para conversa (dá para colar outro id na tela). */
+export const VOZES_ELEVENLABS: { id: string; nome: string }[] = [
+  { id: 'ec54d9BmuMSN4IinPrjv', nome: 'Will · masculina, jovem, conversa natural' },
+  { id: '4J31DrhygVjvFsoj7BsM', nome: 'Eduardo · masculina, adulta, clara e profissional' },
+  { id: 'lvkgCBi6spByiTZMPJEK', nome: 'Gabriel · masculina, calma e simpática' },
+  { id: 'KHmfNHtEjHhLK9eER20w', nome: 'Fernanda · feminina, adulta, natural e acolhedora' },
+  { id: 'GDzHdQOi6jjf8zaXhCYD', nome: 'Raquel · feminina, jovem, simpática' },
+  { id: 'RGymW84CSmfVugnA5tvA', nome: 'Roberta · feminina, jovem, descontraída' },
+];
+export const VOZES_OPENAI: { id: string; nome: string }[] = [
+  { id: 'ash', nome: 'Ash · masculina, firme' },
+  { id: 'onyx', nome: 'Onyx · masculina, grave' },
+  { id: 'echo', nome: 'Echo · masculina, leve' },
+  { id: 'coral', nome: 'Coral · feminina, calorosa' },
+  { id: 'nova', nome: 'Nova · feminina, animada' },
+  { id: 'shimmer', nome: 'Shimmer · feminina, suave' },
+];
+const PADRAO: ConfigAssistente = { nome: 'Assistente', instrucoes: '', voz: 'automatica', vozElevenlabs: VOZES_ELEVENLABS[0].id, vozOpenai: 'ash' };
 const CHAVE = 'assistente';
 /** Rodadas de ferramenta por pedido (evita o assistente entrar em loop). */
 const MAX_RODADAS = 10;
@@ -51,6 +75,42 @@ export class AssistenteService implements OnModuleInit {
   async salvarConfig(d: ConfigAssistente) {
     await this.db.insert(configuracoes).values({ chave: CHAVE, valor: d }).onConflictDoUpdate({ target: configuracoes.chave, set: { valor: d, atualizadoEm: new Date() } });
     return d;
+  }
+
+  // ───────────── Voz ─────────────
+
+  /** Quem vai falar, conforme a configuração e as chaves que existem. */
+  async provedorVoz(cfg?: ConfigAssistente): Promise<'elevenlabs' | 'openai' | 'navegador'> {
+    const c = cfg ?? (await this.config());
+    if (c.voz === 'navegador') return 'navegador';
+    if (c.voz === 'elevenlabs' && this.ia.temElevenlabs) return 'elevenlabs';
+    if (c.voz === 'openai' && this.ia.imagem) return 'openai';
+    return this.ia.vozDisponivel ?? 'navegador';
+  }
+
+  /** Últimas falas geradas (ouvir de novo não paga de novo). */
+  private readonly falas = new Map<string, Buffer>();
+
+  /** Resposta em áudio (MP3). Tira o que não se fala: links, marcadores e símbolos. */
+  async falar(u: UsuarioLogado, texto: string, teste?: { provedor: 'elevenlabs' | 'openai'; voz: string }) {
+    const cfg = await this.config();
+    const provedor = teste?.provedor ?? (await this.provedorVoz(cfg));
+    if (provedor === 'navegador') throw new BadRequestException('Nenhuma voz configurada: cole a chave da ElevenLabs ou da OpenAI em Configurações › Integrações.');
+    const voz = teste?.voz ?? (provedor === 'elevenlabs' ? cfg.vozElevenlabs : cfg.vozOpenai);
+    const limpo = paraFala(texto);
+    if (!limpo) throw new BadRequestException('Nada para falar.');
+    const chave = `${provedor}|${voz}|${limpo}`;
+    const guardada = this.falas.get(chave);
+    if (guardada) return guardada;
+    try {
+      const audio = await this.ia.falar({ texto: limpo, provedor, voz, usuarioId: u.id });
+      this.falas.set(chave, audio);
+      if (this.falas.size > 40) this.falas.delete(this.falas.keys().next().value!);
+      return audio;
+    } catch (e) {
+      if (e instanceof ErroIa) throw new BadRequestException(e.message);
+      throw e;
+    }
   }
 
   // ───────────── Conversas ─────────────
@@ -148,7 +208,7 @@ export class AssistenteService implements OnModuleInit {
         '- Mensagens para clientes e revendedoras: cordiais, sem ameaça nem constrangimento, com o nome da empresa. Em cobrança no envio em lote, use {primeiro_nome}, {valor_atualizado} e {maior_atraso}; ofereça a 2ª via ou o Pix.',
         '- Não mostre CPF completo nem dados sensíveis sem necessidade (LGPD).',
         '- A pessoa pode estar falando por voz: o texto pode vir transcrito com pequenos erros; entenda pelo sentido.',
-        '- Ainda não existe ferramenta para criar automações, relatórios ou telas direto no sistema: isso vira pedido (registrar_pedido).',
+        '- Regras do consignado e da cobrança (multa, juros, carência, comissões, limites, descontos) você consulta com ver_regras e altera com alterar_regras. Outras configurações, automações, relatórios ou telas ainda não têm ferramenta: isso vira pedido (registrar_pedido).',
       ].join('\n'),
       cfg.instrucoes.trim() ? `ORIENTAÇÕES DA EMPRESA:\n${cfg.instrucoes.trim()}` : '',
     ]
@@ -279,6 +339,19 @@ export class AssistenteService implements OnModuleInit {
     await this.gravar(a.sessaoId, 'assistant', [{ type: 'text', text: 'Cancelado, não fiz nada. Quer mudar alguma coisa?' }]);
     return { ok: true };
   }
+}
+
+/** Texto bom para ouvir: sem links, marcadores, símbolos de formatação e com "R$" lido certo. */
+export function paraFala(texto: string) {
+  return texto
+    .replace(/https?:\/\/\S+/g, 'o link')
+    .replace(/^\s*[-•*]\s+/gm, '')
+    .replace(/[*_#`>|]/g, '')
+    .replace(/\n{2,}/g, '. ')
+    .replace(/\n/g, ', ')
+    .replace(/\s{2,}/g, ' ')
+    .trim()
+    .slice(0, 2500);
 }
 
 function mensagemDeErro(e: unknown) {

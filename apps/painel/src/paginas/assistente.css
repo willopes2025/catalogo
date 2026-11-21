@@ -1,7 +1,7 @@
 /* Assistente: conversa por texto e voz, cartões de ação e pedidos */
 .assistente { display: grid; grid-template-columns: 260px 1fr; gap: 16px; align-items: start; margin-top: 14px; }
 .assistente-lista { display: flex; flex-direction: column; gap: 6px; position: sticky; top: 12px; max-height: calc(100vh - 160px); overflow: auto; }
-.assistente-item { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; text-align: left; background: var(--papel); border: 1px solid var(--linha); border-radius: 8px; padding: 8px 10px; font: inherit; cursor: pointer; color: var(--tinta); }
+.assistente-item { position: relative; padding-right: 34px !important; display: flex; flex-direction: column; align-items: flex-start; gap: 2px; text-align: left; background: var(--papel); border: 1px solid var(--linha); border-radius: 8px; padding: 8px 10px; font: inherit; cursor: pointer; color: var(--tinta); }
 .assistente-item span { font-size: 14px; line-height: 1.25; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 .assistente-item.ativo { border-color: var(--dourado); background: var(--creme-2); }
 .assistente-chat { display: flex; flex-direction: column; height: calc(100vh - 170px); min-height: 460px; padding: 0; overflow: hidden; }
@@ -29,7 +29,7 @@
 .assistente-previa .com-problema { opacity: 0.7; }
 .assistente-texto { white-space: pre-wrap; color: var(--suave); }
 .assistente .erro-texto { color: var(--erro); font-size: 14px; }
-.assistente .acoes-linha { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 8px; }
+.acoes-linha { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 8px; }
 .assistente-progresso { margin: 8px 0; }
 .assistente-progresso .barra { height: 8px; background: var(--creme-2); border-radius: 99px; overflow: hidden; }
 .assistente-progresso .barra div { height: 100%; background: var(--ok); transition: width 0.4s; }
@@ -45,3 +45,8 @@
   .assistente-lista { position: static; max-height: 180px; }
   .assistente .fala { max-width: 92%; }
 }
+
+.assistente-excluir { position: absolute; top: 6px; right: 6px; border: 0; background: none; cursor: pointer; font-size: 14px; opacity: 0; padding: 4px; border-radius: 6px; }
+.assistente-item:hover .assistente-excluir, .assistente-item.ativo .assistente-excluir, .assistente-excluir:focus { opacity: 0.7; }
+.assistente-excluir:hover { opacity: 1 !important; background: var(--erro-fundo); }
+@media (hover: none) { .assistente-excluir { opacity: 0.6; } }

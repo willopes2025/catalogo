@@ -292,6 +292,18 @@ http
       if (r === 'disconnect') { wa.zapiConectado = false; return responder(res, 200, { value: true }); }
       return responder(res, 404, { error: 'not found' });
     }
+    // ── Voz do assistente: ElevenLabs e OpenAI devolvem um "MP3" ──
+    const mp3 = Buffer.from('ID3fake-mp3-audio');
+    if (url.pathname.startsWith('/elevenlabs/v1/text-to-speech/')) {
+      if (req.headers['xi-api-key'] !== 'chave-eleven-teste') return responder(res, 401, { detail: { status: 'invalid_api_key', message: 'Invalid API key' } });
+      if (url.pathname.endsWith('/naoexiste12345')) return responder(res, 404, { detail: { status: 'voice_not_found', message: 'A voice with the voice_id was not found.' } });
+      res.writeHead(200, { 'content-type': 'audio/mpeg' });
+      return res.end(mp3);
+    }
+    if (url.pathname === '/openai/v1/audio/speech') {
+      res.writeHead(200, { 'content-type': 'audio/mpeg' });
+      return res.end(mp3);
+    }
     // ── IA: Claude (texto e leitura de imagem) e OpenAI (gerar imagem) ──
     if (url.pathname === '/claude/v1/messages') {
       if (req.headers['x-api-key'] !== 'chave-claude-teste') return responder(res, 401, { type: 'error', error: { type: 'authentication_error', message: 'invalid x-api-key' } });
@@ -335,6 +347,8 @@ http
           const h = new Date(Date.now() - 3 * 3600_000).toISOString().slice(0, 10);
           return resp([{ type: 'tool_use', id: `tu_${++wa.n}`, name: 'resumo_negocio', input: { de: `${h.slice(0, 8)}01`, ate: h } }], 'tool_use');
         }
+        const multa = /multa da cobran[cç]a para (\d+)/i.exec(fala)?.[1];
+        if (multa) return resp([{ type: 'tool_use', id: `tu_${++wa.n}`, name: 'alterar_regras', input: { area: 'cobranca', mudancas: { multa: Number(multa) } } }], 'tool_use');
         if (/ferramenta inexistente/i.test(fala)) return resp([{ type: 'tool_use', id: `tu_${++wa.n}`, name: 'apagar_tudo', input: {} }], 'tool_use');
         if (/a pessoa confirmou/.test(fala)) return resp([{ type: 'text', text: 'Feito!' }]);
         return resp([{ type: 'text', text: `Oi! Tenho ${(corpo.tools ?? []).length} ferramentas.` }]);
