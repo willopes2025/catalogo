@@ -50,3 +50,6 @@
 .assistente-item:hover .assistente-excluir, .assistente-item.ativo .assistente-excluir, .assistente-excluir:focus { opacity: 0.7; }
 .assistente-excluir:hover { opacity: 1 !important; background: var(--erro-fundo); }
 @media (hover: none) { .assistente-excluir { opacity: 0.6; } }
+
+.assistente-rotina.pausada { opacity: 0.7; }
+.link-texto { border: 0; background: none; padding: 0; font: inherit; color: var(--dourado-t); cursor: pointer; text-decoration: underline; }

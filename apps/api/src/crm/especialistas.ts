@@ -1,3 +1,16 @@
+import type { Db } from '../comum/db.module';
+import { iaAgentes } from '../db/schema';
+
+/** Cópia de um especialista: nasce desligada, com chave "<chave>_copia" (ou _copia2…) e nome "(cópia)", se não vierem outros. */
+export async function duplicarEspecialista(db: Db, o: typeof iaAgentes.$inferSelect, novo: { funcao?: string; nome?: string } = {}) {
+  const existentes = new Set((await db.select({ f: iaAgentes.funcao }).from(iaAgentes)).map((x) => x.f));
+  let funcao = novo.funcao ?? `${o.funcao}_copia`.slice(0, 30);
+  if (novo.funcao && existentes.has(funcao)) throw new Error(`Já existe um especialista com a chave "${funcao}".`);
+  for (let n = 2; existentes.has(funcao); n++) funcao = `${o.funcao.slice(0, 22)}_copia${n}`;
+  const [a] = await db.insert(iaAgentes).values({ funcao, nome: (novo.nome ?? `${o.nome} (cópia)`).slice(0, 60), quando: o.quando, instrucoes: o.instrucoes, conhecimento: o.conhecimento, ativo: false, ordem: o.ordem + 1 }).returning();
+  return a;
+}
+
 /** Especialistas sugeridos para começar (a equipe edita, desliga ou cria outros). */
 export const ESPECIALISTAS_SUGERIDOS = [
   {

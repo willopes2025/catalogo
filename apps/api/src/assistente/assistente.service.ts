@@ -1,10 +1,11 @@
-import { BadRequestException, ConflictException, Inject, Injectable, Logger, NotFoundException, OnModuleInit } from '@nestjs/common';
-import { and, asc, desc, eq, inArray } from 'drizzle-orm';
+import { BadRequestException, ConflictException, Inject, Injectable, Logger, NotFoundException, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import { and, asc, desc, eq, inArray, lte } from 'drizzle-orm';
 import { DB, type Db } from '../comum/db.module';
 import type { UsuarioLogado } from '../comum/auth';
-import { assistenteAcoes, assistenteMensagens, assistenteSessoes, configuracoes, empresas } from '../db/schema';
+import { assistenteAcoes, assistenteMensagens, assistenteRotinas, assistenteSessoes, configuracoes, empresas, grupos, usuarios } from '../db/schema';
 import { ErroIa, IaService, type BlocoFerramenta, type MensagemFerramentas } from '../ia/ia.service';
 import { FerramentasAssistente, type Contexto } from './ferramentas';
+import { descreverAgenda, proximaDaRotina } from './rotinas';
 
 export interface ConfigAssistente {
   /** Nome com que o assistente se apresenta para a equipe. */
@@ -53,8 +54,9 @@ type Acao = typeof assistenteAcoes.$inferSelect;
  * de quem pediu (as que mandam mensagem ou cobram passam por confirmação) e transforma o que ainda não existe em pedido.
  */
 @Injectable()
-export class AssistenteService implements OnModuleInit {
+export class AssistenteService implements OnModuleInit, OnModuleDestroy {
   private readonly log = new Logger('Assistente');
+  private relogio?: NodeJS.Timeout;
 
   constructor(
     @Inject(DB) private readonly db: Db,
@@ -66,6 +68,106 @@ export class AssistenteService implements OnModuleInit {
   async onModuleInit() {
     await this.db.update(assistenteSessoes).set({ ocupada: false }).where(eq(assistenteSessoes.ocupada, true)).catch(() => undefined);
     await this.db.update(assistenteAcoes).set({ status: 'erro', erro: 'O sistema foi reiniciado no meio da execução. Confira o que já foi feito antes de repetir.', concluidaEm: new Date() }).where(eq(assistenteAcoes.status, 'executando')).catch(() => undefined);
+    // Rotinas agendadas: confere a cada minuto o que está na hora.
+    if (process.env.ASSISTENTE_ROTINAS !== '0') {
+      this.relogio = setInterval(() => void this.rodarDevidas().catch((e) => this.log.warn(`Rotinas: ${(e as Error).message}`)), 60_000);
+      this.relogio.unref();
+    }
+  }
+  onModuleDestroy() {
+    if (this.relogio) clearInterval(this.relogio);
+  }
+
+  // ───────────── Rotinas agendadas ─────────────
+
+  /** Roda as rotinas cuja hora chegou. Cada uma é "tomada" antes (a próxima data já é gravada), para não rodar duas vezes. */
+  async rodarDevidas() {
+    const devidas = await this.db.select().from(assistenteRotinas).where(and(eq(assistenteRotinas.ativa, true), lte(assistenteRotinas.proximaEm, new Date())));
+    for (const r of devidas) {
+      const [tomada] = await this.db.update(assistenteRotinas).set({ proximaEm: proximaDaRotina(r) }).where(and(eq(assistenteRotinas.id, r.id), eq(assistenteRotinas.proximaEm, r.proximaEm))).returning();
+      if (tomada && (await this.rodandoAinda(r.ultimaSessaoId))) {
+        await this.db.update(assistenteRotinas).set({ ultimoErro: `Pulei a execução das ${new Date().toLocaleTimeString('pt-BR', { timeZone: 'America/Sao_Paulo', hour: '2-digit', minute: '2-digit' })}: a anterior ainda estava rodando.` }).where(eq(assistenteRotinas.id, r.id));
+        continue;
+      }
+      if (tomada) void this.executarRotina(r.id).catch((e) => this.log.warn(`Rotina ${r.titulo}: ${(e as Error).message}`));
+    }
+  }
+
+  private async rodandoAinda(sessaoId: string | null) {
+    if (!sessaoId) return false;
+    const [s] = await this.db.select({ ocupada: assistenteSessoes.ocupada }).from(assistenteSessoes).where(eq(assistenteSessoes.id, sessaoId));
+    return !!s?.ocupada;
+  }
+
+  /** Quem criou a rotina, com as permissões de agora (se mudaram, a rotina obedece às novas). */
+  private async usuarioAtual(id: string): Promise<(UsuarioLogado & { ativo: boolean }) | null> {
+    const [x] = await this.db.select({ id: usuarios.id, nome: usuarios.nome, email: usuarios.email, ativo: usuarios.ativo, grupo: grupos.nome, permissoes: grupos.permissoes }).from(usuarios).innerJoin(grupos, eq(grupos.id, usuarios.grupoId)).where(eq(usuarios.id, id));
+    return x ? { ...x, permissoes: x.permissoes as Record<string, string[]> } : null;
+  }
+
+  /** Executa uma rotina agora: abre uma conversa só dela e deixa o assistente trabalhar sozinho. */
+  async executarRotina(rotinaId: string) {
+    const [r] = await this.db.select().from(assistenteRotinas).where(eq(assistenteRotinas.id, rotinaId));
+    if (!r) throw new NotFoundException('Rotina não encontrada.');
+    const u = await this.usuarioAtual(r.usuarioId);
+    if (!u?.ativo) {
+      await this.db.update(assistenteRotinas).set({ ativa: false, ultimoErro: 'Pausada: o usuário que criou a rotina foi desativado.' }).where(eq(assistenteRotinas.id, r.id));
+      return null;
+    }
+    if (!u.permissoes['assistente'] && !(u.permissoes['*'] ?? []).length) {
+      await this.db.update(assistenteRotinas).set({ ultimoErro: 'O usuário não tem mais acesso ao Assistente.', ultimaEm: new Date() }).where(eq(assistenteRotinas.id, r.id));
+      return null;
+    }
+    const agora = new Date();
+    const rotulo = agora.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+    const [s] = await this.db.insert(assistenteSessoes).values({ usuarioId: u.id, titulo: `⏰ ${r.titulo} · ${rotulo}`.slice(0, 120), ocupada: true }).returning();
+    await this.db.update(assistenteRotinas).set({ ultimaEm: agora, ultimaSessaoId: s.id, ultimoErro: null }).where(eq(assistenteRotinas.id, r.id));
+    const cabecalho = `[Rotina agendada "${r.titulo}" (${descreverAgenda(r)}), execução automática de ${rotulo}. Ninguém está acompanhando agora: não faça perguntas, faça o que der com as ferramentas e termine com um resumo curto do que foi feito.${r.emails.length ? ` E-mails autorizados para esta rotina: ${r.emails.join(', ')}.` : ''}]`;
+    await this.gravar(s.id, 'user', [{ type: 'text', text: `${cabecalho}\n\n${r.instrucao}` }], 'rotina', `⏰ ${r.instrucao}`);
+    await this.rodar(u, s.id, { id: r.id, emails: r.emails });
+    // Rodou mas a última fala foi de erro da IA: fica anotado na rotina.
+    const [ultima] = await this.db.select({ texto: assistenteMensagens.texto }).from(assistenteMensagens).where(and(eq(assistenteMensagens.sessaoId, s.id), eq(assistenteMensagens.papel, 'assistant'))).orderBy(desc(assistenteMensagens.criadoEm)).limit(1);
+    if (ultima?.texto && /^(A IA |Não consegui terminar|A chave|A conta do Claude)/.test(ultima.texto)) await this.db.update(assistenteRotinas).set({ ultimoErro: ultima.texto.slice(0, 300) }).where(eq(assistenteRotinas.id, r.id));
+    return s.id;
+  }
+
+  async rotinas(u: UsuarioLogado) {
+    const rs = await this.db.select().from(assistenteRotinas).where(eq(assistenteRotinas.usuarioId, u.id)).orderBy(asc(assistenteRotinas.criadoEm));
+    return rs.map((r) => ({ ...r, quando: descreverAgenda(r) }));
+  }
+
+  private async rotinaMinha(u: UsuarioLogado, id: string) {
+    const [r] = await this.db.select().from(assistenteRotinas).where(and(eq(assistenteRotinas.id, id), eq(assistenteRotinas.usuarioId, u.id)));
+    if (!r) throw new NotFoundException('Rotina não encontrada.');
+    return r;
+  }
+
+  async mudarRotina(u: UsuarioLogado, id: string, ativa: boolean) {
+    const r = await this.rotinaMinha(u, id);
+    const [n] = await this.db.update(assistenteRotinas).set({ ativa, ...(ativa ? { proximaEm: proximaDaRotina(r) } : {}) }).where(eq(assistenteRotinas.id, r.id)).returning();
+    return n;
+  }
+
+  /** Cópia da rotina (nasce pausada, para revisar antes de ligar). */
+  async duplicarRotina(u: UsuarioLogado, id: string) {
+    const r = await this.rotinaMinha(u, id);
+    const { id: _id, criadoEm: _c, ultimaEm: _u, ultimaSessaoId: _s, ultimoErro: _e, ...resto } = r;
+    const [c] = await this.db.insert(assistenteRotinas).values({ ...resto, titulo: `${r.titulo} (cópia)`.slice(0, 80), ativa: false, proximaEm: proximaDaRotina(r) }).returning();
+    return c;
+  }
+
+  async excluirRotina(u: UsuarioLogado, id: string) {
+    const r = await this.rotinaMinha(u, id);
+    await this.db.delete(assistenteRotinas).where(eq(assistenteRotinas.id, r.id));
+    return { ok: true };
+  }
+
+  /** "Rodar agora" (para testar a rotina sem esperar o horário). */
+  async rodarAgora(u: UsuarioLogado, id: string) {
+    const r = await this.rotinaMinha(u, id);
+    if (!this.ia.texto) throw new BadRequestException('A inteligência artificial não está ligada.');
+    void this.executarRotina(r.id).catch((e) => this.log.warn(`Rotina ${r.titulo}: ${(e as Error).message}`));
+    return { ok: true };
   }
 
   async config(): Promise<ConfigAssistente> {
@@ -208,7 +310,9 @@ export class AssistenteService implements OnModuleInit {
         '- Mensagens para clientes e revendedoras: cordiais, sem ameaça nem constrangimento, com o nome da empresa. Em cobrança no envio em lote, use {primeiro_nome}, {valor_atualizado} e {maior_atraso}; ofereça a 2ª via ou o Pix.',
         '- Não mostre CPF completo nem dados sensíveis sem necessidade (LGPD).',
         '- A pessoa pode estar falando por voz: o texto pode vir transcrito com pequenos erros; entenda pelo sentido.',
-        '- Regras do consignado e da cobrança (multa, juros, carência, comissões, limites, descontos) você consulta com ver_regras e altera com alterar_regras. Outras configurações, automações, relatórios ou telas ainda não têm ferramenta: isso vira pedido (registrar_pedido).',
+        '- Regras do consignado e da cobrança (multa, juros, carência, comissões, limites, descontos) você consulta com ver_regras e altera com alterar_regras. Outras configurações, relatórios ou telas ainda não têm ferramenta: isso vira pedido (registrar_pedido).',
+        '- AGENTES: há dois tipos. (1) Agentes do WhatsApp, que atendem clientes e revendedoras (recepção + especialistas): veja com ver_agentes_whatsapp e crie, edite ou duplique com alterar_agentes_whatsapp. (2) Agentes agendados, que trabalham sozinhos por horário ou a cada X tempo: são as rotinas (agendar_rotina, gerenciar_rotinas, que também duplica). Se a pessoa pedir "um agente" sem deixar claro, pergunte qual dos dois. Para criar um agente, conduza como uma entrevista curta (uma ou duas perguntas por vez): objetivo, assuntos, tom, o que ele precisa saber, o que nunca deve fazer, quando passar para a equipe; depois escreva tudo, mostre e só então crie.',
+        '- Tarefa que se repete ("todo dia às 8h", "toda segunda"): crie com agendar_rotina (horário fixo ou a cada X minutos/horas, com janela e dias), com uma instrução completa (o que consultar, como montar, para quem enviar) e autorize os e-mails de destino. E-mail você manda com enviar_email; para a lista de inadimplentes, anexe a planilha (anexo: inadimplentes) e coloque no texto o total e o resumo por faixa de atraso que vêm de consultar_inadimplentes. Se a pessoa não disser o e-mail, use o dela: ' + u.email + '.',
       ].join('\n'),
       cfg.instrucoes.trim() ? `ORIENTAÇÕES DA EMPRESA:\n${cfg.instrucoes.trim()}` : '',
     ]
@@ -217,7 +321,7 @@ export class AssistenteService implements OnModuleInit {
   }
 
   /** O laço do agente: o Claude responde, pede ferramentas, recebe os resultados e continua, até terminar. */
-  private async rodar(u: UsuarioLogado, sessaoId: string) {
+  private async rodar(u: UsuarioLogado, sessaoId: string, rotina?: Contexto['rotina']) {
     try {
       const sistema = await this.sistema(u);
       const ferramentas = this.ferramentas.definicoes(u);
@@ -227,7 +331,7 @@ export class AssistenteService implements OnModuleInit {
         const usos = r.content.filter((b): b is Extract<BlocoFerramenta, { type: 'tool_use' }> => b.type === 'tool_use');
         if (!usos.length) return;
         const resultados: BlocoFerramenta[] = [];
-        for (const uso of usos) resultados.push(await this.usar(u, sessaoId, uso));
+        for (const uso of usos) resultados.push(await this.usar(u, sessaoId, uso, rotina));
         await this.gravar(sessaoId, 'user', resultados, 'sistema', null);
       }
       await this.gravar(sessaoId, 'assistant', [{ type: 'text', text: 'Parei aqui para não me perder: foram muitos passos seguidos. Me diga como quer continuar.' }]);
@@ -241,7 +345,7 @@ export class AssistenteService implements OnModuleInit {
   }
 
   /** Executa (ou prepara, se pede confirmação) uma ferramenta e devolve o resultado para o Claude. */
-  private async usar(u: UsuarioLogado, sessaoId: string, uso: { id: string; name: string; input: Record<string, unknown> }): Promise<BlocoFerramenta> {
+  private async usar(u: UsuarioLogado, sessaoId: string, uso: { id: string; name: string; input: Record<string, unknown> }, rotina?: Contexto['rotina']): Promise<BlocoFerramenta> {
     const resposta = (dados: unknown, erro = false): BlocoFerramenta => {
       let texto = typeof dados === 'string' ? dados : JSON.stringify(dados);
       if (texto.length > MAX_RESULTADO) texto = `${texto.slice(0, MAX_RESULTADO)}… [resultado cortado: peça um filtro ou limite menor]`;
@@ -251,17 +355,20 @@ export class AssistenteService implements OnModuleInit {
     if (!f || !f.permitido(u)) return resposta(`A ferramenta "${uso.name}" não está disponível para ${u.nome} (sem permissão).`, true);
     const p = f.schema.safeParse(uso.input);
     if (!p.success) return resposta(`Entrada inválida: ${p.error.issues.map((i) => `${i.path.join('.') || 'entrada'}: ${i.message}`).join('; ')}`, true);
-    const ctx: Contexto = { usuario: u, sessaoId };
-    if (f.risco === 'confirmar') {
+    const ctx: Contexto = { usuario: u, sessaoId, rotina };
+    // Na rotina, e-mail para os endereços autorizados na criação sai sem confirmação (quem criou já autorizou).
+    const autorizado = !!rotina && f.nome === 'enviar_email' && ((p.data as { para: string[] }).para ?? []).every((x) => rotina.emails.map((y) => y.toLowerCase()).includes(x.toLowerCase()));
+    if (f.risco === 'confirmar' && !autorizado) {
       const prep = f.preparar ? await f.preparar(p.data, ctx) : { resumo: `Executar ${f.nome}.` };
       if (prep.impedimento) {
         await this.db.insert(assistenteAcoes).values({ sessaoId, usuarioId: u.id, ferramenta: f.nome, entrada: p.data as object, risco: f.risco, status: 'erro', erro: prep.impedimento, concluidaEm: new Date() });
         return resposta(`Não dá para fazer: ${prep.impedimento}`, true);
       }
       const [a] = await this.db.insert(assistenteAcoes).values({ sessaoId, usuarioId: u.id, ferramenta: f.nome, entrada: p.data as object, risco: f.risco, status: 'aguardando', resumo: prep.resumo, previa: (prep.previa ?? null) as object | null }).returning();
-      return resposta({ situacao: 'aguardando_confirmacao', acaoId: a.id, resumo: prep.resumo, orientacao: 'Ainda NÃO foi feito. Diga em 1 ou 2 frases o que vai acontecer e peça para a pessoa confirmar no botão Confirmar do cartão (ou falar "pode").' });
+      return resposta({ situacao: 'aguardando_confirmacao', acaoId: a.id, resumo: prep.resumo, orientacao: rotina ? 'Ainda NÃO foi feito: ficou esperando a confirmação de quem criou a rotina, na conversa desta execução. Siga com o resto e diga isso no resumo final.' : 'Ainda NÃO foi feito. Diga em 1 ou 2 frases o que vai acontecer e peça para a pessoa confirmar no botão Confirmar do cartão (ou falar "pode").' });
     }
-    const [a] = await this.db.insert(assistenteAcoes).values({ sessaoId, usuarioId: u.id, ferramenta: f.nome, entrada: p.data as object, risco: f.risco, status: 'executando' }).returning();
+    const resumoAutorizado = autorizado && f.preparar ? (await f.preparar(p.data, ctx)).resumo : null;
+    const [a] = await this.db.insert(assistenteAcoes).values({ sessaoId, usuarioId: u.id, ferramenta: f.nome, entrada: p.data as object, risco: f.risco, status: 'executando', resumo: resumoAutorizado ? `${resumoAutorizado} (autorizado na criação da rotina)` : null }).returning();
     try {
       const r = await f.executar(p.data, ctx);
       await this.db.update(assistenteAcoes).set({ status: 'concluida', resultado: (r ?? null) as object | null, concluidaEm: new Date() }).where(eq(assistenteAcoes.id, a.id));

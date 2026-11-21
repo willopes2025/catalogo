@@ -33,7 +33,7 @@ import {
   usuarios,
   iaAgentes,
 } from '../db/schema';
-import { ESPECIALISTAS_SUGERIDOS } from './especialistas';
+import { ESPECIALISTAS_SUGERIDOS, duplicarEspecialista } from './especialistas';
 import { CrmService } from './crm.service';
 import { CanaisService } from './canais.service';
 import { TranscricaoService } from './transcricao.service';
@@ -676,6 +676,17 @@ export class AtendimentoController {
     const [a] = await this.db.update(iaAgentes).set({ ...d, atualizadoEm: new Date() }).where(eq(iaAgentes.id, id)).returning();
     if (!a) throw new NotFoundException('Especialista não encontrado.');
     await this.auditoria.registrar({ usuarioId: u.id, acao: 'editar', entidade: 'ia_agente', entidadeId: id, dados: { funcao: a.funcao, ativo: a.ativo } });
+    return a;
+  }
+
+  /** Cópia do especialista (nasce desligada, com chave e nome novos), para criar outro parecido sem começar do zero. */
+  @Post('crm/ia-agentes/:id/duplicar')
+  @Permissao('configuracoes', 'editar')
+  async duplicarEspecialista(@Usuario() u: UsuarioLogado, @Param('id', ParseUUIDPipe) id: string) {
+    const [o] = await this.db.select().from(iaAgentes).where(eq(iaAgentes.id, id));
+    if (!o) throw new NotFoundException('Especialista não encontrado.');
+    const a = await duplicarEspecialista(this.db, o);
+    await this.auditoria.registrar({ usuarioId: u.id, acao: 'duplicar', entidade: 'ia_agente', entidadeId: a.id, dados: { de: o.funcao, para: a.funcao } });
     return a;
   }
 
