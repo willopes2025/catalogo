@@ -301,6 +301,44 @@ http
       const fotos = corpo.messages.flatMap((m) => blocos(m)).filter((b) => b.type === 'image').length;
       const papeis = corpo.messages.map((m) => m.role).join(',');
       if (/user,user|assistant,assistant/.test(papeis) || corpo.messages[0].role !== 'user') return responder(res, 400, { type: 'error', error: { type: 'invalid_request_error', message: 'roles must alternate' } });
+      // ── Assistente da equipe (com ferramentas) ──
+      const sistemaTxt = Array.isArray(corpo.system) ? corpo.system.map((b) => b.text).join('\n') : String(corpo.system ?? '');
+      if (sistemaTxt.includes('assistente de operação')) {
+        // Como a API: todo uso de ferramenta tem de ser respondido logo na mensagem seguinte.
+        for (let i = 0; i < corpo.messages.length; i++) {
+          const usos = blocos(corpo.messages[i]).filter((b) => b.type === 'tool_use');
+          if (!usos.length) continue;
+          const prox = corpo.messages[i + 1] ? blocos(corpo.messages[i + 1]) : [];
+          if (usos.some((u, k) => prox[k]?.type !== 'tool_result' || prox[k].tool_use_id !== u.id)) return responder(res, 400, { type: 'error', error: { type: 'invalid_request_error', message: 'tool_use ids were found without tool_result blocks immediately after' } });
+        }
+        const resp = (content, stop_reason = 'end_turn') => responder(res, 200, { content, stop_reason, usage: { input_tokens: 50, output_tokens: 10, cache_read_input_tokens: 40 } });
+        const ult = blocos(ultima);
+        const resultado = ult.find((b) => b.type === 'tool_result');
+        if (resultado) {
+          const uso = blocos(corpo.messages.at(-2)).find((b) => b.type === 'tool_use' && b.id === resultado.tool_use_id);
+          const c = String(resultado.content);
+          if (c.includes('aguardando_confirmacao')) return resp([{ type: 'text', text: 'Preparei o envio. Confirma?' }]);
+          if (uso?.name === 'consultar_inadimplentes') {
+            const d = JSON.parse(c);
+            return resp([{ type: 'text', text: `Achei ${d.quantidade} pessoa(s).` }, { type: 'tool_use', id: `tu_${++wa.n}`, name: 'enviar_whatsapp_em_lote', input: { pessoaIds: d.pessoas.map((x) => x.pessoaId), texto: 'Oi, {primeiro_nome}! Sua parcela de {valor_atualizado} está {maior_atraso} dias em atraso.' } }], 'tool_use');
+          }
+          if (uso?.name === 'resumo_negocio') {
+            const d = JSON.parse(c);
+            return resp([{ type: 'text', text: `No período vendemos ${d.vendas.liquido} (${d.vendas.variacao}); inadimplência hoje: ${d.hoje.inadimplencia}.` }]);
+          }
+          return resp([{ type: 'text', text: `Resultado: ${resultado.is_error ? 'erro ' : ''}${c.slice(0, 120)}` }]);
+        }
+        const fala = ult.filter((b) => b.type === 'text').map((b) => b.text).join(' ');
+        const busca = /inadimplentes (.+)$/i.exec(fala)?.[1];
+        if (busca) return resp([{ type: 'tool_use', id: `tu_${++wa.n}`, name: 'consultar_inadimplentes', input: { busca, limite: 20 } }], 'tool_use');
+        if (/como foi o m[eê]s/i.test(fala)) {
+          const h = new Date(Date.now() - 3 * 3600_000).toISOString().slice(0, 10);
+          return resp([{ type: 'tool_use', id: `tu_${++wa.n}`, name: 'resumo_negocio', input: { de: `${h.slice(0, 8)}01`, ate: h } }], 'tool_use');
+        }
+        if (/ferramenta inexistente/i.test(fala)) return resp([{ type: 'tool_use', id: `tu_${++wa.n}`, name: 'apagar_tudo', input: {} }], 'tool_use');
+        if (/a pessoa confirmou/.test(fala)) return resp([{ type: 'text', text: 'Feito!' }]);
+        return resp([{ type: 'text', text: `Oi! Tenho ${(corpo.tools ?? []).length} ferramentas.` }]);
+      }
       let saida;
       if (corpo.system.includes('recepção do WhatsApp')) {
         const tudo = corpo.messages.filter((m) => m.role === 'user').flatMap(blocos).filter((b) => b.type === 'text').map((b) => b.text).join(' ');
