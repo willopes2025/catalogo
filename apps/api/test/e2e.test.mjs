@@ -2981,6 +2981,71 @@ test('Assistente: consulta inadimplentes, prepara envio em lote, confirma por vo
   const descartavel = await ok('POST', '/assistente/sessoes');
   await ok('DELETE', `/assistente/sessoes/${descartavel.id}`);
   assert.equal((await chamar('GET', `/assistente/sessoes/${descartavel.id}`)).status, 404);
+  // Rotina agendada: "todo dia às 8 me manda e-mail com os inadimplentes".
+  await ok('POST', `/assistente/sessoes/${s.id}/mensagens`, { texto: 'todo dia às 8 me manda email com os inadimplentes para diretoria@aritana.local' });
+  v = await esperar(s.id, (x) => !x.ocupada);
+  const ag = v.acoes.filter((x) => x.ferramenta === 'agendar_rotina').at(-1);
+  assert.equal(ag.status, 'aguardando');
+  assert.match(ag.resumo, /todo dia às 08:00/);
+  assert.equal((await ok('GET', '/assistente/rotinas')).length, 0, 'só cria depois de confirmar');
+  await ok('POST', `/assistente/sessoes/${s.id}/mensagens`, { texto: 'pode' });
+  v = await esperar(s.id, (x) => !x.ocupada && x.acoes.find((y) => y.id === ag.id).status === 'concluida');
+  let [rot] = await ok('GET', '/assistente/rotinas');
+  assert.equal(rot.horario, '08:00');
+  assert.deepEqual(rot.emails, ['diretoria@aritana.local']);
+  assert.ok(new Date(rot.proximaEm) > new Date());
+  // "Rodar agora": abre uma conversa da rotina, consulta e manda o e-mail sem pedir confirmação (endereço autorizado).
+  await ok('POST', `/assistente/rotinas/${rot.id}/executar`);
+  let execucao;
+  for (let i = 0; i < 60 && !execucao; i++) {
+    [rot] = await ok('GET', '/assistente/rotinas');
+    const x = rot.ultimaSessaoId ? await ok('GET', `/assistente/sessoes/${rot.ultimaSessaoId}`) : null;
+    if (x && !x.ocupada && x.mensagens.at(-1)?.papel === 'assistant') execucao = x;
+    else await new Promise((r) => setTimeout(r, 250));
+  }
+  assert.ok(execucao, 'a rotina rodou');
+  assert.match(execucao.titulo, /^⏰ Inadimplentes por e-mail/);
+  const mail = execucao.acoes.find((x) => x.ferramenta === 'enviar_email');
+  assert.equal(mail.status, 'concluida');
+  assert.match(mail.resumo, /autorizado na criação da rotina/);
+  assert.match(mail.resultado.anexos[0], /^inadimplentes-\d{4}-\d{2}-\d{2}\.csv$/);
+  assert.equal(execucao.mensagens.at(-1).texto, 'Resumo: e-mail enviado.');
+  assert.equal(rot.ultimoErro, null);
+  await ok('PATCH', `/assistente/rotinas/${rot.id}`, { ativa: false });
+  assert.equal((await ok('GET', '/assistente/rotinas'))[0].ativa, false);
+  await ok('DELETE', `/assistente/rotinas/${rot.id}`);
+  assert.equal((await ok('GET', '/assistente/rotinas')).length, 0);
+  // Rotina a cada X tempo, com janela e dias úteis; duplicar.
+  await ok('POST', `/assistente/sessoes/${s.id}/mensagens`, { texto: 'de hora em hora das 8 às 18 me avisa das candidatas novas' });
+  v = await esperar(s.id, (x) => !x.ocupada);
+  const ag2 = v.acoes.filter((x) => x.ferramenta === 'agendar_rotina').at(-1);
+  assert.match(ag2.resumo, /a cada 1 h, de segunda a sexta, das 08:00 às 18:00/);
+  await ok('POST', `/assistente/sessoes/${s.id}/mensagens`, { texto: 'pode' });
+  await esperar(s.id, (x) => !x.ocupada && x.acoes.find((y) => y.id === ag2.id).status === 'concluida');
+  const [int] = await ok('GET', '/assistente/rotinas');
+  assert.equal(int.tipo, 'intervalo');
+  assert.equal(int.intervaloMin, 60);
+  assert.equal(int.quando, 'a cada 1 h, de segunda a sexta, das 08:00 às 18:00');
+  const copia = await ok('POST', `/assistente/rotinas/${int.id}/duplicar`);
+  assert.equal(copia.titulo, 'Candidatas novas (cópia)');
+  assert.equal(copia.ativa, false);
+  assert.equal((await ok('GET', '/assistente/rotinas')).length, 2);
+  // O assistente cria um especialista do WhatsApp na conversa (com confirmação); duplicar pela tela.
+  await ok('POST', `/assistente/sessoes/${s.id}/mensagens`, { texto: 'cria um especialista de pós-venda' });
+  v = await esperar(s.id, (x) => !x.ocupada);
+  const novoAg = v.acoes.filter((x) => x.ferramenta === 'alterar_agentes_whatsapp').at(-1);
+  assert.equal(novoAg.status, 'aguardando');
+  assert.match(novoAg.resumo, /Criar o especialista "Pós-venda" \(chave posvenda\)/);
+  await ok('POST', `/assistente/sessoes/${s.id}/mensagens`, { texto: 'pode' });
+  await esperar(s.id, (x) => !x.ocupada && x.acoes.find((y) => y.id === novoAg.id).status === 'concluida');
+  const pos = (await ok('GET', '/crm/ia-agente')).especialistas.find((x) => x.funcao === 'posvenda');
+  assert.equal(pos.ativo, true);
+  const dup1 = await ok('POST', `/crm/ia-agentes/${pos.id}/duplicar`);
+  const dup2 = await ok('POST', `/crm/ia-agentes/${pos.id}/duplicar`);
+  assert.equal(dup1.funcao, 'posvenda_copia');
+  assert.equal(dup2.funcao, 'posvenda_copia2');
+  assert.equal(dup1.ativo, false);
+  assert.equal(dup1.instrucoes, pos.instrucoes);
   // Voz: sem ElevenLabs, fala pela OpenAI; com a chave, pela ElevenLabs. Links e marcadores não são lidos.
   const falarAudio = async (corpo) => {
     const r = await fetch(API + '/assistente/falar', { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` }, body: JSON.stringify(corpo) });

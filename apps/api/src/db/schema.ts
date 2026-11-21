@@ -2033,3 +2033,36 @@ export const assistentePedidos = pgTable('assistente_pedidos', {
   criadoEm: criadoEm(),
   atualizadoEm: atualizadoEm(),
 });
+
+/**
+ * Rotina do assistente: uma instrução que ele executa sozinho nos dias e no horário marcados (ex.: "todo dia às 8h,
+ * me mande por e-mail os inadimplentes"). Roda com as permissões atuais de quem criou; cada execução vira uma conversa.
+ */
+export const assistenteRotinas = pgTable('assistente_rotinas', {
+  id: id(),
+  usuarioId: uuid('usuario_id')
+    .notNull()
+    .references(() => usuarios.id, { onDelete: 'cascade' }),
+  titulo: text('titulo').notNull(),
+  /** O que fazer em cada execução (completo, sem depender da conversa em que foi criada). */
+  instrucao: text('instrucao').notNull(),
+  /** horario = uma vez por dia no horário marcado; intervalo = a cada N minutos (dentro da janela, se houver). */
+  tipo: text('tipo').notNull().default('horario'),
+  /** HH:MM, horário de Brasília (rotina por horário). */
+  horario: text('horario').notNull().default('08:00'),
+  /** Rotina por intervalo: a cada quantos minutos. */
+  intervaloMin: integer('intervalo_min'),
+  /** Janela do dia em que a rotina por intervalo pode rodar (HH:MM, Brasília). Vazio = o dia todo. */
+  janelaInicio: text('janela_inicio'),
+  janelaFim: text('janela_fim'),
+  /** Dias da semana (0 = domingo … 6 = sábado). */
+  dias: jsonb('dias').$type<number[]>().notNull().default([0, 1, 2, 3, 4, 5, 6]),
+  /** E-mails autorizados a receber o que a rotina mandar (sem pedir confirmação a cada vez). */
+  emails: jsonb('emails').$type<string[]>().notNull().default([]),
+  ativa: boolean('ativa').notNull().default(true),
+  proximaEm: timestamp('proxima_em', { withTimezone: true }).notNull(),
+  ultimaEm: timestamp('ultima_em', { withTimezone: true }),
+  ultimaSessaoId: uuid('ultima_sessao_id').references(() => assistenteSessoes.id, { onDelete: 'set null' }),
+  ultimoErro: text('ultimo_erro'),
+  criadoEm: criadoEm(),
+});

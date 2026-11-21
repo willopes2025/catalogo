@@ -5,7 +5,7 @@ import { calcularEncargos, formatarReais, preencherTexto } from '@aritana/regras
 import { DB, type Db } from '../comum/db.module';
 import { temPermissao, type UsuarioLogado } from '../comum/auth';
 import { AuditoriaService } from '../comum/auditoria.service';
-import { assistentePedidos, chamadoMensagens, chamados, crmCanais, crmTemplates, empresas, maletas, pessoas, titulos, vendas } from '../db/schema';
+import { assistentePedidos, assistenteRotinas, chamadoMensagens, iaAgentes, chamados, crmCanais, crmTemplates, empresas, maletas, pessoas, titulos, vendas } from '../db/schema';
 import { CanaisService } from '../crm/canais.service';
 import { CobrancaService } from '../cobranca/cobranca.service';
 import { CobrancaConfigService } from '../cobranca/cobranca-config.service';
@@ -14,7 +14,11 @@ import { SegredosService } from '../segredos/segredos.service';
 import { hoje } from '../maletas/maletas.service';
 import { ConfiguracoesService } from '../configuracoes/configuracoes.service';
 import { regrasSchema } from '../configuracoes/configuracoes.controller';
+import { AgenteService } from '../crm/agente.service';
+import { duplicarEspecialista } from '../crm/especialistas';
+import { IaService } from '../ia/ia.service';
 import type { DefinicaoFerramenta } from '../ia/ia.service';
+import { csv, descreverAgenda, proximaDaRotina, type Agenda } from './rotinas';
 
 /**
  * leitura: consulta, executa na hora.
@@ -28,6 +32,8 @@ export interface Contexto {
   sessaoId: string;
   /** Avança o progresso das ações em segundo plano (envio em lote). */
   progresso?: (feitos: number, total: number, falhas: number) => Promise<void>;
+  /** Execução automática de uma rotina (ninguém acompanhando): e-mails para os endereços autorizados saem sem confirmação. */
+  rotina?: { id: string; emails: string[] };
 }
 
 export interface Preparo {
@@ -79,6 +85,8 @@ export class FerramentasAssistente {
     private readonly email: EmailService,
     private readonly segredos: SegredosService,
     private readonly configuracoes: ConfiguracoesService,
+    private readonly agente: AgenteService,
+    private readonly ia: IaService,
   ) {
     this.lista = [
       this.consultarInadimplentes(),
@@ -94,6 +102,11 @@ export class FerramentasAssistente {
       this.registrarPromessa(),
       this.verRegras(),
       this.alterarRegras(),
+      this.verAgentesWhatsapp(),
+      this.alterarAgentesWhatsapp(),
+      this.enviarEmail(),
+      this.agendarRotina(),
+      this.gerenciarRotinas(),
       this.registrarPedido(),
       this.listarPedidos(),
     ];
@@ -130,19 +143,15 @@ export class FerramentasAssistente {
       risco: 'leitura',
       permitido: pode('cobranca', 'ver'),
       executar: async (e: z.infer<typeof schema>, ctx) => {
-        const escopo = await this.cobranca.escopo(ctx.usuario);
         const limite = e.limite ?? 50;
-        const itens: Awaited<ReturnType<CobrancaService['carteira']>>['itens'] = [];
-        for (let pagina = 1; itens.length < limite; pagina++) {
-          const r = await this.cobranca.carteira(escopo, { faixa: e.faixa, tipo: e.tipo, busca: e.busca, pagina });
-          itens.push(...r.itens);
-          if (!r.temMais) break;
-        }
-        const lista = itens.slice(0, limite);
+        const todos = await this.todosInadimplentes(ctx.usuario, e);
+        const lista = todos.slice(0, limite);
         return {
-          quantidade: lista.length,
-          haMais: itens.length > limite,
-          totalAtualizado: formatarReais(lista.reduce((s, i) => s + Number(i.atualizado), 0)),
+          quantidadeTotal: todos.length,
+          mostrando: lista.length,
+          totalAtualizado: formatarReais(todos.reduce((s, i) => s + Number(i.atualizado), 0)),
+          totalOriginal: formatarReais(todos.reduce((s, i) => s + Number(i.original), 0)),
+          porFaixaDeAtraso: this.faixas(todos),
           pessoas: lista.map((i) => ({
             pessoaId: i.pessoaId,
             nome: i.nome,
@@ -160,6 +169,33 @@ export class FerramentasAssistente {
         };
       },
     };
+  }
+
+  /** Toda a carteira de inadimplentes que esta pessoa enxerga (até 3.000), do maior para o menor valor atualizado. */
+  private async todosInadimplentes(u: UsuarioLogado, f: { faixa?: string; tipo?: string; busca?: string } = {}) {
+    const escopo = await this.cobranca.escopo(u);
+    const itens: Awaited<ReturnType<CobrancaService['carteira']>>['itens'] = [];
+    for (let pagina = 1; pagina <= 60; pagina++) {
+      const r = await this.cobranca.carteira(escopo, { faixa: f.faixa, tipo: f.tipo, busca: f.busca, pagina });
+      itens.push(...r.itens);
+      if (!r.temMais) break;
+    }
+    return itens;
+  }
+
+  /** Quanto está em cada faixa de atraso (pelo maior atraso de cada pessoa). */
+  private faixas(itens: { atualizado: number; maiorAtraso: number }[]) {
+    const f = [
+      { faixa: '1 a 30 dias', de: 1, ate: 30 },
+      { faixa: '31 a 60 dias', de: 31, ate: 60 },
+      { faixa: '61 a 90 dias', de: 61, ate: 90 },
+      { faixa: '91 a 180 dias', de: 91, ate: 180 },
+      { faixa: 'mais de 180 dias', de: 181, ate: Infinity },
+    ];
+    return f.map((x) => {
+      const dentro = itens.filter((i) => i.maiorAtraso >= x.de && i.maiorAtraso <= x.ate);
+      return { faixa: x.faixa, pessoas: dentro.length, valorAtualizado: formatarReais(dentro.reduce((s, i) => s + Number(i.atualizado), 0)) };
+    });
   }
 
   private buscarPessoas(): Ferramenta {
@@ -689,6 +725,266 @@ export class FerramentasAssistente {
         else await this.cobrancaConfig.salvar(m.novo as never);
         await this.auditoria.registrar({ usuarioId: ctx.usuario.id, acao: 'editar_pelo_assistente', entidade: e.area === 'consignado' ? 'regras_consignado' : 'cobranca', dados: { mudancas: m.linhas } });
         return { alterado: true, mudancas: m.linhas };
+      },
+    };
+  }
+
+  // ───────────── Agentes do WhatsApp (atendimento) ─────────────
+
+  private verAgentesWhatsapp(): Ferramenta {
+    return {
+      nome: 'ver_agentes_whatsapp',
+      descricao: 'Mostra o agente de IA que atende no WhatsApp: se está ligado, o nome com que se apresenta, as instruções e o conhecimento gerais, e cada especialista (vendas, quero revender, revendedora…) com quando atende, instruções e conhecimento próprios.',
+      schema: z.object({}),
+      risco: 'leitura',
+      permitido: pode('crm', 'ver'),
+      executar: async () => {
+        const cfg = await this.agente.config();
+        const lista = await this.agente.especialistas(true);
+        return {
+          geral: { ligado: cfg.ativo, nome: cfg.nome, instrucoes: cfg.instrucoes, conhecimento: cfg.conhecimento.slice(0, 6000), maxRespostas: cfg.maxRespostas, maxTransferencias: cfg.maxTransferencias, numeros: cfg.canais.length ? `${cfg.canais.length} número(s)` : 'todos' },
+          especialistas: lista.map((e) => ({ especialistaId: e.id, chave: e.funcao, nome: e.nome, ligado: e.ativo, atendeQuando: e.quando, instrucoes: e.instrucoes, conhecimento: e.conhecimento.slice(0, 4000), ordem: e.ordem })),
+        };
+      },
+    };
+  }
+
+  private especialistaCampos = z.object({
+    chave: z.string().trim().toLowerCase().regex(/^[a-z][a-z0-9_]{1,29}$/, 'Chave só com letras minúsculas, números e _ (ex.: posvenda)').optional(),
+    nome: z.string().trim().min(2).max(60).optional(),
+    atendeQuando: z.string().trim().min(10).max(600).optional().describe('Assuntos que este especialista atende (a recepção usa isto para escolher)'),
+    instrucoes: z.string().max(6000).optional().describe('Como atender: tom, o que perguntar, o que nunca fazer, quando passar para a equipe'),
+    conhecimento: z.string().max(20000).optional().describe('Fatos que ele pode usar: preços, regras, endereços, links'),
+    ordem: z.number().int().min(0).max(100).optional(),
+  });
+
+  private alterarAgentesWhatsappSchema = z.object({
+    acao: z.enum(['criar', 'editar', 'duplicar', 'ligar', 'desligar', 'excluir', 'editar_geral']),
+    especialistaId: uuid.optional().describe('Para editar, duplicar, ligar, desligar ou excluir um especialista'),
+    especialista: this.especialistaCampos.optional().describe('criar: chave, nome, atendeQuando e instrucoes obrigatórios; editar/duplicar: só o que muda'),
+    geral: z
+      .object({ ligado: z.boolean().optional().describe('Liga ou desliga o atendimento automático no WhatsApp'), nome: z.string().trim().max(40).optional(), instrucoes: z.string().max(6000).optional(), conhecimento: z.string().max(20000).optional(), maxRespostas: z.number().int().min(1).max(50).optional(), maxTransferencias: z.number().int().min(0).max(5).optional() })
+      .optional()
+      .describe('editar_geral: configurações que valem para todos os especialistas'),
+  });
+
+  private async planoAgente(e: z.infer<FerramentasAssistente['alterarAgentesWhatsappSchema']>) {
+    const lista = await this.agente.especialistas(true);
+    const alvo = e.especialistaId ? lista.find((x) => x.id === e.especialistaId) : null;
+    if (['editar', 'duplicar', 'ligar', 'desligar', 'excluir'].includes(e.acao) && !alvo) throw new BadRequestException('Especialista não encontrado (use ver_agentes_whatsapp para pegar o especialistaId).');
+    const d = e.especialista ?? {};
+    if (d.chave && lista.some((x) => x.funcao === d.chave && x.id !== (e.acao === 'editar' ? alvo?.id : undefined))) throw new BadRequestException(`Já existe um especialista com a chave "${d.chave}".`);
+    if (e.acao === 'criar') {
+      if (!d.chave || !d.nome || !d.atendeQuando || !d.instrucoes?.trim()) throw new BadRequestException('Para criar, preciso de chave, nome, atendeQuando e instrucoes.');
+      return { resumo: `Criar o especialista "${d.nome}" (chave ${d.chave}) no agente do WhatsApp, já ligado. Atende quando: ${d.atendeQuando}`, previa: [{ nome: 'Instruções', texto: d.instrucoes }, ...(d.conhecimento ? [{ nome: 'Conhecimento', texto: d.conhecimento.slice(0, 3000) }] : [])] };
+    }
+    if (e.acao === 'editar') {
+      const mud = Object.entries(d).filter(([, v]) => v !== undefined);
+      if (!mud.length) throw new BadRequestException('Diga o que mudar.');
+      return { resumo: `Alterar o especialista "${alvo!.nome}": ${mud.map(([k]) => ({ chave: 'chave', nome: 'nome', atendeQuando: 'quando atende', instrucoes: 'instruções', conhecimento: 'conhecimento', ordem: 'ordem' })[k] ?? k).join(', ')}.`, previa: mud.map(([k, v]) => ({ nome: k, texto: String(v).slice(0, 3000) })) };
+    }
+    if (e.acao === 'duplicar') return { resumo: `Duplicar o especialista "${alvo!.nome}" como "${d.nome ?? `${alvo!.nome} (cópia)`}"${d.chave ? ` (chave ${d.chave})` : ''}. A cópia nasce desligada${Object.keys(d).some((k) => !['nome', 'chave'].includes(k)) ? ', já com os ajustes pedidos' : ''}.` };
+    if (e.acao === 'ligar' || e.acao === 'desligar') return { resumo: `${e.acao === 'ligar' ? 'Ligar' : 'Desligar'} o especialista "${alvo!.nome}".` };
+    if (e.acao === 'excluir') return { resumo: `Excluir o especialista "${alvo!.nome}" (as conversas com ele voltam para a recepção). Não dá para desfazer.` };
+    const g = e.geral ?? {};
+    if (!Object.values(g).some((v) => v !== undefined)) throw new BadRequestException('Diga o que mudar nas configurações gerais.');
+    if (g.ligado && !this.ia.texto) throw new BadRequestException('A chave do Claude não está configurada: não dá para ligar o agente.');
+    return { resumo: `Alterar a configuração geral do agente do WhatsApp${g.ligado === true ? ' e LIGAR o atendimento automático (ele passa a responder clientes)' : g.ligado === false ? ' e DESLIGAR o atendimento automático' : ''}: ${Object.entries(g).filter(([, v]) => v !== undefined).map(([k]) => k).join(', ')}.`, previa: Object.entries(g).filter(([k, v]) => v !== undefined && typeof v === 'string').map(([k, v]) => ({ nome: k, texto: String(v).slice(0, 3000) })) };
+  }
+
+  private alterarAgentesWhatsapp(): Ferramenta {
+    return {
+      nome: 'alterar_agentes_whatsapp',
+      descricao:
+        'Cria, edita, duplica, liga, desliga ou exclui especialistas do agente que atende no WhatsApp, ou muda a configuração geral dele (nome, instruções, conhecimento, ligar/desligar). Para criar um agente bom, antes entreviste a pessoa: objetivo, assuntos que ele atende, tom, o que ele precisa saber, o que nunca deve fazer e quando passar para a equipe; escreva instruções completas e mostre antes.',
+      schema: this.alterarAgentesWhatsappSchema,
+      risco: 'confirmar',
+      permitido: pode('configuracoes', 'editar'),
+      preparar: async (e) => {
+        try {
+          return await this.planoAgente(e);
+        } catch (err) {
+          return { resumo: '', impedimento: (err as Error).message };
+        }
+      },
+      executar: async (e: z.infer<FerramentasAssistente['alterarAgentesWhatsappSchema']>, ctx) => {
+        await this.planoAgente(e);
+        const d = e.especialista ?? {};
+        const campos = { ...(d.chave ? { funcao: d.chave } : {}), ...(d.nome ? { nome: d.nome } : {}), ...(d.atendeQuando ? { quando: d.atendeQuando } : {}), ...(d.instrucoes !== undefined ? { instrucoes: d.instrucoes } : {}), ...(d.conhecimento !== undefined ? { conhecimento: d.conhecimento } : {}), ...(d.ordem !== undefined ? { ordem: d.ordem } : {}) };
+        let r: unknown;
+        if (e.acao === 'criar') {
+          const lista = await this.agente.especialistas(true);
+          const [a] = await this.db.insert(iaAgentes).values({ funcao: d.chave!, nome: d.nome!, quando: d.atendeQuando!, instrucoes: d.instrucoes ?? '', conhecimento: d.conhecimento ?? '', ordem: d.ordem ?? lista.length + 1, ativo: true }).returning();
+          r = { criado: true, especialistaId: a.id, nome: a.nome };
+        } else if (e.acao === 'duplicar') {
+          const [o] = await this.db.select().from(iaAgentes).where(eq(iaAgentes.id, e.especialistaId!));
+          const c = await duplicarEspecialista(this.db, o, { funcao: d.chave, nome: d.nome }).catch((err: Error) => {
+            throw new BadRequestException(err.message);
+          });
+          const ajustes = { ...campos, funcao: undefined, nome: undefined };
+          if (Object.values(ajustes).some((v) => v !== undefined)) await this.db.update(iaAgentes).set({ ...Object.fromEntries(Object.entries(ajustes).filter(([, v]) => v !== undefined)), atualizadoEm: new Date() }).where(eq(iaAgentes.id, c.id));
+          r = { duplicado: true, especialistaId: c.id, nome: c.nome, chave: c.funcao, ligado: false };
+        } else if (e.acao === 'editar') {
+          await this.db.update(iaAgentes).set({ ...campos, atualizadoEm: new Date() }).where(eq(iaAgentes.id, e.especialistaId!));
+          r = { editado: true };
+        } else if (e.acao === 'ligar' || e.acao === 'desligar') {
+          await this.db.update(iaAgentes).set({ ativo: e.acao === 'ligar', atualizadoEm: new Date() }).where(eq(iaAgentes.id, e.especialistaId!));
+          r = { ok: true, ligado: e.acao === 'ligar' };
+        } else if (e.acao === 'excluir') {
+          await this.db.delete(iaAgentes).where(eq(iaAgentes.id, e.especialistaId!));
+          r = { excluido: true };
+        } else {
+          const g = e.geral ?? {};
+          const atual = await this.agente.config();
+          await this.agente.salvarConfig({ ...atual, ...(g.ligado !== undefined ? { ativo: g.ligado } : {}), ...(g.nome !== undefined ? { nome: g.nome } : {}), ...(g.instrucoes !== undefined ? { instrucoes: g.instrucoes } : {}), ...(g.conhecimento !== undefined ? { conhecimento: g.conhecimento } : {}), ...(g.maxRespostas !== undefined ? { maxRespostas: g.maxRespostas } : {}), ...(g.maxTransferencias !== undefined ? { maxTransferencias: g.maxTransferencias } : {}) });
+          r = { alterado: true };
+        }
+        await this.auditoria.registrar({ usuarioId: ctx.usuario.id, acao: `assistente_agente_${e.acao}`, entidade: 'ia_agente', entidadeId: e.especialistaId ?? null, dados: { especialista: e.especialista ? { ...e.especialista, conhecimento: undefined } : undefined, geral: e.geral ? { ...e.geral, conhecimento: undefined } : undefined } });
+        return r;
+      },
+    };
+  }
+
+  // ───────────── E-mail e rotinas agendadas ─────────────
+
+  private emailSchema = z.object({
+    para: z.array(z.string().trim().toLowerCase().email('E-mail inválido')).min(1).max(10),
+    assunto: z.string().trim().min(3).max(200),
+    texto: z.string().trim().min(1).max(20000).describe('Corpo do e-mail em texto simples (pode ter quebras de linha e listas com "- ")'),
+    anexo: z.enum(['inadimplentes']).optional().describe('Planilha gerada pelo sistema com a lista completa (CSV que abre no Excel)'),
+    tabela: z
+      .object({ nome: z.string().trim().min(1).max(60), colunas: z.array(z.string().max(60)).min(1).max(20), linhas: z.array(z.array(z.union([z.string(), z.number(), z.null()]))).max(500) })
+      .optional()
+      .describe('Outra tabela pequena para anexar como planilha'),
+  });
+
+  private enviarEmail(): Ferramenta {
+    return {
+      nome: 'enviar_email',
+      descricao:
+        'Envia um e-mail pelo servidor de e-mail do sistema, com anexo opcional em planilha (ex.: a lista completa de inadimplentes). Em rotina agendada, sai sem confirmação só para os e-mails autorizados na criação da rotina.',
+      schema: this.emailSchema,
+      risco: 'confirmar',
+      permitido: pode('assistente', 'ver'),
+      preparar: async (e: z.infer<FerramentasAssistente['emailSchema']>, ctx) => {
+        if (e.anexo === 'inadimplentes' && !temPermissao(ctx.usuario.permissoes, 'cobranca', 'ver')) return { resumo: '', impedimento: 'Anexar a lista de inadimplentes exige acesso à Cobrança.' };
+        const anexos = [e.anexo === 'inadimplentes' ? 'planilha de inadimplentes' : null, e.tabela ? `planilha "${e.tabela.nome}"` : null].filter(Boolean);
+        return { resumo: `Enviar e-mail para ${e.para.join(', ')}: "${e.assunto}"${anexos.length ? `, com ${anexos.join(' e ')}` : ''}.`, previa: [{ nome: e.assunto, telefone: e.para.join(', '), texto: e.texto.slice(0, 3000) }] };
+      },
+      executar: async (e: z.infer<FerramentasAssistente['emailSchema']>, ctx) => {
+        const anexos: { nome: string; conteudo: Buffer; mime: string }[] = [];
+        const dia = hoje();
+        if (e.anexo === 'inadimplentes') {
+          if (!temPermissao(ctx.usuario.permissoes, 'cobranca', 'ver')) throw new BadRequestException('Anexar a lista de inadimplentes exige acesso à Cobrança.');
+          const todos = await this.todosInadimplentes(ctx.usuario);
+          anexos.push({
+            nome: `inadimplentes-${dia}.csv`,
+            mime: 'text/csv',
+            conteudo: csv(
+              ['Nome', 'Tipo', 'Telefone', 'Cidade', 'Parcelas vencidas', 'Valor original', 'Valor atualizado', 'Maior atraso (dias)', 'Promessa de pagamento', 'Cobrador', 'Em protesto'],
+              todos.map((i) => [i.nome, i.tipo === 'representante' ? 'Revendedora' : 'Cliente', i.telefone, [i.cidade, i.uf].filter(Boolean).join('/'), i.titulos, formatarReais(Number(i.original)), formatarReais(Number(i.atualizado)), i.maiorAtraso, dataBR(i.promessa), i.cobrador, i.emProtesto > 0 ? 'sim' : '']),
+            ),
+          });
+        }
+        if (e.tabela) anexos.push({ nome: `${e.tabela.nome.replace(/[^\w\- ]+/g, '').trim() || 'planilha'}-${dia}.csv`, mime: 'text/csv', conteudo: csv(e.tabela.colunas, e.tabela.linhas) });
+        const r = await this.email.enviar(e.para.join(', '), e.assunto, e.texto, anexos);
+        await this.auditoria.registrar({ usuarioId: ctx.usuario.id, acao: ctx.rotina ? 'assistente_email_rotina' : 'assistente_email', entidade: 'email', entidadeId: null, dados: { para: e.para, assunto: e.assunto, anexos: anexos.map((a) => a.nome), rotinaId: ctx.rotina?.id ?? null } });
+        return { enviado: true, para: e.para, anexos: anexos.map((a) => a.nome), ...((r as { simulado?: boolean }).simulado ? { aviso: 'O servidor de e-mail (SMTP) não está configurado: o envio foi só simulado. Configure em Configurações › Integrações › E-mail.' } : {}) };
+      },
+    };
+  }
+
+  /** Agenda pedida pelo assistente → como fica gravada. */
+  private montarAgenda(e: { horario?: string; intervaloMinutos?: number; janela?: { inicio: string; fim: string }; dias?: number[] }): Agenda {
+    const dias = e.dias?.length ? [...new Set(e.dias)].sort() : [0, 1, 2, 3, 4, 5, 6];
+    if (e.intervaloMinutos) return { tipo: 'intervalo', horario: e.janela?.inicio?.padStart(5, '0') ?? '00:00', dias, intervaloMin: e.intervaloMinutos, janelaInicio: e.janela?.inicio?.padStart(5, '0') ?? null, janelaFim: e.janela?.fim?.padStart(5, '0') ?? null };
+    if (!e.horario) throw new BadRequestException('Diga o horário (HH:MM) ou o intervalo em minutos.');
+    return { tipo: 'horario', horario: e.horario.padStart(5, '0'), dias, intervaloMin: null, janelaInicio: null, janelaFim: null };
+  }
+
+  private agendaSchema = {
+    horario: z.string().regex(/^([01]?\d|2[0-3]):[0-5]\d$/, 'Horário no formato HH:MM').optional().describe('Uma vez por dia neste horário (Brasília). Use isto OU intervaloMinutos.'),
+    intervaloMinutos: z.number().int().min(15, 'O intervalo mínimo é de 15 minutos').max(10080).optional().describe('A cada quantos minutos (ex.: 60 = de hora em hora, 120 = a cada 2 h). Mínimo 15.'),
+    janela: z
+      .object({ inicio: z.string().regex(/^([01]?\d|2[0-3]):[0-5]\d$/), fim: z.string().regex(/^([01]?\d|2[0-3]):[0-5]\d$/) })
+      .optional()
+      .describe('Só com intervalo: horário do dia em que pode rodar (ex.: 08:00 às 18:00)'),
+    dias: z.array(z.number().int().min(0).max(6)).max(7).optional().describe('Dias da semana: 0 = domingo … 6 = sábado. Padrão: todos'),
+  };
+
+  private agendarRotina(): Ferramenta {
+    const schema = z.object({
+      titulo: z.string().trim().min(3).max(80).describe('Nome curto, ex.: "Inadimplentes por e-mail"'),
+      instrucao: z.string().trim().min(20).max(4000).describe('O que fazer em CADA execução, completo e sem depender desta conversa: o que consultar, como montar e para quem enviar (com os e-mails).'),
+      ...this.agendaSchema,
+      emails: z.array(z.string().trim().toLowerCase().email()).max(10).optional().describe('E-mails que podem receber o que a rotina mandar, sem pedir confirmação a cada execução'),
+    });
+    const quando = (d: Date) => d.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo', weekday: 'short', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+    return {
+      nome: 'agendar_rotina',
+      descricao:
+        'Cria uma rotina (agente agendado) que você executa sozinho: uma vez por dia num horário, ou a cada X minutos/horas (com janela do dia e dias da semana opcionais). Ex.: "todo dia às 8h, me mande por e-mail os inadimplentes", "de hora em hora, das 8h às 18h, veja se entrou candidata nova e me avise". Roda com as permissões de quem pediu; cada execução vira uma conversa. WhatsApp, cobranças e alterações não saem sozinhos: ficam esperando confirmação na conversa da rotina. E-mail sai sozinho só para os endereços autorizados aqui.',
+      schema,
+      risco: 'confirmar',
+      permitido: pode('assistente', 'ver'),
+      preparar: async (e: z.infer<typeof schema>) => {
+        try {
+          const a = this.montarAgenda(e);
+          return {
+            resumo: `Criar a rotina "${e.titulo}": ${descreverAgenda(a)} (primeira: ${quando(proximaDaRotina(a))}).${e.emails?.length ? ` E-mails autorizados: ${e.emails.join(', ')}.` : ''}`,
+            previa: [{ nome: 'O que vai fazer em cada execução', texto: e.instrucao }],
+          };
+        } catch (err) {
+          return { resumo: '', impedimento: (err as Error).message };
+        }
+      },
+      executar: async (e: z.infer<typeof schema>, ctx) => {
+        const a = this.montarAgenda(e);
+        const [r] = await this.db.insert(assistenteRotinas).values({ usuarioId: ctx.usuario.id, titulo: e.titulo, instrucao: e.instrucao, ...a, emails: e.emails ?? [], proximaEm: proximaDaRotina(a) }).returning();
+        await this.auditoria.registrar({ usuarioId: ctx.usuario.id, acao: 'criar_rotina', entidade: 'assistente_rotina', entidadeId: r.id, dados: { titulo: e.titulo, agenda: descreverAgenda(a), emails: e.emails ?? [] } });
+        return { criada: true, rotinaId: r.id, quando: descreverAgenda(a), primeiraExecucao: quando(r.proximaEm), observacao: 'A pessoa acompanha, duplica e pausa na aba Rotinas do Assistente.' };
+      },
+    };
+  }
+
+  private gerenciarRotinas(): Ferramenta {
+    const schema = z.object({
+      acao: z.enum(['listar', 'pausar', 'retomar', 'excluir', 'duplicar', 'editar']),
+      rotinaId: uuid.optional().describe('Obrigatório exceto em listar (use listar antes)'),
+      titulo: z.string().trim().min(3).max(80).optional().describe('duplicar/editar: novo título'),
+      instrucao: z.string().trim().min(20).max(4000).optional().describe('duplicar/editar: nova instrução'),
+      ...this.agendaSchema,
+      emails: z.array(z.string().trim().toLowerCase().email()).max(10).optional(),
+    });
+    return {
+      nome: 'gerenciar_rotinas',
+      descricao: 'Lista, pausa, retoma, exclui, duplica (com ajustes opcionais: título, instrução, horário/intervalo, dias, e-mails) ou edita as rotinas agendadas de quem está falando com você. A cópia nasce pausada para revisar.',
+      schema,
+      risco: 'acao',
+      permitido: pode('assistente', 'ver'),
+      executar: async (e: z.infer<typeof schema>, ctx) => {
+        const fmt = (d: Date | null) => d?.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' }) ?? null;
+        if (e.acao === 'listar') {
+          const rs = await this.db.select().from(assistenteRotinas).where(eq(assistenteRotinas.usuarioId, ctx.usuario.id)).orderBy(asc(assistenteRotinas.criadoEm));
+          return { rotinas: rs.map((r) => ({ rotinaId: r.id, titulo: r.titulo, quando: descreverAgenda(r), ativa: r.ativa, proxima: r.ativa ? fmt(r.proximaEm) : null, ultima: fmt(r.ultimaEm), emails: r.emails, instrucao: r.instrucao })) };
+        }
+        if (!e.rotinaId) throw new BadRequestException('Diga qual rotina (rotinaId).');
+        const [r] = await this.db.select().from(assistenteRotinas).where(and(eq(assistenteRotinas.id, e.rotinaId), eq(assistenteRotinas.usuarioId, ctx.usuario.id)));
+        if (!r) throw new BadRequestException('Rotina não encontrada.');
+        const mudouAgenda = e.horario || e.intervaloMinutos || e.janela || e.dias;
+        const agenda: Agenda = mudouAgenda ? this.montarAgenda({ horario: e.horario ?? (e.intervaloMinutos ? undefined : r.horario), intervaloMinutos: e.intervaloMinutos ?? (e.horario ? undefined : (r.intervaloMin ?? undefined)), janela: e.janela ?? (r.janelaInicio && r.janelaFim ? { inicio: r.janelaInicio, fim: r.janelaFim } : undefined), dias: e.dias ?? r.dias }) : r;
+        const campos = { titulo: e.titulo ?? r.titulo, instrucao: e.instrucao ?? r.instrucao, tipo: agenda.tipo, horario: agenda.horario, intervaloMin: agenda.intervaloMin ?? null, janelaInicio: agenda.janelaInicio ?? null, janelaFim: agenda.janelaFim ?? null, dias: agenda.dias, emails: e.emails ?? r.emails };
+        if (e.acao === 'duplicar') {
+          const [c] = await this.db.insert(assistenteRotinas).values({ usuarioId: ctx.usuario.id, ...campos, titulo: e.titulo ?? `${r.titulo} (cópia)`, ativa: false, proximaEm: proximaDaRotina(agenda) }).returning();
+          return { duplicada: true, rotinaId: c.id, titulo: c.titulo, quando: descreverAgenda(c), ativa: false, observacao: 'A cópia nasce pausada: retome quando estiver certa.' };
+        }
+        if (e.acao === 'editar') {
+          const [c] = await this.db.update(assistenteRotinas).set({ ...campos, proximaEm: proximaDaRotina(agenda) }).where(eq(assistenteRotinas.id, r.id)).returning();
+          return { editada: true, titulo: c.titulo, quando: descreverAgenda(c), proxima: fmt(c.proximaEm) };
+        }
+        if (e.acao === 'excluir') await this.db.delete(assistenteRotinas).where(eq(assistenteRotinas.id, r.id));
+        else await this.db.update(assistenteRotinas).set({ ativa: e.acao === 'retomar', ...(e.acao === 'retomar' ? { proximaEm: proximaDaRotina(r) } : {}) }).where(eq(assistenteRotinas.id, r.id));
+        return { ok: true, rotina: r.titulo, acao: e.acao };
       },
     };
   }

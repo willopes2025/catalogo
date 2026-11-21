@@ -524,6 +524,7 @@ function Especialistas({ lista, admin }: { lista: Especialista[]; admin: boolean
     onSuccess: () => { setEditar(null); atualizar(); },
   });
   const ligar = useMutation({ mutationFn: (e: Especialista) => api(`/crm/ia-agentes/${e.id}`, { metodo: 'PATCH', corpo: { ativo: !e.ativo } }), onSuccess: atualizar });
+  const duplicar = useMutation({ mutationFn: (e: Especialista) => api<Especialista>(`/crm/ia-agentes/${e.id}/duplicar`, { corpo: {} }), onSuccess: (c) => { atualizar(); setEditar(c); } });
   const excluir = useMutation({ mutationFn: (id: string) => api(`/crm/ia-agentes/${id}`, { metodo: 'DELETE' }), onSuccess: () => { setEditar(null); atualizar(); } });
   const erros = camposComErro(salvar.error);
   const ativos = lista.filter((e) => e.ativo).length;
@@ -553,14 +554,15 @@ function Especialistas({ lista, admin }: { lista: Especialista[]; admin: boolean
                 <td style={{ fontSize: 13 }}>{e.quando}</td>
                 <td style={{ whiteSpace: 'nowrap' }}>
                   {admin && <button className="botao claro pequeno" onClick={() => setEditar(e)}>Editar</button>}{' '}
-                  {admin && <button className="botao claro pequeno" disabled={ligar.isPending} onClick={() => ligar.mutate(e)}>{e.ativo ? 'Desligar' : 'Ligar'}</button>}
+                  {admin && <button className="botao claro pequeno" disabled={ligar.isPending} onClick={() => ligar.mutate(e)}>{e.ativo ? 'Desligar' : 'Ligar'}</button>}{' '}
+                  {admin && <button className="botao claro pequeno" title="Cria uma cópia desligada para você ajustar" disabled={duplicar.isPending} onClick={() => duplicar.mutate(e)}>Duplicar</button>}
                 </td>
               </tr>
             ))}
           </tbody>
         </table>
       )}
-      {(sugeridos.error || ligar.error) && <Erro erro={sugeridos.error ?? ligar.error} />}
+      {(sugeridos.error || ligar.error || duplicar.error) && <Erro erro={sugeridos.error ?? ligar.error ?? duplicar.error} />}
       {editar && (
         <div className="modal-fundo" onClick={() => setEditar(null)}>
           <div className="cartao modal" onClick={(ev) => ev.stopPropagation()} style={{ maxWidth: 680 }}>

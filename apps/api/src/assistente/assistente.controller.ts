@@ -129,6 +129,39 @@ export class AssistenteController {
     return this.assistente.cancelar(u, id);
   }
 
+  // ───── Rotinas agendadas ─────
+
+  @Get('rotinas')
+  @Permissao('assistente', 'ver')
+  rotinas(@Usuario() u: UsuarioLogado) {
+    return this.assistente.rotinas(u);
+  }
+
+  @Patch('rotinas/:id')
+  @Permissao('assistente', 'ver')
+  mudarRotina(@Usuario() u: UsuarioLogado, @Param('id', ParseUUIDPipe) id: string, @Body() body: unknown) {
+    const d = validar(z.object({ ativa: z.boolean() }), body);
+    return this.assistente.mudarRotina(u, id, d.ativa);
+  }
+
+  @Delete('rotinas/:id')
+  @Permissao('assistente', 'ver')
+  excluirRotina(@Usuario() u: UsuarioLogado, @Param('id', ParseUUIDPipe) id: string) {
+    return this.assistente.excluirRotina(u, id);
+  }
+
+  @Post('rotinas/:id/duplicar')
+  @Permissao('assistente', 'ver')
+  duplicarRotina(@Usuario() u: UsuarioLogado, @Param('id', ParseUUIDPipe) id: string) {
+    return this.assistente.duplicarRotina(u, id);
+  }
+
+  @Post('rotinas/:id/executar')
+  @Permissao('assistente', 'ver')
+  rodarAgora(@Usuario() u: UsuarioLogado, @Param('id', ParseUUIDPipe) id: string) {
+    return this.assistente.rodarAgora(u, id);
+  }
+
   /** Pedidos de configuração e desenvolvimento (a gestão vê todos; os demais, os seus). */
   @Get('pedidos')
   @Permissao('assistente', 'ver')

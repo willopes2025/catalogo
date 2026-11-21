@@ -326,13 +326,23 @@ http
         const resp = (content, stop_reason = 'end_turn') => responder(res, 200, { content, stop_reason, usage: { input_tokens: 50, output_tokens: 10, cache_read_input_tokens: 40 } });
         const ult = blocos(ultima);
         const resultado = ult.find((b) => b.type === 'tool_result');
+        if (resultado?.is_error) return resp([{ type: 'text', text: `Resultado: erro ${String(resultado.content).slice(0, 120)}` }]);
         if (resultado) {
           const uso = blocos(corpo.messages.at(-2)).find((b) => b.type === 'tool_use' && b.id === resultado.tool_use_id);
+          const primeira = blocos(corpo.messages[0]).filter((b) => b.type === 'text').map((b) => b.text).join(' ');
+          if (primeira.includes('[Rotina agendada')) {
+            const email = /[\w.+-]+@[\w-]+(\.[a-z]+)+/i.exec(primeira)?.[0];
+            if (uso?.name === 'consultar_inadimplentes') {
+              const d = JSON.parse(String(resultado.content));
+              return resp([{ type: 'tool_use', id: `tu_${++wa.n}`, name: 'enviar_email', input: { para: [email], assunto: 'Inadimplentes de hoje', texto: `Total em atraso: ${d.totalAtualizado} (${d.quantidadeTotal} pessoas).\n${d.porFaixaDeAtraso.map((f) => `- ${f.faixa}: ${f.valorAtualizado}`).join('\n')}`, anexo: 'inadimplentes' } }], 'tool_use');
+            }
+            if (uso?.name === 'enviar_email') return resp([{ type: 'text', text: `Resumo: e-mail ${String(resultado.content).includes('aguardando_confirmacao') ? 'esperando confirmação' : 'enviado'}.` }]);
+          }
           const c = String(resultado.content);
           if (c.includes('aguardando_confirmacao')) return resp([{ type: 'text', text: 'Preparei o envio. Confirma?' }]);
           if (uso?.name === 'consultar_inadimplentes') {
             const d = JSON.parse(c);
-            return resp([{ type: 'text', text: `Achei ${d.quantidade} pessoa(s).` }, { type: 'tool_use', id: `tu_${++wa.n}`, name: 'enviar_whatsapp_em_lote', input: { pessoaIds: d.pessoas.map((x) => x.pessoaId), texto: 'Oi, {primeiro_nome}! Sua parcela de {valor_atualizado} está {maior_atraso} dias em atraso.' } }], 'tool_use');
+            return resp([{ type: 'text', text: `Achei ${d.quantidadeTotal} pessoa(s).` }, { type: 'tool_use', id: `tu_${++wa.n}`, name: 'enviar_whatsapp_em_lote', input: { pessoaIds: d.pessoas.map((x) => x.pessoaId), texto: 'Oi, {primeiro_nome}! Sua parcela de {valor_atualizado} está {maior_atraso} dias em atraso.' } }], 'tool_use');
           }
           if (uso?.name === 'resumo_negocio') {
             const d = JSON.parse(c);
@@ -341,6 +351,12 @@ http
           return resp([{ type: 'text', text: `Resultado: ${resultado.is_error ? 'erro ' : ''}${c.slice(0, 120)}` }]);
         }
         const fala = ult.filter((b) => b.type === 'text').map((b) => b.text).join(' ');
+        if (/a pessoa confirmou/.test(fala)) return resp([{ type: 'text', text: 'Feito!' }]);
+        if (fala.includes('[Rotina agendada')) return resp([{ type: 'tool_use', id: `tu_${++wa.n}`, name: 'consultar_inadimplentes', input: { limite: 5 } }], 'tool_use');
+        const agenda = /todo dia às (\d+) me manda e-?mail com os inadimplentes para (\S+)/i.exec(fala);
+        if (agenda) return resp([{ type: 'tool_use', id: `tu_${++wa.n}`, name: 'agendar_rotina', input: { titulo: 'Inadimplentes por e-mail', instrucao: `Consulte os inadimplentes e envie por e-mail para ${agenda[2]} o total, o resumo por faixa e a planilha anexa.`, horario: `${agenda[1].padStart(2, '0')}:00`, emails: [agenda[2]] } }], 'tool_use');
+        if (/de hora em hora das 8 às 18/i.test(fala)) return resp([{ type: 'tool_use', id: `tu_${++wa.n}`, name: 'agendar_rotina', input: { titulo: 'Candidatas novas', instrucao: 'Veja se entrou candidata nova desde a última execução e, se entrou, avise com nome e cidade.', intervaloMinutos: 60, janela: { inicio: '08:00', fim: '18:00' }, dias: [1, 2, 3, 4, 5] } }], 'tool_use');
+        if (/cria um especialista de pós-venda/i.test(fala)) return resp([{ type: 'tool_use', id: `tu_${++wa.n}`, name: 'alterar_agentes_whatsapp', input: { acao: 'criar', especialista: { chave: 'posvenda', nome: 'Pós-venda', atendeQuando: 'Cliente que já comprou e quer trocar, consertar ou tirar dúvida da peça.', instrucoes: 'Seja atenciosa, peça o número da venda e passe para a equipe quando for troca.' } } }], 'tool_use');
         const busca = /inadimplentes (.+)$/i.exec(fala)?.[1];
         if (busca) return resp([{ type: 'tool_use', id: `tu_${++wa.n}`, name: 'consultar_inadimplentes', input: { busca, limite: 20 } }], 'tool_use');
         if (/como foi o m[eê]s/i.test(fala)) {
@@ -350,7 +366,6 @@ http
         const multa = /multa da cobran[cç]a para (\d+)/i.exec(fala)?.[1];
         if (multa) return resp([{ type: 'tool_use', id: `tu_${++wa.n}`, name: 'alterar_regras', input: { area: 'cobranca', mudancas: { multa: Number(multa) } } }], 'tool_use');
         if (/ferramenta inexistente/i.test(fala)) return resp([{ type: 'tool_use', id: `tu_${++wa.n}`, name: 'apagar_tudo', input: {} }], 'tool_use');
-        if (/a pessoa confirmou/.test(fala)) return resp([{ type: 'text', text: 'Feito!' }]);
         return resp([{ type: 'text', text: `Oi! Tenho ${(corpo.tools ?? []).length} ferramentas.` }]);
       }
       let saida;

@@ -25,9 +25,14 @@ const ROTULO: Record<string, string> = {
   registrar_pedido: 'Registrou pedido para a equipe',
   listar_pedidos: 'Consultou os pedidos',
   ver_regras: 'Consultou as regras',
+  enviar_email: 'Enviar e-mail',
+  agendar_rotina: 'Criar rotina agendada',
+  gerenciar_rotinas: 'Ajustou rotinas',
+  ver_agentes_whatsapp: 'Viu os agentes do WhatsApp',
+  alterar_agentes_whatsapp: 'Alterar agente do WhatsApp',
   alterar_regras: 'Alterar regras',
 };
-const SUGESTOES = ['Como foi o mês até agora, comparado ao mês passado?', 'Quem são os inadimplentes acima de 30 dias?', 'Quais maletas estão atrasadas?', 'Manda um WhatsApp cobrando os inadimplentes com a 2ª via'];
+const SUGESTOES = ['Como foi o mês até agora, comparado ao mês passado?', 'Quem são os inadimplentes acima de 30 dias?', 'Todo dia às 8h me manda por e-mail os inadimplentes', 'Me ajuda a criar um agente de pós-venda no WhatsApp'];
 const STATUS_PEDIDO: Record<string, [string, string]> = { novo: ['alerta', 'Novo'], em_analise: ['alerta', 'Em análise'], em_andamento: ['marrom', 'Em andamento'], pronto: ['ok', 'Pronto'], recusado: ['neutra', 'Recusado'] };
 
 /** Voz do navegador: só quando não há ElevenLabs nem OpenAI (ou se a voz do servidor falhar). */
@@ -80,9 +85,10 @@ async function falar(texto: string, modo: Estado['vozResposta'] = 'navegador', e
 }
 
 export function Assistente() {
-  const [aba, setAba] = useState<'conversa' | 'pedidos' | 'config'>('conversa');
+  const [aba, setAba] = useState<'conversa' | 'rotinas' | 'pedidos' | 'config'>('conversa');
+  const [sel, setSel] = useState<string | null>(null);
   const estado = useQuery({ queryKey: ['assistente', 'estado'], queryFn: () => api<Estado>('/assistente/estado') });
-  const abas: ['conversa' | 'pedidos' | 'config', string][] = [['conversa', 'Conversa'], ['pedidos', 'Pedidos']];
+  const abas: ['conversa' | 'rotinas' | 'pedidos' | 'config', string][] = [['conversa', 'Conversa'], ['rotinas', 'Rotinas'], ['pedidos', 'Pedidos']];
   if (estado.data?.podeConfigurar) abas.push(['config', 'Configurar']);
   return (
     <>
@@ -90,15 +96,14 @@ export function Assistente() {
       <Abas abas={abas} ativa={aba} mudar={setAba} />
       {estado.isLoading ? <Carregando /> : !estado.data?.ligado ? (
         <div className="aviso alerta">A inteligência artificial não está ligada. Cole a chave do Claude em Configurações › Integrações › Inteligência artificial.</div>
-      ) : aba === 'conversa' ? <Conversas estado={estado.data} /> : aba === 'pedidos' ? <Pedidos podeMudar={estado.data.podeConfigurar} /> : <Configurar />}
+      ) : aba === 'conversa' ? <Conversas estado={estado.data} sel={sel} setSel={setSel} /> : aba === 'rotinas' ? <Rotinas abrir={(id) => { setSel(id); setAba('conversa'); }} /> : aba === 'pedidos' ? <Pedidos podeMudar={estado.data.podeConfigurar} /> : <Configurar />}
     </>
   );
 }
 
-function Conversas({ estado }: { estado: Estado }) {
+function Conversas({ estado, sel, setSel }: { estado: Estado; sel: string | null; setSel: (id: string | null) => void }) {
   const qc = useQueryClient();
   const lista = useQuery({ queryKey: ['assistente', 'sessoes'], queryFn: () => api<{ id: string; titulo: string; ocupada: boolean; atualizadoEm: string }[]>('/assistente/sessoes') });
-  const [sel, setSel] = useState<string | null>(null);
   const nova = useMutation({ mutationFn: () => api<{ id: string }>('/assistente/sessoes', { corpo: {} }), onSuccess: (s) => { setSel(s.id); qc.invalidateQueries({ queryKey: ['assistente', 'sessoes'] }); } });
   const atual = sel ?? lista.data?.[0]?.id ?? null;
   const apagar = useMutation({
@@ -353,6 +358,51 @@ function Microfone({ desativado, aoTranscrever }: { desativado: boolean; aoTrans
         {transcrevendo ? '…' : gravando ? '■ Parar' : '🎤 Falar'}
       </button>
       {erro != null && <Erro erro={erro} />}
+    </div>
+  );
+}
+
+interface Rotina { id: string; titulo: string; instrucao: string; quando: string; ativa: boolean; proximaEm: string; ultimaEm: string | null; ultimaSessaoId: string | null; ultimoErro: string | null; emails: string[] }
+
+/** Agentes agendados: rodam sozinhos no horário ou a cada X tempo. Criados pela conversa ("todo dia às 8h…"). */
+function Rotinas({ abrir }: { abrir: (sessaoId: string) => void }) {
+  const qc = useQueryClient();
+  const lista = useQuery({ queryKey: ['assistente', 'rotinas'], queryFn: () => api<Rotina[]>('/assistente/rotinas'), refetchInterval: 15_000 });
+  const atualizar = () => { qc.invalidateQueries({ queryKey: ['assistente', 'rotinas'] }); qc.invalidateQueries({ queryKey: ['assistente', 'sessoes'] }); };
+  const acao = useMutation({
+    mutationFn: (d: { r: Rotina; o: 'rodar' | 'duplicar' | 'pausar' | 'retomar' | 'excluir' }) =>
+      d.o === 'rodar' ? api(`/assistente/rotinas/${d.r.id}/executar`, { corpo: {} })
+        : d.o === 'duplicar' ? api(`/assistente/rotinas/${d.r.id}/duplicar`, { corpo: {} })
+          : d.o === 'excluir' ? api(`/assistente/rotinas/${d.r.id}`, { metodo: 'DELETE' })
+            : api(`/assistente/rotinas/${d.r.id}`, { metodo: 'PATCH', corpo: { ativa: d.o === 'retomar' } }),
+    onSuccess: atualizar,
+  });
+  if (lista.isLoading) return <Carregando />;
+  if (!lista.data?.length) return <div className="cartao vazio">Nenhuma rotina ainda. Peça na conversa, por exemplo: “todo dia às 8h me manda por e-mail os inadimplentes” ou “de hora em hora, das 8h às 18h, me avise se entrou candidata nova”.</div>;
+  return (
+    <div className="coluna">
+      {lista.data.map((r) => (
+        <div key={r.id} className={`cartao assistente-rotina ${r.ativa ? '' : 'pausada'}`}>
+          <div className="assistente-acao-topo">
+            <div><b>{r.titulo}</b><div className="muted">{r.quando}{r.emails.length ? ` · e-mail para ${r.emails.join(', ')}` : ''}</div></div>
+            <span className={`etiqueta ${r.ativa ? 'ok' : 'neutra'}`}>{r.ativa ? 'Ativa' : 'Pausada'}</span>
+          </div>
+          <p className="assistente-texto">{r.instrucao}</p>
+          <div className="muted" style={{ fontSize: 13 }}>
+            {r.ativa && <>Próxima: {dataHora(r.proximaEm)} · </>}
+            {r.ultimaEm ? <>Última: {dataHora(r.ultimaEm)}{r.ultimaSessaoId && <> · <button className="link-texto" onClick={() => abrir(r.ultimaSessaoId!)}>ver o que ele fez</button></>}</> : 'Ainda não rodou'}
+          </div>
+          {r.ultimoErro && <div className="aviso alerta" style={{ marginTop: 8 }}>{r.ultimoErro}</div>}
+          <div className="acoes-linha">
+            <button className="botao pequeno" disabled={acao.isPending} onClick={() => acao.mutate({ r, o: 'rodar' })}>Rodar agora</button>
+            <button className="botao claro pequeno" disabled={acao.isPending} onClick={() => acao.mutate({ r, o: 'duplicar' })}>Duplicar</button>
+            <button className="botao claro pequeno" disabled={acao.isPending} onClick={() => acao.mutate({ r, o: r.ativa ? 'pausar' : 'retomar' })}>{r.ativa ? 'Pausar' : 'Retomar'}</button>
+            <button className="botao perigo pequeno" disabled={acao.isPending} onClick={() => window.confirm(`Excluir a rotina "${r.titulo}"?`) && acao.mutate({ r, o: 'excluir' })}>Excluir</button>
+          </div>
+        </div>
+      ))}
+      {acao.error && <Erro erro={acao.error} />}
+      <p className="muted">Para mudar horário, intervalo, dias ou o que a rotina faz, peça na conversa (ex.: “muda a rotina dos inadimplentes para dias úteis às 7h30”). A cópia nasce pausada para você ajustar.</p>
     </div>
   );
 }

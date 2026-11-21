@@ -232,6 +232,13 @@
       "when": 1795296374039,
       "tag": "0032_assistente",
       "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1795301703773,
+      "tag": "0033_assistente_rotinas",
+      "breakpoints": true
     }
   ]
 }
