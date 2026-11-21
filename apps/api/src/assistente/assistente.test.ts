@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { CANCELA, CONFIRMA, montarHistorico, resumoFinal } from './assistente.service';
+import { CANCELA, CONFIRMA, montarHistorico, paraFala, resumoFinal } from './assistente.service';
 
 describe('confirmação por voz', () => {
   it('entende "pode" e variações como confirmação', () => {
@@ -70,5 +70,11 @@ describe('resumoFinal', () => {
   it('resume o envio em lote', () => {
     expect(resumoFinal({ enviados: 21, naoEnviados: 2, falhas: [{ nome: 'Ana', erro: 'Sem telefone' }, { nome: 'Bia', erro: 'Número inválido' }] })).toContain('21 mensagem(ns) enviada(s), 2 não enviada(s)');
     expect(resumoFinal({ enviados: 5, falhas: [] })).toBe('Terminei: 5 mensagem(ns) enviada(s).');
+  });
+});
+
+describe('paraFala', () => {
+  it('não lê links, marcadores nem símbolos de formatação', () => {
+    expect(paraFala('Resumo:\n- **Vendas**: R$ 1.200,00\n- Boleto: https://asaas.com/x/1\n\nQuer mais?')).toBe('Resumo:, Vendas: R$ 1.200,00, Boleto: o link. Quer mais?');
   });
 });

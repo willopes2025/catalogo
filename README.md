@@ -102,8 +102,8 @@ Os módulos da Versão 2 aparecem no menu marcados com “V2”.
 
 | Parte | O que faz |
 |---|---|
-| **Conversa** | A equipe escreve ou fala (microfone → transcrição) e o assistente responde; botão “Ouvir respostas” lê em voz alta (voz do navegador). Cada pessoa vê só as conversas dela. |
-| **Ferramentas** | Consulta inadimplentes, pessoas, ficha, maletas atrasadas, vendas e o **resumo do negócio** comparado ao período anterior; envia WhatsApp (um ou em lote, com `{primeiro_nome}`, `{valor_atualizado}`, `{maior_atraso}`…), emite 2ª via pelo Asaas e registra promessa. Usa os mesmos serviços e permissões das telas. |
+| **Conversa** | A equipe escreve ou fala (microfone → transcrição) e o assistente responde; botão “Ouvir respostas” lê em voz alta com voz neural (ElevenLabs, se tiver a chave; senão OpenAI), escolhida em Assistente › Configurar. Cada pessoa vê e exclui só as conversas dela. |
+| **Ferramentas** | Consulta inadimplentes, pessoas, ficha, maletas atrasadas, vendas e o **resumo do negócio** comparado ao período anterior; consulta e **altera as regras** do consignado e da cobrança (multa, juros, carência, comissões, limites, descontos); envia WhatsApp (um ou em lote, com `{primeiro_nome}`, `{valor_atualizado}`, `{maior_atraso}`…), emite 2ª via pelo Asaas e registra promessa. Usa os mesmos serviços e permissões das telas. |
 | **Confirmação** | Mensagem, cobrança e envio em lote nunca saem direto: aparece um cartão com a prévia de cada mensagem e quem fica de fora; executa no botão **Confirmar** ou falando “pode”. Envio em lote roda em segundo plano, espaçado (`ASSISTENTE_INTERVALO_LOTE_S`, padrão 20 s), com progresso na tela e registro no histórico de cobrança. |
 | **Pedidos** | O que o sistema ainda não faz vira pedido (configuração ou desenvolvimento) com especificação e plano, e abre um chamado de melhoria para a Wide. Aba Pedidos acompanha a situação. |
 | **Configurar** | Nome do assistente e orientações da empresa. Modelo: `IA_MODELO_ASSISTENTE` (padrão: o mesmo do agente). Para outros grupos usarem, marque o módulo **Assistente** em Configurações › Grupos. |

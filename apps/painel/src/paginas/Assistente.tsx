@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { api } from '../api';
+import { api, lerSessao } from '../api';
 import { dataHora } from '../formato';
 import { Abas, Campo, Carregando, Erro, Topo } from '../componentes/ui';
 import './assistente.css';
@@ -8,7 +8,7 @@ import './assistente.css';
 interface Mensagem { id: string; papel: 'user' | 'assistant'; texto: string; origem: string | null; criadoEm: string }
 interface Acao { id: string; ferramenta: string; risco: string; status: string; resumo: string | null; previa: any; resultado: any; erro: string | null; progresso: { feitos: number; total: number; falhas: number } | null; criadoEm: string }
 interface Sessao { id: string; titulo: string; ocupada: boolean; mensagens: Mensagem[]; acoes: Acao[] }
-interface Estado { ligado: boolean; voz: boolean; nome: string; ferramentas: { nome: string; risco: string }[]; podeConfigurar: boolean }
+interface Estado { ligado: boolean; voz: boolean; vozResposta: 'elevenlabs' | 'openai' | 'navegador'; nome: string; ferramentas: { nome: string; risco: string }[]; podeConfigurar: boolean }
 
 const ROTULO: Record<string, string> = {
   consultar_inadimplentes: 'Consultou os inadimplentes',
@@ -24,12 +24,14 @@ const ROTULO: Record<string, string> = {
   registrar_promessa: 'Registrou promessa de pagamento',
   registrar_pedido: 'Registrou pedido para a equipe',
   listar_pedidos: 'Consultou os pedidos',
+  ver_regras: 'Consultou as regras',
+  alterar_regras: 'Alterar regras',
 };
 const SUGESTOES = ['Como foi o mês até agora, comparado ao mês passado?', 'Quem são os inadimplentes acima de 30 dias?', 'Quais maletas estão atrasadas?', 'Manda um WhatsApp cobrando os inadimplentes com a 2ª via'];
 const STATUS_PEDIDO: Record<string, [string, string]> = { novo: ['alerta', 'Novo'], em_analise: ['alerta', 'Em análise'], em_andamento: ['marrom', 'Em andamento'], pronto: ['ok', 'Pronto'], recusado: ['neutra', 'Recusado'] };
 
-/** Lê em voz alta (voz do navegador, em português). */
-function falar(texto: string) {
+/** Voz do navegador: só quando não há ElevenLabs nem OpenAI (ou se a voz do servidor falhar). */
+function falarNoNavegador(texto: string) {
   try {
     const s = window.speechSynthesis;
     if (!s) return;
@@ -41,6 +43,39 @@ function falar(texto: string) {
     s.speak(u);
   } catch {
     /* navegador sem voz */
+  }
+}
+
+let tocando: HTMLAudioElement | null = null;
+/** Para o que estiver falando. */
+export function calar() {
+  tocando?.pause();
+  tocando = null;
+  window.speechSynthesis?.cancel();
+}
+
+/** Fala a resposta na voz configurada (ElevenLabs ou OpenAI, gerada no servidor). */
+async function falar(texto: string, modo: Estado['vozResposta'] = 'navegador', exemplo?: { provedor: string; voz: string }) {
+  calar();
+  if (modo === 'navegador' && !exemplo) return falarNoNavegador(texto);
+  try {
+    const sessao = lerSessao();
+    const r = await fetch(`${import.meta.env.VITE_API_URL ?? '/api'}/assistente/falar`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...(sessao ? { authorization: `Bearer ${sessao.token}` } : {}) },
+      body: JSON.stringify({ texto, ...(exemplo ?? {}) }),
+    });
+    if (!r.ok) throw new Error(((await r.json().catch(() => ({}))) as { mensagem?: string }).mensagem ?? 'Falha na voz');
+    const url = URL.createObjectURL(await r.blob());
+    const a = new Audio(url);
+    a.onended = () => URL.revokeObjectURL(url);
+    tocando = a;
+    await a.play().catch(() => {
+      throw new Error('O navegador não conseguiu tocar o áudio. Clique na página e tente de novo.');
+    });
+  } catch (e) {
+    if (exemplo) throw e;
+    falarNoNavegador(texto);
   }
 }
 
@@ -66,16 +101,30 @@ function Conversas({ estado }: { estado: Estado }) {
   const [sel, setSel] = useState<string | null>(null);
   const nova = useMutation({ mutationFn: () => api<{ id: string }>('/assistente/sessoes', { corpo: {} }), onSuccess: (s) => { setSel(s.id); qc.invalidateQueries({ queryKey: ['assistente', 'sessoes'] }); } });
   const atual = sel ?? lista.data?.[0]?.id ?? null;
+  const apagar = useMutation({
+    mutationFn: (id: string) => api(`/assistente/sessoes/${id}`, { metodo: 'DELETE' }),
+    onSuccess: (_r, id) => { if (id === atual) setSel(null); qc.invalidateQueries({ queryKey: ['assistente', 'sessoes'] }); qc.removeQueries({ queryKey: ['assistente', 'sessao', id] }); },
+  });
   return (
     <div className="assistente">
       <aside className="assistente-lista">
         <button className="botao" onClick={() => nova.mutate()} disabled={nova.isPending}>Nova conversa</button>
         {lista.data?.map((s) => (
-          <button key={s.id} className={`assistente-item ${s.id === atual ? 'ativo' : ''}`} onClick={() => setSel(s.id)}>
+          <div key={s.id} className={`assistente-item ${s.id === atual ? 'ativo' : ''}`} onClick={() => setSel(s.id)} role="button" tabIndex={0} onKeyDown={(e) => e.key === 'Enter' && setSel(s.id)}>
             <span>{s.titulo}</span>
             <small className="muted">{s.ocupada ? 'trabalhando…' : dataHora(s.atualizadoEm)}</small>
-          </button>
+            <button
+              className="assistente-excluir"
+              title="Excluir conversa"
+              aria-label={`Excluir a conversa ${s.titulo}`}
+              disabled={s.ocupada || apagar.isPending}
+              onClick={(e) => { e.stopPropagation(); if (window.confirm(`Excluir a conversa "${s.titulo}"? Não dá para desfazer.`)) apagar.mutate(s.id); }}
+            >
+              🗑
+            </button>
+          </div>
         ))}
+        {apagar.error && <Erro erro={apagar.error} />}
       </aside>
       {atual ? <Chat key={atual} id={atual} estado={estado} aoApagar={() => setSel(null)} /> : (
         <div className="cartao vazio">
@@ -139,8 +188,8 @@ function Chat({ id, estado, aoApagar }: { id: string; estado: Estado; aoApagar: 
     }
     const novas = respostas.filter((m) => !faladas.current!.has(m.id));
     novas.forEach((m) => faladas.current!.add(m.id));
-    if (ouvir && novas.length) falar(novas.map((m) => m.texto).join('. '));
-  }, [s.data, ouvir]);
+    if (ouvir && novas.length) void falar(novas.map((m) => m.texto).join('. '), estado.vozResposta);
+  }, [s.data, ouvir, estado.vozResposta]);
 
   const mandar = (t: string, origem: 'texto' | 'voz') => {
     if (!t.trim() || s.data?.ocupada) return;
@@ -155,9 +204,9 @@ function Chat({ id, estado, aoApagar }: { id: string; estado: Estado; aoApagar: 
         <b>{s.data.titulo}</b>
         <span className="espaco" />
         <label className="muted assistente-ouvir">
-          <input type="checkbox" checked={ouvir} onChange={(e) => { setOuvir(e.target.checked); localStorage.setItem('aritana.assistente.ouvir', e.target.checked ? '1' : '0'); if (!e.target.checked) window.speechSynthesis?.cancel(); }} /> Ouvir respostas
+          <input type="checkbox" checked={ouvir} onChange={(e) => { setOuvir(e.target.checked); localStorage.setItem('aritana.assistente.ouvir', e.target.checked ? '1' : '0'); if (!e.target.checked) calar(); }} /> Ouvir respostas
         </label>
-        <button className="botao claro pequeno" onClick={() => apagar.mutate()} disabled={s.data.ocupada}>Apagar</button>
+        <button className="botao claro pequeno" onClick={() => window.confirm('Excluir esta conversa? Não dá para desfazer.') && apagar.mutate()} disabled={s.data.ocupada}>Excluir conversa</button>
       </div>
       <div className="assistente-mensagens">
         {linha.length === 0 && (
@@ -169,7 +218,7 @@ function Chat({ id, estado, aoApagar }: { id: string; estado: Estado; aoApagar: 
           <div key={x.m.id} className={`fala ${x.m.papel === 'user' ? 'minha' : 'dele'}`}>
             {x.m.origem === 'voz' && <span className="muted" title="Falado">🎤 </span>}
             {x.m.texto}
-            {x.m.papel === 'assistant' && <button className="assistente-falar" title="Ouvir" onClick={() => falar(x.m.texto)}>🔊</button>}
+            {x.m.papel === 'assistant' && <button className="assistente-falar" title="Ouvir" onClick={() => void falar(x.m.texto, estado.vozResposta)}>🔊</button>}
           </div>
         ) : (
           <CartaoAcao key={x.a.id} a={x.a} decidir={(confirmar) => decidir.mutate({ acaoId: x.a.id, confirmar })} ocupado={decidir.isPending} />
@@ -351,24 +400,74 @@ function Pedidos({ podeMudar }: { podeMudar: boolean }) {
   );
 }
 
+interface ConfigTela { nome: string; instrucoes: string; voz: 'automatica' | 'elevenlabs' | 'openai' | 'navegador'; vozElevenlabs: string; vozOpenai: string }
+interface ConfigResposta extends ConfigTela { opcoes: { elevenlabs: { id: string; nome: string }[]; openai: { id: string; nome: string }[] }; chaves: { elevenlabs: boolean; openai: boolean } }
+
 function Configurar() {
   const qc = useQueryClient();
-  const cfg = useQuery({ queryKey: ['assistente', 'config'], queryFn: () => api<{ nome: string; instrucoes: string }>('/assistente/config') });
-  const [f, setF] = useState<{ nome: string; instrucoes: string } | null>(null);
-  const salvar = useMutation({ mutationFn: (d: { nome: string; instrucoes: string }) => api('/assistente/config', { metodo: 'PUT', corpo: d }), onSuccess: () => { qc.invalidateQueries({ queryKey: ['assistente'] }); } });
+  const cfg = useQuery({ queryKey: ['assistente', 'config'], queryFn: () => api<ConfigResposta>('/assistente/config') });
+  const [f, setF] = useState<ConfigTela | null>(null);
+  const [outra, setOutra] = useState(false);
+  const [exemplo, setExemplo] = useState<{ tocando: boolean; erro: unknown }>({ tocando: false, erro: null });
+  const salvar = useMutation({ mutationFn: (d: ConfigTela) => api('/assistente/config', { metodo: 'PUT', corpo: d }), onSuccess: () => { qc.invalidateQueries({ queryKey: ['assistente'] }); } });
   if (cfg.isLoading) return <Carregando />;
-  const v = f ?? cfg.data!;
+  const c = cfg.data!;
+  const v: ConfigTela = f ?? { nome: c.nome, instrucoes: c.instrucoes, voz: c.voz, vozElevenlabs: c.vozElevenlabs, vozOpenai: c.vozOpenai };
+  const provedor = v.voz === 'automatica' ? (c.chaves.elevenlabs ? 'elevenlabs' : c.chaves.openai ? 'openai' : 'navegador') : v.voz;
+  const personalizada = outra || !c.opcoes.elevenlabs.some((o) => o.id === v.vozElevenlabs);
+  const ouvirExemplo = async () => {
+    setExemplo({ tocando: true, erro: null });
+    try {
+      const texto = `Oi! Eu sou ${v.nome || 'o assistente'}. Este mês as vendas subiram doze por cento em relação ao mês passado, e temos vinte e três pessoas com parcelas em atraso. Quer que eu mande uma mensagem para elas?`;
+      if (provedor === 'navegador') falarNoNavegador(texto);
+      else await falar(texto, provedor, { provedor, voz: provedor === 'elevenlabs' ? v.vozElevenlabs : v.vozOpenai });
+      setExemplo({ tocando: false, erro: null });
+    } catch (e) {
+      setExemplo({ tocando: false, erro: e });
+    }
+  };
   return (
     <div className="cartao form">
       <Campo rotulo="Nome do assistente" ajuda="Como ele se apresenta para a equipe (ex.: Cláudio)."><input value={v.nome} onChange={(e) => setF({ ...v, nome: e.target.value })} /></Campo>
       <Campo rotulo="Orientações da empresa" className="l4" ajuda="Tom, prioridades e o que ele nunca deve fazer. Ex.: “Em cobrança, sempre ofereça a 2ª via com o vencimento para daqui a 3 dias.”">
-        <textarea rows={8} value={v.instrucoes} onChange={(e) => setF({ ...v, instrucoes: e.target.value })} />
+        <textarea rows={6} value={v.instrucoes} onChange={(e) => setF({ ...v, instrucoes: e.target.value })} />
       </Campo>
+      <div className="secao l4">Voz das respostas</div>
+      <Campo rotulo="Quem fala">
+        <select value={v.voz} onChange={(e) => setF({ ...v, voz: e.target.value as ConfigTela['voz'] })}>
+          <option value="automatica">Automática (a melhor disponível)</option>
+          <option value="elevenlabs" disabled={!c.chaves.elevenlabs}>ElevenLabs (mais natural){c.chaves.elevenlabs ? '' : ' · falta a chave'}</option>
+          <option value="openai" disabled={!c.chaves.openai}>OpenAI{c.chaves.openai ? '' : ' · falta a chave'}</option>
+          <option value="navegador">Voz do navegador (grátis, robótica)</option>
+        </select>
+      </Campo>
+      {provedor === 'elevenlabs' && (
+        <Campo rotulo="Voz da ElevenLabs" className="l2" ajuda={personalizada ? 'Cole o Voice ID (ElevenLabs › Voices › a voz › copiar ID). Se der "voz não disponível", adicione a voz em My Voices na sua conta.' : undefined}>
+          {personalizada ? (
+            <div className="acoes-linha"><input value={v.vozElevenlabs} onChange={(e) => setF({ ...v, vozElevenlabs: e.target.value.trim() })} placeholder="Voice ID" /><button className="botao claro pequeno" onClick={() => { setOutra(false); setF({ ...v, vozElevenlabs: c.opcoes.elevenlabs[0].id }); }}>Voltar à lista</button></div>
+          ) : (
+            <select value={v.vozElevenlabs} onChange={(e) => (e.target.value === '__outra' ? setOutra(true) : setF({ ...v, vozElevenlabs: e.target.value }))}>
+              {c.opcoes.elevenlabs.map((o) => <option key={o.id} value={o.id}>{o.nome}</option>)}
+              <option value="__outra">Outra voz (colar o ID)…</option>
+            </select>
+          )}
+        </Campo>
+      )}
+      {provedor === 'openai' && (
+        <Campo rotulo="Voz da OpenAI" className="l2">
+          <select value={v.vozOpenai} onChange={(e) => setF({ ...v, vozOpenai: e.target.value })}>{c.opcoes.openai.map((o) => <option key={o.id} value={o.id}>{o.nome}</option>)}</select>
+        </Campo>
+      )}
+      <div className="l4 acoes-linha">
+        <button className="botao claro" disabled={exemplo.tocando} onClick={ouvirExemplo}>{exemplo.tocando ? 'Gerando…' : '🔊 Ouvir exemplo'}</button>
+        {!c.chaves.elevenlabs && <small className="muted">Para a voz mais natural, cole a chave da ElevenLabs em Configurações › Integrações › Inteligência artificial.</small>}
+      </div>
+      {exemplo.erro != null && <div className="l4"><Erro erro={exemplo.erro} /></div>}
       <div className="l4">
         <p className="muted">Ele só faz o que o usuário logado pode fazer (as mesmas permissões das telas). Mensagens, cobranças e envios em lote sempre passam pela confirmação de quem pediu. Para mudar o espaço entre mensagens do envio em lote, use a chave ASSISTENTE_INTERVALO_LOTE_S (padrão: 20 segundos).</p>
         {salvar.error && <Erro erro={salvar.error} />}
         {salvar.isSuccess && !f && <div className="aviso ok">Salvo.</div>}
-        <button className="botao" disabled={salvar.isPending || !v.nome.trim()} onClick={() => salvar.mutate(v, { onSuccess: () => setF(null) })}>Salvar</button>
+        <button className="botao" disabled={salvar.isPending || !v.nome.trim()} onClick={() => salvar.mutate(v, { onSuccess: () => { setF(null); setOutra(false); } })}>Salvar</button>
       </div>
     </div>
   );

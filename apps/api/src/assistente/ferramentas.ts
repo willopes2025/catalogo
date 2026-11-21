@@ -12,6 +12,8 @@ import { CobrancaConfigService } from '../cobranca/cobranca-config.service';
 import { EmailService } from '../integracoes/email.service';
 import { SegredosService } from '../segredos/segredos.service';
 import { hoje } from '../maletas/maletas.service';
+import { ConfiguracoesService } from '../configuracoes/configuracoes.service';
+import { regrasSchema } from '../configuracoes/configuracoes.controller';
 import type { DefinicaoFerramenta } from '../ia/ia.service';
 
 /**
@@ -76,6 +78,7 @@ export class FerramentasAssistente {
     private readonly auditoria: AuditoriaService,
     private readonly email: EmailService,
     private readonly segredos: SegredosService,
+    private readonly configuracoes: ConfiguracoesService,
   ) {
     this.lista = [
       this.consultarInadimplentes(),
@@ -89,6 +92,8 @@ export class FerramentasAssistente {
       this.enviarWhatsappEmLote(),
       this.emitirSegundaVia(),
       this.registrarPromessa(),
+      this.verRegras(),
+      this.alterarRegras(),
       this.registrarPedido(),
       this.listarPedidos(),
     ];
@@ -560,6 +565,130 @@ export class FerramentasAssistente {
       executar: async (e: z.infer<typeof schema>, ctx) => {
         const c = await this.cobranca.registrarContato(await this.cobranca.escopo(ctx.usuario), ctx.usuario, e.pessoaId, { tipo: 'nota', texto: `Promessa de pagamento registrada pelo assistente${e.observacao ? `: ${e.observacao}` : '.'}`, promessaData: e.data, promessaValor: e.valor ? Math.round(e.valor * 100) : null });
         return { registrada: true, id: c.id, data: dataBR(e.data), valor: e.valor ? formatarReais(Math.round(e.valor * 100)) : null };
+      },
+    };
+  }
+
+  // ───────────── Configurações (regras do consignado e da cobrança) ─────────────
+
+  /** Campos que o assistente pode mudar, em unidades de gente (% e R$), com onde ficam guardados. */
+  private static readonly CAMPOS_REGRAS: Record<'consignado' | 'cobranca', Record<string, { rotulo: string; chave: string; unidade: 'pct' | 'reais' | 'dias' | 'numero' | 'simnao' }>> = {
+    consignado: {
+      multa: { rotulo: 'Multa por atraso no acerto', chave: 'multaAtrasoPb', unidade: 'pct' },
+      jurosMes: { rotulo: 'Juros ao mês no acerto', chave: 'jurosMesPb', unidade: 'pct' },
+      carenciaDias: { rotulo: 'Carência antes de multa e juros (acerto)', chave: 'carenciaDias', unidade: 'dias' },
+      comissaoAvista: { rotulo: 'Comissão da revendedora à vista', chave: 'comissaoAvistaPb', unidade: 'pct' },
+      comissaoPrazo: { rotulo: 'Comissão da revendedora a prazo', chave: 'comissaoPrazoPb', unidade: 'pct' },
+      prazoAcertoDias: { rotulo: 'Prazo do acerto', chave: 'prazoAcertoDias', unidade: 'dias' },
+      diasParaBloquear: { rotulo: 'Dias de atraso para bloquear nova maleta (0 = só avisa)', chave: 'diasParaBloquear', unidade: 'dias' },
+      limiteInicial: { rotulo: 'Limite de crédito da primeira maleta', chave: 'limiteInicial', unidade: 'reais' },
+      limiteMaximo: { rotulo: 'Limite de crédito máximo', chave: 'limiteMaximo', unidade: 'reais' },
+      aumentoLimite: { rotulo: 'Aumento do limite após acerto em dia com meta batida', chave: 'aumentoLimitePb', unidade: 'pct' },
+      metaMinimaVendida: { rotulo: 'Mínimo vendido da maleta para contar como meta batida', chave: 'metaMinimaVendidaPb', unidade: 'pct' },
+      maletasSimultaneas: { rotulo: 'Maletas abertas ao mesmo tempo', chave: 'maletasSimultaneas', unidade: 'numero' },
+      parcelasMaximas: { rotulo: 'Parcelas máximas no acerto', chave: 'parcelasMaximas', unidade: 'numero' },
+      perdidaPeloCusto: { rotulo: 'Peça perdida cobrada pelo custo (não = pelo preço de venda)', chave: 'perdidaPeloCusto', unidade: 'simnao' },
+    },
+    cobranca: {
+      multa: { rotulo: 'Multa das parcelas vencidas (cobrança)', chave: 'multaPb', unidade: 'pct' },
+      jurosMes: { rotulo: 'Juros ao mês das parcelas vencidas (cobrança)', chave: 'jurosMesPb', unidade: 'pct' },
+      carenciaDias: { rotulo: 'Carência antes de multa e juros (cobrança)', chave: 'diasCarencia', unidade: 'dias' },
+      descontoMax: { rotulo: 'Desconto máximo no acordo (quem cobra)', chave: 'descontoMaxPb', unidade: 'pct' },
+      descontoMaxGestor: { rotulo: 'Desconto máximo no acordo (gestão)', chave: 'descontoMaxGestorPb', unidade: 'pct' },
+      parcelasMax: { rotulo: 'Parcelas máximas no acordo', chave: 'parcelasMax', unidade: 'numero' },
+      diasQuebraAcordo: { rotulo: 'Dias de atraso de parcela que quebram o acordo', chave: 'diasQuebraAcordo', unidade: 'dias' },
+    },
+  };
+
+  private mostrarValor(unidade: string, v: unknown) {
+    if (unidade === 'pct') return `${(Number(v) / 100).toLocaleString('pt-BR', { maximumFractionDigits: 2 })}%`;
+    if (unidade === 'reais') return formatarReais(Number(v));
+    if (unidade === 'dias') return `${v} dia(s)`;
+    if (unidade === 'simnao') return v ? 'sim' : 'não';
+    return String(v);
+  }
+  private paraGuardar(unidade: string, v: number | boolean) {
+    if (unidade === 'pct') return Math.round(Number(v) * 100);
+    if (unidade === 'reais') return Math.round(Number(v) * 100);
+    if (unidade === 'simnao') return !!v;
+    return Math.round(Number(v));
+  }
+  private podeArea(u: UsuarioLogado, area: 'consignado' | 'cobranca') {
+    return area === 'consignado' ? temPermissao(u.permissoes, 'configuracoes', 'editar') : temPermissao(u.permissoes, 'cobranca', 'excluir');
+  }
+
+  private verRegras(): Ferramenta {
+    return {
+      nome: 'ver_regras',
+      descricao: 'Mostra as regras configuradas: do consignado (acerto da maleta: multa, juros, carência, comissões, prazo, limites de crédito, bloqueio) e da cobrança das parcelas vencidas (multa, juros, carência, descontos e parcelas do acordo). Use antes de alterar.',
+      schema: z.object({}),
+      risco: 'leitura',
+      permitido: algum(pode('configuracoes', 'ver'), pode('cobranca', 'ver')),
+      executar: async () => {
+        const consignado = (await this.configuracoes.regras()) as unknown as Record<string, unknown>;
+        const cobranca = (await this.cobrancaConfig.obter()) as unknown as Record<string, unknown>;
+        const listar = (area: 'consignado' | 'cobranca', v: Record<string, unknown>) => Object.entries(FerramentasAssistente.CAMPOS_REGRAS[area]).map(([campo, c]) => ({ campo, rotulo: c.rotulo, valor: this.mostrarValor(c.unidade, v[c.chave]) }));
+        return { consignado: listar('consignado', consignado), cobranca: listar('cobranca', cobranca), observacao: 'Multa e juros existem nos dois lugares: no acerto da maleta (consignado) e nas parcelas em cobrança.' };
+      },
+    };
+  }
+
+  private alterarRegras(): Ferramenta {
+    const schema = z.object({
+      area: z.enum(['consignado', 'cobranca']).describe('consignado = acerto da maleta; cobranca = parcelas vencidas'),
+      mudancas: z
+        .record(z.string(), z.union([z.number(), z.boolean()]))
+        .describe('Campo → novo valor, em unidades de gente: percentuais em % (2 = 2%), valores em reais (500 = R$ 500,00), dias e quantidades em número, sim/não em true/false. Campos de ver_regras.'),
+    });
+    const montar = async (e: z.infer<typeof schema>) => {
+      const campos = FerramentasAssistente.CAMPOS_REGRAS[e.area];
+      const desconhecidos = Object.keys(e.mudancas).filter((k) => !campos[k]);
+      if (desconhecidos.length) throw new BadRequestException(`Campo(s) que não existem em ${e.area}: ${desconhecidos.join(', ')}. Use: ${Object.keys(campos).join(', ')}.`);
+      if (!Object.keys(e.mudancas).length) throw new BadRequestException('Diga o que mudar.');
+      const atual = (e.area === 'consignado' ? await this.configuracoes.regras() : await this.cobrancaConfig.obter()) as unknown as Record<string, unknown>;
+      const novo: Record<string, unknown> = { ...atual };
+      const linhas: { rotulo: string; antes: string; depois: string }[] = [];
+      for (const [k, v] of Object.entries(e.mudancas)) {
+        const c = campos[k];
+        if (c.unidade === 'simnao' ? typeof v !== 'boolean' : typeof v !== 'number' || !Number.isFinite(v) || v < 0) throw new BadRequestException(`Valor inválido para ${c.rotulo}.`);
+        novo[c.chave] = this.paraGuardar(c.unidade, v);
+        linhas.push({ rotulo: c.rotulo, antes: this.mostrarValor(c.unidade, atual[c.chave]), depois: this.mostrarValor(c.unidade, novo[c.chave]) });
+      }
+      // Mesmas validações das telas de configuração.
+      if (e.area === 'consignado') {
+        const r = regrasSchema.safeParse(novo);
+        if (!r.success) throw new BadRequestException(`Valor fora do permitido: ${r.error.issues.map((i) => i.path.join('.')).join(', ')}.`);
+        if (Number(novo.limiteInicial) > Number(novo.limiteMaximo)) throw new BadRequestException('O limite inicial não pode ser maior que o máximo.');
+      } else {
+        if (Number(novo.multaPb) > 1000) throw new BadRequestException('A multa máxima aceita na cobrança é de 10%.');
+        if (Number(novo.jurosMesPb) > 1000) throw new BadRequestException('Os juros máximos aceitos na cobrança são de 10% ao mês.');
+        if (Number(novo.diasCarencia) > 60 || Number(novo.parcelasMax) < 1 || Number(novo.parcelasMax) > 60 || Number(novo.diasQuebraAcordo) < 1 || Number(novo.diasQuebraAcordo) > 120 || Number(novo.descontoMaxPb) > 10000 || Number(novo.descontoMaxGestorPb) > 10000) throw new BadRequestException('Valor fora do permitido na configuração da cobrança.');
+      }
+      return { atual, novo, linhas };
+    };
+    return {
+      nome: 'alterar_regras',
+      descricao: 'Altera regras do consignado (acerto da maleta) ou da cobrança (parcelas vencidas): multa, juros, carência, comissões, prazo, limites, descontos e parcelas. Se a pessoa falar de multa ou juros sem dizer onde, pergunte se é no acerto da maleta, na cobrança das parcelas ou nos dois (aí chame uma vez para cada área). Vale para os cálculos daqui em diante.',
+      schema,
+      risco: 'confirmar',
+      permitido: algum(pode('configuracoes', 'editar'), pode('cobranca', 'excluir')),
+      preparar: async (e: z.infer<typeof schema>, ctx) => {
+        if (!this.podeArea(ctx.usuario, e.area)) return { resumo: '', impedimento: e.area === 'consignado' ? 'Só quem edita as Configurações muda as regras do consignado.' : 'Só a gestão da cobrança muda as regras da cobrança.' };
+        try {
+          const m = await montar(e);
+          return { resumo: `Alterar as regras ${e.area === 'consignado' ? 'do consignado (acerto da maleta)' : 'da cobrança (parcelas vencidas)'}: ${m.linhas.map((l) => `${l.rotulo}: ${l.antes} → ${l.depois}`).join('; ')}. Vale daqui em diante.`, previa: m.linhas.map((l) => ({ nome: l.rotulo, texto: `${l.antes} → ${l.depois}` })) };
+        } catch (err) {
+          return { resumo: '', impedimento: (err as Error).message };
+        }
+      },
+      executar: async (e: z.infer<typeof schema>, ctx) => {
+        if (!this.podeArea(ctx.usuario, e.area)) throw new BadRequestException('Sem permissão para estas regras.');
+        if (e.area === 'cobranca') this.cobranca.exigirGestor(await this.cobranca.escopo(ctx.usuario));
+        const m = await montar(e);
+        if (e.area === 'consignado') await this.configuracoes.salvarRegras(m.novo as never);
+        else await this.cobrancaConfig.salvar(m.novo as never);
+        await this.auditoria.registrar({ usuarioId: ctx.usuario.id, acao: 'editar_pelo_assistente', entidade: e.area === 'consignado' ? 'regras_consignado' : 'cobranca', dados: { mudancas: m.linhas } });
+        return { alterado: true, mudancas: m.linhas };
       },
     };
   }

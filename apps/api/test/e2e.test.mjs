@@ -2961,6 +2961,57 @@ test('Assistente: consulta inadimplentes, prepara envio em lote, confirma por vo
   assert.equal((await chamar('GET', '/assistente/sessoes')).status, 403);
   assert.equal((await chamar('GET', `/assistente/sessoes/${s.id}`)).status, 403);
   token = salvo;
+  // Configuração pela conversa: muda a multa da cobrança só depois de confirmar.
+  const multaAntes = (await ok('GET', '/cobranca/config')).multaPb;
+  await ok('POST', `/assistente/sessoes/${s.id}/mensagens`, { texto: 'muda a multa da cobrança para 5' });
+  v = await esperar(s.id, (x) => !x.ocupada);
+  const regra = v.acoes.filter((x) => x.ferramenta === 'alterar_regras').at(-1);
+  assert.equal(regra.status, 'aguardando');
+  assert.match(regra.resumo, /Multa das parcelas vencidas \(cobrança\): .*% → 5%/);
+  assert.equal((await ok('GET', '/cobranca/config')).multaPb, multaAntes, 'nada muda antes de confirmar');
+  await ok('POST', `/assistente/sessoes/${s.id}/mensagens`, { texto: 'pode', origem: 'voz' });
+  v = await esperar(s.id, (x) => !x.ocupada && x.acoes.find((y) => y.id === regra.id).status === 'concluida');
+  assert.equal((await ok('GET', '/cobranca/config')).multaPb, 500);
+  assert.equal(v.mensagens.at(-1).texto, 'Feito!');
+  // Acima do limite da tela (10%): não cria cartão, volta o motivo.
+  await ok('POST', `/assistente/sessoes/${s.id}/mensagens`, { texto: 'muda a multa da cobrança para 30' });
+  v = await esperar(s.id, (x) => !x.ocupada);
+  assert.match(v.acoes.at(-1).erro, /máxima aceita na cobrança é de 10%/);
+  // Excluir conversa.
+  const descartavel = await ok('POST', '/assistente/sessoes');
+  await ok('DELETE', `/assistente/sessoes/${descartavel.id}`);
+  assert.equal((await chamar('GET', `/assistente/sessoes/${descartavel.id}`)).status, 404);
+  // Voz: sem ElevenLabs, fala pela OpenAI; com a chave, pela ElevenLabs. Links e marcadores não são lidos.
+  const falarAudio = async (corpo) => {
+    const r = await fetch(API + '/assistente/falar', { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` }, body: JSON.stringify(corpo) });
+    return { status: r.status, tipo: r.headers.get('content-type'), corpo: r.ok ? Buffer.from(await r.arrayBuffer()).toString() : await r.json() };
+  };
+  await ok('PUT', '/integracoes/ia', { valores: { OPENAI_API_KEY: 'chave-openai-teste' } });
+  assert.equal((await ok('GET', '/assistente/estado')).vozResposta, 'openai');
+  let a = await falarAudio({ texto: 'Pronto:\n- 2ª via em https://asaas.com/b/123' });
+  assert.equal(a.status, 201);
+  assert.match(a.tipo, /audio\/mpeg/);
+  const pedidoOpenai = (await sim()).filter((r) => r.caminho === '/openai/v1/audio/speech').at(-1);
+  assert.equal(pedidoOpenai.corpo.voice, 'ash');
+  assert.equal(pedidoOpenai.corpo.input, 'Pronto:, 2ª via em o link');
+  await ok('PUT', '/integracoes/ia', { valores: { ELEVENLABS_API_KEY: 'chave-eleven-teste' } });
+  assert.equal((await ok('GET', '/assistente/estado')).vozResposta, 'elevenlabs');
+  a = await falarAudio({ texto: 'Vendas subiram 12%.' });
+  assert.equal(a.status, 201);
+  assert.equal(a.corpo, 'ID3fake-mp3-audio');
+  assert.ok((await sim()).some((r) => r.caminho.startsWith('/elevenlabs/v1/text-to-speech/ec54d9BmuMSN4IinPrjv') && r.corpo.model_id === 'eleven_multilingual_v2'));
+  // Ouvir de novo não gera de novo.
+  const antesEleven = (await sim()).filter((r) => r.caminho.startsWith('/elevenlabs')).length;
+  await falarAudio({ texto: 'Vendas subiram 12%.' });
+  assert.equal((await sim()).filter((r) => r.caminho.startsWith('/elevenlabs')).length, antesEleven);
+  // Exemplo com voz que não existe na conta: mensagem clara.
+  a = await falarAudio({ texto: 'teste', provedor: 'elevenlabs', voz: 'naoexiste12345' });
+  assert.equal(a.status, 400);
+  assert.match(a.corpo.mensagem ?? a.corpo.message, /não está disponível/);
+  // Escolher "navegador" desliga a voz do servidor.
+  await ok('PUT', '/assistente/config', { nome: 'Assistente', voz: 'navegador' });
+  assert.equal((await ok('GET', '/assistente/estado')).vozResposta, 'navegador');
+  assert.equal((await chamar('PUT', '/assistente/config', { nome: 'Assistente', vozElevenlabs: 'x y' })).status, 400);
   // Configuração: nome do assistente.
   await ok('PUT', '/assistente/config', { nome: 'Cláudio', instrucoes: 'Seja direto.' });
   assert.equal((await ok('GET', '/assistente/estado')).nome, 'Cláudio');
