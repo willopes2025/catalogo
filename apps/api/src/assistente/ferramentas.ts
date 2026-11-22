@@ -5,7 +5,7 @@ import { calcularEncargos, formatarReais, preencherTexto } from '@aritana/regras
 import { DB, type Db } from '../comum/db.module';
 import { temPermissao, type UsuarioLogado } from '../comum/auth';
 import { AuditoriaService } from '../comum/auditoria.service';
-import { assistenteAnexos, assistentePedidos, assistenteRotinas, cobrancaCarteira, chamadoMensagens, iaAgentes, chamados, crmCanais, crmTemplates, empresas, maletas, pessoas, titulos, vendas } from '../db/schema';
+import { assistenteAnexos, assistentePedidos, assistenteRotinas, cobrancaCarteira, crmContatos, crmConversas, crmMensagens, usuarios, chamadoMensagens, iaAgentes, chamados, crmCanais, crmTemplates, empresas, maletas, pessoas, titulos, vendas } from '../db/schema';
 import { CanaisService } from '../crm/canais.service';
 import { CobrancaService } from '../cobranca/cobranca.service';
 import { CobrancaConfigService } from '../cobranca/cobranca-config.service';
@@ -102,6 +102,9 @@ export class FerramentasAssistente {
       this.resumoNegocio(),
       this.resumoVendas(),
       this.numerosWhatsapp(),
+      this.buscarConversas(),
+      this.lerConversa(),
+      this.amostraConversas(),
       this.enviarWhatsapp(),
       this.enviarWhatsappEmLote(),
       this.emitirSegundaVia(),
@@ -452,6 +455,147 @@ export class FerramentasAssistente {
             observacao: c.tipo === 'oficial' ? 'Texto livre só chega para quem escreveu nas últimas 24h; para os demais, use um template aprovado.' : 'Aceita texto livre. Em envio para muita gente, o sistema espaça as mensagens para o número não ser bloqueado.',
             templates: c.tipo === 'oficial' ? tpls.filter((t) => t.canalId === c.id).map((t) => ({ templateId: t.id, nome: t.nome, texto: t.texto })) : undefined,
           })),
+        };
+      },
+    };
+  }
+
+  // ───────────── Conversas do WhatsApp (CRM) ─────────────
+
+  /** Números que esta pessoa enxerga no CRM (gestão vê todos). */
+  private async canaisVisiveis(u: UsuarioLogado) {
+    return (await this.canais.canaisDoUsuario(u.id, temPermissao(u.permissoes, 'crm', 'excluir'))).map((c) => ({ id: c.id, nome: c.nome }));
+  }
+
+  /** Mensagem em uma linha para a IA ler: quem falou e o quê (áudio vira a transcrição). */
+  private linhaMensagem(m: { direcao: string; tipo: string; texto: string | null; transcricao: string | null; ia: boolean; apagadaEm: Date | null; templateNome: string | null; midiaNome: string | null }, atendente?: string | null) {
+    const quem = m.direcao === 'entrada' ? 'Cliente' : m.direcao === 'interna' ? 'Nota interna' : m.ia ? 'IA' : atendente ? `Equipe (${atendente})` : 'Equipe';
+    if (m.apagadaEm) return `${quem}: [apagada]`;
+    const conteudo = m.tipo === 'audio' ? (m.transcricao ? `[áudio] ${m.transcricao}` : '[áudio sem transcrição]') : m.tipo === 'texto' || m.tipo === 'template' ? (m.texto ?? '') : `[${m.tipo}${m.midiaNome ? `: ${m.midiaNome}` : ''}]${m.texto ? ` ${m.texto}` : ''}`;
+    return `${quem}: ${m.templateNome ? `[modelo ${m.templateNome}] ` : ''}${conteudo}`.slice(0, 1500);
+  }
+
+  private buscarConversas(): Ferramenta {
+    const schema = z.object({
+      busca: z.string().trim().max(80).optional().describe('Nome, telefone ou trecho da última mensagem'),
+      status: z.enum(['fila', 'atendimento', 'resolvida']).optional().describe('fila = esperando alguém; atendimento = com alguém da equipe; resolvida'),
+      canalId: uuid.optional(),
+      de: dataIso.optional().describe('Última mensagem a partir deste dia'),
+      ate: dataIso.optional(),
+      limite: z.number().int().min(1).max(100).optional(),
+    });
+    return {
+      nome: 'buscar_conversas',
+      descricao: 'Procura conversas do WhatsApp no CRM (por contato, telefone, texto, situação, número e período) e devolve a última mensagem, quem atende e se a IA está atendendo. Use o conversaId em ler_conversa.',
+      schema,
+      risco: 'leitura',
+      permitido: pode('crm', 'ver'),
+      executar: async (e: z.infer<typeof schema>, ctx) => {
+        const canais = await this.canaisVisiveis(ctx.usuario);
+        if (!canais.length) return { conversas: [], observacao: 'Você não atende por nenhum número de WhatsApp.' };
+        const filtros = [inArray(crmConversas.canalId, e.canalId ? canais.filter((c) => c.id === e.canalId).map((c) => c.id).concat(['00000000-0000-0000-0000-000000000000']) : canais.map((c) => c.id))];
+        if (e.status) filtros.push(eq(crmConversas.status, e.status));
+        if (e.de) filtros.push(sql`(${crmConversas.ultimaMensagemEm} at time zone 'America/Sao_Paulo')::date >= ${e.de}`);
+        if (e.ate) filtros.push(sql`(${crmConversas.ultimaMensagemEm} at time zone 'America/Sao_Paulo')::date <= ${e.ate}`);
+        if (e.busca) {
+          const b = `%${e.busca}%`;
+          const dig = e.busca.replace(/\D/g, '');
+          filtros.push(or(sql`${crmContatos.nome} ilike ${b}`, sql`${crmConversas.ultimaMensagem} ilike ${b}`, ...(dig.length >= 4 ? [sql`${crmContatos.telefone} like ${'%' + dig + '%'}`] : []))!);
+        }
+        const r = await this.db
+          .select({ conversaId: crmConversas.id, contato: crmContatos.nome, telefone: crmContatos.telefone, canalId: crmConversas.canalId, status: crmConversas.status, ultimaMensagem: crmConversas.ultimaMensagem, ultimaMensagemEm: crmConversas.ultimaMensagemEm, naoLidas: crmConversas.naoLidas, atendente: usuarios.nome, iaAtiva: crmConversas.iaAtiva, especialista: iaAgentes.nome })
+          .from(crmConversas)
+          .innerJoin(crmContatos, eq(crmContatos.id, crmConversas.contatoId))
+          .leftJoin(usuarios, eq(usuarios.id, crmConversas.atendenteId))
+          .leftJoin(iaAgentes, eq(iaAgentes.id, crmConversas.iaAgenteId))
+          .where(and(...filtros))
+          .orderBy(desc(crmConversas.ultimaMensagemEm))
+          .limit(e.limite ?? 30);
+        const nomeCanal = new Map(canais.map((c) => [c.id, c.nome]));
+        return { quantidade: r.length, conversas: r.map((c) => ({ ...c, canal: nomeCanal.get(c.canalId), canalId: undefined, ultimaMensagemEm: c.ultimaMensagemEm?.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' }) ?? null })) };
+      },
+    };
+  }
+
+  private lerConversa(): Ferramenta {
+    const schema = z.object({ conversaId: uuid, limite: z.number().int().min(1).max(200).optional().describe('Últimas N mensagens (padrão 60)') });
+    return {
+      nome: 'ler_conversa',
+      descricao: 'Lê as mensagens de uma conversa do WhatsApp (cliente, equipe, IA e notas internas), com a transcrição dos áudios, em ordem.',
+      schema,
+      risco: 'leitura',
+      permitido: pode('crm', 'ver'),
+      executar: async (e: z.infer<typeof schema>, ctx) => {
+        const canais = await this.canaisVisiveis(ctx.usuario);
+        const [cv] = await this.db.select({ id: crmConversas.id, canalId: crmConversas.canalId, status: crmConversas.status, contato: crmContatos.nome, telefone: crmContatos.telefone }).from(crmConversas).innerJoin(crmContatos, eq(crmContatos.id, crmConversas.contatoId)).where(eq(crmConversas.id, e.conversaId));
+        if (!cv || !canais.some((c) => c.id === cv.canalId)) throw new BadRequestException('Conversa não encontrada (ou é de um número que você não atende).');
+        const ms = (await this.db.select({ m: crmMensagens, atendente: usuarios.nome }).from(crmMensagens).leftJoin(usuarios, eq(usuarios.id, crmMensagens.usuarioId)).where(eq(crmMensagens.conversaId, cv.id)).orderBy(desc(crmMensagens.criadoEm)).limit(e.limite ?? 60)).reverse();
+        return {
+          contato: cv.contato,
+          telefone: cv.telefone,
+          status: cv.status,
+          mensagens: ms.map(({ m, atendente }) => `${m.criadoEm.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })} · ${this.linhaMensagem(m, atendente)}`),
+        };
+      },
+    };
+  }
+
+  private amostraConversas(): Ferramenta {
+    const schema = z.object({
+      de: dataIso.optional().describe('Início do período (padrão: 30 dias atrás)'),
+      ate: dataIso.optional().describe('Fim do período (padrão: hoje)'),
+      canalId: uuid.optional(),
+      quantidade: z.number().int().min(5).max(200).optional().describe('Quantas conversas na amostra (padrão 80)'),
+      mensagensPorConversa: z.number().int().min(1).max(10).optional().describe('Quantas mensagens do cliente de cada conversa (padrão 4)'),
+    });
+    return {
+      nome: 'amostra_conversas',
+      descricao:
+        'Para ANALISAR o atendimento no WhatsApp: pega as conversas do período (as mais recentes primeiro) e devolve, de cada uma, as primeiras mensagens do cliente (com transcrição de áudio), quem atendeu (IA, especialista ou equipe) e a situação, além dos totais por número, situação e especialista. Use para descobrir o que mais perguntam, dúvidas repetidas, gargalos e que especialistas criar.',
+      schema,
+      risco: 'leitura',
+      permitido: pode('crm', 'ver'),
+      executar: async (e: z.infer<typeof schema>, ctx) => {
+        const canais = await this.canaisVisiveis(ctx.usuario);
+        if (!canais.length) return { observacao: 'Você não atende por nenhum número de WhatsApp.' };
+        const h = hoje();
+        const de = e.de ?? new Date(Date.parse(`${h}T12:00:00Z`) - 30 * 86400_000).toISOString().slice(0, 10);
+        const ate = e.ate ?? h;
+        const ids = e.canalId ? canais.filter((c) => c.id === e.canalId).map((c) => c.id) : canais.map((c) => c.id);
+        if (!ids.length) throw new BadRequestException('Você não atende por este número.');
+        const noPeriodo = and(inArray(crmConversas.canalId, ids), sql`(${crmConversas.ultimaMensagemEm} at time zone 'America/Sao_Paulo')::date between ${de} and ${ate}`);
+        const totais = await this.db.select({ canalId: crmConversas.canalId, status: crmConversas.status, especialista: iaAgentes.nome, qtd: sql<number>`count(*)::int` }).from(crmConversas).leftJoin(iaAgentes, eq(iaAgentes.id, crmConversas.iaAgenteId)).where(noPeriodo).groupBy(crmConversas.canalId, crmConversas.status, iaAgentes.nome);
+        const somar = (f: (t: (typeof totais)[number]) => string) => Object.entries(totais.reduce<Record<string, number>>((acc, t) => ({ ...acc, [f(t)]: (acc[f(t)] ?? 0) + t.qtd }), {})).map(([k, v]) => ({ [k]: v }));
+        const nomeCanal = new Map(canais.map((c) => [c.id, c.nome]));
+        const conversas = await this.db.select({ id: crmConversas.id, status: crmConversas.status, especialista: iaAgentes.nome, contato: crmContatos.nome }).from(crmConversas).innerJoin(crmContatos, eq(crmContatos.id, crmConversas.contatoId)).leftJoin(iaAgentes, eq(iaAgentes.id, crmConversas.iaAgenteId)).where(noPeriodo).orderBy(desc(crmConversas.ultimaMensagemEm)).limit(e.quantidade ?? 80);
+        const porConversa = e.mensagensPorConversa ?? 4;
+        const msgs = conversas.length
+          ? await this.db.execute<{ conversa_id: string; direcao: string; tipo: string; texto: string | null; transcricao: string | null; ia: boolean; respondida: boolean }>(sql`
+              select conversa_id, direcao, tipo, texto, transcricao, ia, respondida from (
+                select m.conversa_id, m.direcao, m.tipo, m.texto, m.transcricao, m.ia,
+                  exists (select 1 from crm_mensagens r where r.conversa_id = m.conversa_id and r.direcao = 'saida' and r.criado_em > m.criado_em) as respondida,
+                  row_number() over (partition by m.conversa_id order by m.criado_em) as n
+                from crm_mensagens m
+                where m.conversa_id in (${sql.join(conversas.map((c) => sql`${c.id}`), sql`, `)}) and m.direcao = 'entrada' and m.apagada_em is null
+                  and (m.criado_em at time zone 'America/Sao_Paulo')::date between ${de} and ${ate}
+              ) x where n <= ${porConversa}`).then((r) => r.rows)
+          : [];
+        const agrupadas = new Map<string, string[]>();
+        const semResposta = new Set<string>();
+        for (const m of msgs) {
+          const t = m.tipo === 'audio' ? (m.transcricao ? `[áudio] ${m.transcricao}` : '[áudio sem transcrição]') : m.tipo === 'texto' ? (m.texto ?? '') : `[${m.tipo}]${m.texto ? ` ${m.texto}` : ''}`;
+          agrupadas.set(m.conversa_id, [...(agrupadas.get(m.conversa_id) ?? []), t.slice(0, 400)]);
+          if (!m.respondida) semResposta.add(m.conversa_id);
+        }
+        return {
+          periodo: `${dataBR(de)} a ${dataBR(ate)}`,
+          totalDeConversas: totais.reduce((s, t) => s + t.qtd, 0),
+          porNumero: somar((t) => nomeCanal.get(t.canalId) ?? '—'),
+          porSituacao: somar((t) => t.status),
+          porEspecialista: somar((t) => t.especialista ?? 'sem especialista'),
+          conversasSemResposta: semResposta.size,
+          amostra: conversas.filter((c) => agrupadas.has(c.id)).map((c) => ({ conversaId: c.id, contato: c.contato, situacao: c.status, especialista: c.especialista, cliente: agrupadas.get(c.id), semResposta: semResposta.has(c.id) || undefined })),
+          observacao: 'Nomes e telefones são de clientes: use só para a análise, sem expor em relatórios.',
         };
       },
     };

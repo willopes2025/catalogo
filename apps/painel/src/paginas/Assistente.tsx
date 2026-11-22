@@ -48,6 +48,9 @@ interface Sessao { id: string; titulo: string; ocupada: boolean; aprovacao: 'per
 interface Estado { ligado: boolean; voz: boolean; vozResposta: 'elevenlabs' | 'openai' | 'navegador'; nome: string; ferramentas: { nome: string; risco: string }[]; podeConfigurar: boolean; podeAutomatico: boolean }
 
 const ROTULO: Record<string, string> = {
+  buscar_conversas: 'Buscou conversas do WhatsApp',
+  ler_conversa: 'Leu uma conversa do WhatsApp',
+  amostra_conversas: 'Analisou as conversas do WhatsApp',
   consultar_financeiro: 'Consultou o financeiro',
   consultar_inadimplentes: 'Consultou os inadimplentes',
   buscar_pessoas: 'Buscou no cadastro',

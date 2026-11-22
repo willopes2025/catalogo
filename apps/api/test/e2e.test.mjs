@@ -3119,6 +3119,15 @@ test('Assistente: consulta inadimplentes, prepara envio em lote, confirma por vo
   assert.equal(fin.status, 'concluida');
   assert.ok(fin.resultado.parcelas.some((x) => x.descricao === 'Vence hoje' && x.valor.includes('123,45')));
   assert.match(v.mensagens.at(-1).texto, /^Vence hoje: R\$/);
+  // Ler e analisar as conversas do WhatsApp do CRM.
+  await ok('POST', `/assistente/sessoes/${s.id}/mensagens`, { texto: 'analisa as conversas do WhatsApp' });
+  v = await esperar(s.id, (x) => !x.ocupada);
+  const amostra = v.acoes.filter((x) => x.ferramenta === 'amostra_conversas').at(-1);
+  assert.equal(amostra.status, 'concluida', amostra.erro ?? '');
+  assert.ok(amostra.resultado.totalDeConversas >= 1);
+  assert.ok(amostra.resultado.amostra[0].cliente.length >= 1);
+  assert.equal(v.acoes.filter((x) => x.ferramenta === 'ler_conversa').at(-1).status, 'concluida');
+  assert.match(v.mensagens.at(-1).texto, /^Li \d+ mensagens\.$/);
   // Voz: sem ElevenLabs, fala pela OpenAI; com a chave, pela ElevenLabs. Links e marcadores não são lidos.
   const falarAudio = async (corpo) => {
     const r = await fetch(API + '/assistente/falar', { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` }, body: JSON.stringify(corpo) });
