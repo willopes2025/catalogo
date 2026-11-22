@@ -346,6 +346,10 @@ http
             const d = JSON.parse(c);
             return resp([{ type: 'text', text: `Achei ${d.quantidadeTotal} pessoa(s).` }, { type: 'tool_use', id: `tu_${++wa.n}`, name: 'enviar_whatsapp_em_lote', input: { pessoaIds: d.pessoas.map((x) => x.pessoaId), texto: 'Oi, {primeiro_nome}! Sua parcela de {valor_atualizado} está {maior_atraso} dias em atraso.' } }], 'tool_use');
           }
+          if (uso?.name === 'consultar_financeiro') {
+            const d = JSON.parse(String(resultado.content));
+            return resp([{ type: 'text', text: `Vence hoje: ${d.total} em ${d.quantidade} parcela(s).` }]);
+          }
           if (uso?.name === 'resumo_negocio') {
             const d = JSON.parse(c);
             return resp([{ type: 'text', text: `${sistemaTxt.includes('CONVERSA FALADA') ? '[excited] ' : ''}No período vendemos ${d.vendas.liquido} (${d.vendas.variacao}); inadimplência hoje: ${d.hoje.inadimplencia}.` }]);
@@ -363,6 +367,7 @@ http
         if (agenda) return resp([{ type: 'tool_use', id: `tu_${++wa.n}`, name: 'agendar_rotina', input: { titulo: 'Inadimplentes por e-mail', instrucao: `Consulte os inadimplentes e envie por e-mail para ${agenda[2]} o total, o resumo por faixa e a planilha anexa.`, horario: `${agenda[1].padStart(2, '0')}:00`, emails: [agenda[2]] } }], 'tool_use');
         if (/de hora em hora das 8 às 18/i.test(fala)) return resp([{ type: 'tool_use', id: `tu_${++wa.n}`, name: 'agendar_rotina', input: { titulo: 'Candidatas novas', instrucao: 'Veja se entrou candidata nova desde a última execução e, se entrou, avise com nome e cidade.', intervaloMinutos: 60, janela: { inicio: '08:00', fim: '18:00' }, dias: [1, 2, 3, 4, 5] } }], 'tool_use');
         if (/cria um especialista de pós-venda/i.test(fala)) return resp([{ type: 'tool_use', id: `tu_${++wa.n}`, name: 'alterar_agentes_whatsapp', input: { acao: 'criar', especialista: { chave: 'posvenda', nome: 'Pós-venda', atendeQuando: 'Cliente que já comprou e quer trocar, consertar ou tirar dúvida da peça.', instrucoes: 'Seja atenciosa, peça o número da venda e passe para a equipe quando for troca.' } } }], 'tool_use');
+        if (/quanto vence hoje/i.test(fala)) return resp([{ type: 'tool_use', id: `tu_${++wa.n}`, name: 'consultar_financeiro', input: { situacao: 'a_vencer' } }], 'tool_use');
         const busca = /inadimplentes (.+)$/i.exec(fala)?.[1];
         if (busca) return resp([{ type: 'tool_use', id: `tu_${++wa.n}`, name: 'consultar_inadimplentes', input: { busca, limite: 20 } }], 'tool_use');
         if (/como foi o m[eê]s/i.test(fala)) {

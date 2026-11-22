@@ -48,6 +48,7 @@ interface Sessao { id: string; titulo: string; ocupada: boolean; aprovacao: 'per
 interface Estado { ligado: boolean; voz: boolean; vozResposta: 'elevenlabs' | 'openai' | 'navegador'; nome: string; ferramentas: { nome: string; risco: string }[]; podeConfigurar: boolean; podeAutomatico: boolean }
 
 const ROTULO: Record<string, string> = {
+  consultar_financeiro: 'Consultou o financeiro',
   consultar_inadimplentes: 'Consultou os inadimplentes',
   buscar_pessoas: 'Buscou no cadastro',
   ficha_pessoa: 'Abriu a ficha',
