@@ -15,6 +15,13 @@ const uuid = z.string().uuid();
 const TIPOS_CONTA = ['banco', 'caixa', 'carteira', 'aplicacao'] as const;
 
 /** Financeiro gerencial: plano de contas, DRE, contas bancárias, transferências e extrato. */
+/** Filtro de empresa vindo da URL: só aceita um uuid. */
+const umaEmpresa = (v?: string) => {
+  if (!v) return undefined;
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v)) throw new BadRequestException('Empresa inválida.');
+  return v;
+};
+
 @Controller('financeiro')
 export class GerencialController {
   constructor(
@@ -177,14 +184,14 @@ export class GerencialController {
 
   @Get('dre')
   @Permissao('financeiro', 'ver')
-  demonstrativo(@Query('de') de?: string, @Query('ate') ate?: string, @Query('regime') regime?: string) {
-    return this.dre.montar({ de, ate, regime: regime === 'competencia' ? 'competencia' : 'caixa' });
+  demonstrativo(@Query('de') de?: string, @Query('ate') ate?: string, @Query('regime') regime?: string, @Query('empresaId') empresaId?: string) {
+    return this.dre.montar({ de, ate, regime: regime === 'competencia' ? 'competencia' : 'caixa', empresaId: umaEmpresa(empresaId) });
   }
 
   @Get('dre/lancamentos')
   @Permissao('financeiro', 'ver')
-  lancamentos(@Query('contaId') contaId = '', @Query('mes') mes = '', @Query('regime') regime?: string) {
-    return this.dre.lancamentos({ contaId, mes, regime: (regime === 'competencia' ? 'competencia' : 'caixa') as Regime });
+  lancamentos(@Query('contaId') contaId = '', @Query('mes') mes = '', @Query('regime') regime?: string, @Query('empresaId') empresaId?: string) {
+    return this.dre.lancamentos({ contaId, mes, regime: (regime === 'competencia' ? 'competencia' : 'caixa') as Regime, empresaId: umaEmpresa(empresaId) });
   }
 
   // ───── Contas bancárias e caixas ─────

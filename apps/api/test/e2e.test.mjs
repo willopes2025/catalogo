@@ -3341,6 +3341,11 @@ test('financeiro gerencial: plano de contas, lançamentos classificados, contas 
   assert.equal(dre.subtotais.resultado.total, dre.subtotais.lucroBruto.total + t('despesas_vendas') + t('despesas_pessoal') + t('despesas_administrativas') + t('financeiro') + t('outras'));
   assert.equal(achar(dre.fora.contas, daChave('transferencias').id).total, 0, 'entrada e saída da transferência se anulam');
   assert.ok(!dre.grupos.some((g) => g.chave === 'fora'));
+  // Por empresa: a soma das empresas dá o consolidado, em cada grupo e no resultado.
+  const porEmpresa = await Promise.all((await ok('GET', '/empresas')).map((e) => ok('GET', `/financeiro/dre?de=${mes}&ate=${mes}&regime=caixa&empresaId=${e.id}`)));
+  for (const g of dre.grupos) assert.equal(porEmpresa.reduce((a, d) => a + grupo(d, g.chave).total, 0), g.total, `grupo ${g.chave} fecha por empresa`);
+  assert.equal(porEmpresa.reduce((a, d) => a + d.subtotais.resultado.total, 0), dre.subtotais.resultado.total);
+  assert.equal((await chamar('GET', `/financeiro/dre?empresaId=x'--`)).status, 400);
   // Receita e custo batem com os indicadores (mesmas fontes).
   const ind = (await ok('GET', '/indicadores/financeiro')).meses.find((m) => m.mes === mes);
   const calcReceita = grupo(dre, 'receita').contas.filter((c) => c.calculada).reduce((a, c) => a + c.total, 0);

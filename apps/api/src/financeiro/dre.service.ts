@@ -66,7 +66,8 @@ export class DreService {
   }
 
   /** Valores das contas calculadas, por chave e mês. */
-  private async calculadas(ini: string, fim: string) {
+  private async calculadas(ini: string, fim: string, empresaId?: string) {
+    const emp = (coluna: string) => (empresaId ? sql` and ${sql.raw(coluna)} = ${empresaId}::uuid` : sql``);
     const r = new Map<string, Map<string, number>>();
     const por = (chave: string, mes: string, v: number) => {
       if (!v) return;
@@ -75,7 +76,7 @@ export class DreService {
       r.set(chave, m);
     };
     for (const l of numeros<{ mes: string; rede: number; comissao: number }>(
-      await this.db.execute(sql`select to_char(data, 'YYYY-MM') as mes, coalesce(sum((resultado->>'totalVendido')::bigint), 0) as rede, coalesce(sum((resultado->>'comissao')::bigint), 0) as comissao from acertos where data between ${ini}::date and ${fim}::date group by 1`),
+      await this.db.execute(sql`select to_char(a.data, 'YYYY-MM') as mes, coalesce(sum((a.resultado->>'totalVendido')::bigint), 0) as rede, coalesce(sum((a.resultado->>'comissao')::bigint), 0) as comissao from acertos a join maletas m on m.id = a.maleta_id where a.data between ${ini}::date and ${fim}::date${emp('m.empresa_id')} group by 1`),
     )) {
       por('vendas_rede', l.mes, l.rede);
       por('comissao_rede', l.mes, -l.comissao);
@@ -86,28 +87,29 @@ export class DreService {
           case when l.tipo = 'loja' and v.tipo = 'balcao' then 'vendas_lojas' when l.tipo = 'evento' then 'vendas_eventos' else 'vendas_outras' end as canal,
           coalesce(sum(v.total), 0) as vendas, coalesce(sum(v.devolvido), 0) as devolucoes
         from vendas v join locais_estoque l on l.id = v.local_id
-        where v.status = 'concluida' and v.criado_em::date between ${ini}::date and ${fim}::date group by 1, 2`),
+        where v.status = 'concluida' and v.criado_em::date between ${ini}::date and ${fim}::date${emp('v.empresa_id')} group by 1, 2`),
     )) {
       por(l.canal, l.mes, l.vendas);
       por('devolucoes', l.mes, -l.devolucoes);
     }
     for (const l of numeros<{ mes: string; cmv: number }>(
-      await this.db.execute(sql`select to_char(x.dia, 'YYYY-MM') as mes, coalesce(sum(x.custo), 0) as cmv from ${ITENS_VENDIDOS} x where x.dia between ${ini}::date and ${fim}::date group by 1`),
+      await this.db.execute(sql`select to_char(x.dia, 'YYYY-MM') as mes, coalesce(sum(x.custo), 0) as cmv from ${ITENS_VENDIDOS} x where x.dia between ${ini}::date and ${fim}::date${emp('x.empresa_id')} group by 1`),
     ))
       por('cmv', l.mes, -l.cmv);
     return r;
   }
 
   /** Títulos por conta e mês (com sinal: a receber soma, a pagar diminui). Sem conta: chave "sem:receber" ou "sem:pagar". */
-  private async titulosPorConta(ini: string, fim: string, regime: Regime) {
+  private async titulosPorConta(ini: string, fim: string, regime: Regime, empresaId?: string) {
+    const emp = empresaId ? sql` and empresa_id = ${empresaId}::uuid` : sql``;
     const linhas = numeros<{ mes: string; conta: string | null; tipo: string; valor: number; n: number }>(
       regime === 'caixa'
         ? await this.db.execute(sql`
             select to_char(pago_em, 'YYYY-MM') as mes, plano_conta_id::text as conta, tipo, sum(coalesce(valor_pago, valor)) as valor, count(*)::int as n
-            from titulos where status = 'pago' and pago_em between ${ini}::date and ${fim}::date group by 1, 2, 3`)
+            from titulos where status = 'pago' and pago_em between ${ini}::date and ${fim}::date${emp} group by 1, 2, 3`)
         : await this.db.execute(sql`
             select to_char(vencimento, 'YYYY-MM') as mes, plano_conta_id::text as conta, tipo, sum(valor) as valor, count(*)::int as n
-            from titulos where status in ('aberto', 'pago', 'protestado') and vencimento between ${ini}::date and ${fim}::date group by 1, 2, 3`),
+            from titulos where status in ('aberto', 'pago', 'protestado') and vencimento between ${ini}::date and ${fim}::date${emp} group by 1, 2, 3`),
     );
     const r = new Map<string, Map<string, number>>();
     let semConta = 0;
@@ -121,9 +123,9 @@ export class DreService {
     return { porConta: r, semConta };
   }
 
-  async montar(o: { de?: string; ate?: string; regime: Regime }) {
+  async montar(o: { de?: string; ate?: string; regime: Regime; empresaId?: string }) {
     const { meses, ini, fim } = this.periodo(o.de, o.ate);
-    const [contas, calc, tit] = await Promise.all([this.plano.todas(), this.calculadas(ini, fim), this.titulosPorConta(ini, fim, o.regime)]);
+    const [contas, calc, tit] = await Promise.all([this.plano.todas(), this.calculadas(ini, fim, o.empresaId), this.titulosPorConta(ini, fim, o.regime, o.empresaId)]);
     const zeros = () => meses.map(() => 0);
     const doMapa = (m?: Map<string, number>) => meses.map((mes) => m?.get(mes) ?? 0);
     const somar = (a: number[], b: number[]) => a.map((v, i) => v + b[i]);
@@ -175,7 +177,7 @@ export class DreService {
   }
 
   /** Lançamentos de uma conta (e das contas dentro dela) num mês, para abrir a linha da DRE. */
-  async lancamentos(o: { contaId: string; mes: string; regime: Regime }) {
+  async lancamentos(o: { contaId: string; mes: string; regime: Regime; empresaId?: string }) {
     if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(o.mes)) throw new BadRequestException('Mês no formato AAAA-MM.');
     const ini = `${o.mes}-01`;
     const fim = ultimoDia(o.mes);
@@ -199,9 +201,9 @@ export class DreService {
     const itens = numeros<Record<string, unknown>>(
       await this.db.execute(sql`
         select t.id, t.tipo, t.descricao, t.status, t.vencimento, t.pago_em as "pagoEm", t.valor, t.valor_pago as "valorPago", t.forma_pagamento as "formaPagamento",
-          p.nome as pessoa, pc.codigo, pc.nome as conta, cb.nome as "contaBancaria"
-        from titulos t left join pessoas p on p.id = t.pessoa_id left join plano_contas pc on pc.id = t.plano_conta_id left join contas cb on cb.id = t.conta_id
-        where ${filtro} and ${periodo}
+          p.nome as pessoa, e.nome as empresa, pc.codigo, pc.nome as conta, cb.nome as "contaBancaria"
+        from titulos t join empresas e on e.id = t.empresa_id left join pessoas p on p.id = t.pessoa_id left join plano_contas pc on pc.id = t.plano_conta_id left join contas cb on cb.id = t.conta_id
+        where ${filtro} and ${periodo}${o.empresaId ? sql` and t.empresa_id = ${o.empresaId}::uuid` : sql``}
         order by ${o.regime === 'caixa' ? sql`t.pago_em` : sql`t.vencimento`}, t.criado_em limit 500`),
     );
     return {

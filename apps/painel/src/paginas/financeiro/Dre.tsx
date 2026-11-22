@@ -30,7 +30,10 @@ export function Dre({ irParaTitulos }: { irParaTitulos: () => void }) {
   const [abertos, setAbertos] = useState<Set<string>>(() => new Set(['receita', 'deducoes', 'custos', 'despesas_vendas', 'despesas_pessoal', 'despesas_administrativas', 'financeiro', 'outras']));
   const [zeradas, setZeradas] = useState(false);
   const [foco, setFoco] = useState<{ contaId: string; mes: string; nome: string } | null>(null);
-  const q = useQuery({ queryKey: ['dre', de, ate, regime], queryFn: () => api<DreDados>(`/financeiro/dre?de=${de}&ate=${ate}&regime=${regime}`), placeholderData: (a) => a });
+  const [empresaId, setEmpresaId] = useState('');
+  const empresas = useQuery({ queryKey: ['empresas'], queryFn: () => api<{ id: string; nome: string }[]>('/empresas') });
+  const daEmpresa = empresaId ? `&empresaId=${empresaId}` : '';
+  const q = useQuery({ queryKey: ['dre', de, ate, regime, empresaId], queryFn: () => api<DreDados>(`/financeiro/dre?de=${de}&ate=${ate}&regime=${regime}${daEmpresa}`), placeholderData: (a) => a });
   const alternar = (k: string) => setAbertos((s) => { const n = new Set(s); if (n.has(k)) n.delete(k); else n.add(k); return n; });
   const d = q.data;
   const rl = d?.subtotais.receitaLiquida;
@@ -85,7 +88,7 @@ export function Dre({ irParaTitulos }: { irParaTitulos: () => void }) {
     const url = URL.createObjectURL(new Blob(['﻿' + linhas.map((l) => l.map(esc).join(';')).join('\r\n')], { type: 'text/csv;charset=utf-8' }));
     const a = document.createElement('a');
     a.href = url;
-    a.download = `dre-${de}-a-${ate}-${regime}.csv`;
+    a.download = `dre-${de}-a-${ate}-${regime}${empresaId ? `-${(empresas.data?.find((e) => e.id === empresaId)?.nome ?? 'empresa').toLowerCase().replace(/[^a-z0-9]+/g, '-')}` : ''}.csv`;
     a.click();
     URL.revokeObjectURL(url);
   };
@@ -95,6 +98,12 @@ export function Dre({ irParaTitulos }: { irParaTitulos: () => void }) {
       <div className="busca">
         <label className="flex" style={{ gap: 6 }}>De <input type="month" value={de} max={ate} onChange={(e) => e.target.value && setDe(e.target.value)} /></label>
         <label className="flex" style={{ gap: 6 }}>até <input type="month" value={ate} min={de} onChange={(e) => e.target.value && setAte(e.target.value)} /></label>
+        {(empresas.data?.length ?? 0) > 1 && (
+          <select value={empresaId} onChange={(e) => setEmpresaId(e.target.value)} aria-label="Empresa">
+            <option value="">Todas as empresas</option>
+            {empresas.data!.map((e) => <option key={e.id} value={e.id}>{e.nome}</option>)}
+          </select>
+        )}
         <select value={regime} onChange={(e) => setRegime(e.target.value as 'caixa' | 'competencia')} aria-label="Regime">
           <option value="caixa">Caixa (pelo dia do pagamento)</option>
           <option value="competencia">Competência (pelo vencimento)</option>
@@ -154,13 +163,13 @@ export function Dre({ irParaTitulos }: { irParaTitulos: () => void }) {
           )}
         </>
       )}
-      {foco && <Lancamentos {...foco} regime={regime} fechar={() => setFoco(null)} />}
+      {foco && <Lancamentos {...foco} regime={regime} empresaId={empresaId} fechar={() => setFoco(null)} />}
     </div>
   );
 }
 
-function Lancamentos({ contaId, mes, nome, regime, fechar }: { contaId: string; mes: string; nome: string; regime: string; fechar: () => void }) {
-  const q = useQuery({ queryKey: ['dre', 'lancamentos', contaId, mes, regime], queryFn: () => api<any>(`/financeiro/dre/lancamentos?contaId=${contaId}&mes=${mes}&regime=${regime}`) });
+function Lancamentos({ contaId, mes, nome, regime, empresaId, fechar }: { contaId: string; mes: string; nome: string; regime: string; empresaId: string; fechar: () => void }) {
+  const q = useQuery({ queryKey: ['dre', 'lancamentos', contaId, mes, regime, empresaId], queryFn: () => api<any>(`/financeiro/dre/lancamentos?contaId=${contaId}&mes=${mes}&regime=${regime}${empresaId ? `&empresaId=${empresaId}` : ''}`) });
   const itens: any[] = q.data?.itens ?? [];
   const total = itens.reduce((a, t) => a + (t.tipo === 'receber' ? 1 : -1) * (regime === 'caixa' ? t.valorPago ?? t.valor : t.valor), 0);
   return (

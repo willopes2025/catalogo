@@ -8,7 +8,7 @@ import { sql } from 'drizzle-orm';
  *    devolvido e com o desconto geral da venda rateado.
  *  - Rede: peças marcadas como vendidas nos acertos, pelo preço e custo com que entraram na maleta.
  *    O movimento de estoque e o acerto nascem na mesma transação (mesmo instante), e é isso que liga um ao outro.
- * Colunas: produto_id, dia, canal (rede | loja | evento | outras), qtd, valor, custo, pessoa_id (representante ou cliente).
+ * Colunas: produto_id, dia, canal (rede | loja | evento | outras), qtd, valor, custo, pessoa_id (representante ou cliente), empresa_id.
  */
 export const ITENS_VENDIDOS = sql`(
   select vi.produto_id, v.criado_em::date as dia,
@@ -17,13 +17,13 @@ export const ITENS_VENDIDOS = sql`(
     round(vi.total::numeric / nullif(vi.quantidade, 0) * (vi.quantidade - vi.devolvida)
       * coalesce(v.total::numeric / nullif(sum(vi.total) over (partition by vi.venda_id), 0), 1))::bigint as valor,
     (vi.custo * (vi.quantidade - vi.devolvida))::bigint as custo,
-    v.cliente_id as pessoa_id
+    v.cliente_id as pessoa_id, v.empresa_id
   from venda_itens vi
   join vendas v on v.id = vi.venda_id and v.status = 'concluida'
   join locais_estoque l on l.id = v.local_id
   union all
   select mv.produto_id, a.data as dia, 'rede' as canal, mv.quantidade as qtd,
-    (mi.preco * mv.quantidade)::bigint as valor, (mi.custo * mv.quantidade)::bigint as custo, m.representante_id as pessoa_id
+    (mi.preco * mv.quantidade)::bigint as valor, (mi.custo * mv.quantidade)::bigint as custo, m.representante_id as pessoa_id, m.empresa_id
   from movimentos mv
   join acertos a on a.maleta_id = mv.referencia_id and a.criado_em = mv.criado_em
   join maletas m on m.id = a.maleta_id
