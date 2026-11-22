@@ -9,19 +9,21 @@ import { Abas, Campo, Carregando, Erro, Indicador, Topo, camposComErro } from '.
 import { Dre } from './financeiro/Dre';
 import { PlanoContas } from './financeiro/PlanoContas';
 import { ContasBancarias } from './financeiro/ContasBancarias';
+import { Asaas } from './financeiro/Asaas';
 import { SeletorPlano, usePlano } from './financeiro/comum';
 import './financeiro/financeiro.css';
 
-type Secao = 'lancamentos' | 'dre' | 'plano' | 'contas';
+type Secao = 'lancamentos' | 'dre' | 'plano' | 'contas' | 'asaas';
 
 /** Financeiro: lançamentos (contas a receber e a pagar), DRE, plano de contas e contas bancárias. */
 export function Financeiro() {
   const [params, setParams] = useSearchParams();
-  const secao = (['lancamentos', 'dre', 'plano', 'contas'] as Secao[]).includes(params.get('secao') as Secao) ? (params.get('secao') as Secao) : 'lancamentos';
+  const secao = (['lancamentos', 'dre', 'plano', 'contas', 'asaas'] as Secao[]).includes(params.get('secao') as Secao) ? (params.get('secao') as Secao) : 'lancamentos';
   const ir = (s: Secao, extra: Record<string, string> = {}) => setParams(s === 'lancamentos' && !Object.keys(extra).length ? {} : { secao: s, ...extra });
-  const secoes = <Abas ativa={secao} mudar={(s) => ir(s)} abas={[['lancamentos', 'Lançamentos'], ['dre', 'DRE'], ['plano', 'Plano de contas'], ['contas', 'Contas bancárias']]} />;
+  const secoes = <Abas ativa={secao} mudar={(s) => ir(s)} abas={[['lancamentos', 'Lançamentos'], ['dre', 'DRE'], ['plano', 'Plano de contas'], ['contas', 'Contas bancárias'], ['asaas', 'Asaas']]} />;
   if (secao === 'dre') return <><Topo eb="Financeiro" titulo="DRE" sub="Resultado mês a mês, aberto por conta do plano, com o peso de cada uma" />{secoes}<Dre irParaTitulos={() => ir('lancamentos', { semPlano: '1' })} /></>;
   if (secao === 'plano') return <><Topo eb="Financeiro" titulo="Plano de contas" sub="As contas em que cada receita e despesa é classificada" />{secoes}<PlanoContas verLancamentos={(id) => ir('lancamentos', { plano: id })} /></>;
+  if (secao === 'asaas') return <><Topo eb="Financeiro" titulo="Asaas" sub="A conta do Asaas inteira: cobranças, extrato, transferências, Pix, antecipação, notas e o resto" />{secoes}<Asaas /></>;
   if (secao === 'contas') return <><Topo eb="Financeiro" titulo="Contas bancárias e caixas" sub="Onde o dinheiro entra e sai" />{secoes}<ContasBancarias /></>;
   return <Titulos secoes={secoes} />;
 }

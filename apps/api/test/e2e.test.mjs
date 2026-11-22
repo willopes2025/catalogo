@@ -3375,6 +3375,116 @@ test('financeiro gerencial: plano de contas, lançamentos classificados, contas 
   assert.equal((await ok('GET', `/financeiro/titulos?tipo=pagar&aba=pagos&planoContaId=${aluguel.id}`)).itens[0].categoria, 'Aluguel da loja');
 });
 
+test('módulo Asaas: catálogo por permissão, cobranças, estorno que desfaz a baixa do título, transferência só para a gestão, webhook do sistema', async () => {
+  const dia = (n) => new Date(Date.now() - 3 * 3600_000 + n * 86400_000).toISOString().slice(0, 10);
+  const ex = (operacao, extra = {}) => chamar('POST', '/financeiro/asaas/executar', { operacao, ...extra });
+  const emp = (await ok('GET', '/empresas'))[0];
+
+  // Catálogo: o administrador vê tudo; os caminhos do Asaas não saem do servidor.
+  const cat = await ok('GET', '/financeiro/asaas/catalogo');
+  assert.equal(cat.ligado, true);
+  assert.ok(cat.operacoes.length > 120);
+  assert.ok(cat.operacoes.every((o) => o.caminho === undefined));
+  for (const k of ['cobrancas.criar', 'transferencias.pix', 'contas.pagar', 'pix.pagar', 'antecipacoes.pedir', 'negativacoes.criar', 'assinaturas.criar', 'links.criar', 'webhooks.criar', 'extrato']) assert.ok(cat.operacoes.some((o) => o.chave === k), k);
+  assert.equal(new Set(cat.operacoes.map((o) => o.chave)).size, cat.operacoes.length, 'chaves sem repetição');
+  const resumo = await ok('GET', '/financeiro/asaas/resumo');
+  assert.deepEqual([resumo.saldo, resumo.aReceber.quantity, resumo.situacao.general, resumo.numero.account], [1234.56, 3, 'APPROVED', '1234567']);
+
+  // Cliente do cadastro vira cliente do Asaas; cobrança avulsa com valor em centavos → reais, multa e juros aninhados.
+  const pessoa = await ok('POST', '/pessoas', { tipo: 'cliente', nome: 'Cliente do Módulo Asaas', documento: '39053344705' });
+  const cli = await ok('POST', '/financeiro/asaas/cliente', { pessoaId: pessoa.id });
+  assert.match(cli.id, /^cus_\d+$/);
+  const ruim = await ex('cobrancas.criar', { corpo: { customer: cli.id, billingType: 'CARTAO', value: 12.5, campoInventado: 'x' } });
+  assert.equal(ruim.status, 400);
+  assert.deepEqual(Object.keys(ruim.dados.campos).sort(), ['billingType', 'dueDate', 'value']);
+  const nova = await ex('cobrancas.criar', { corpo: { customer: cli.id, billingType: 'BOLETO', value: 15090, dueDate: dia(5), description: 'Avulsa', 'fine.value': 2, 'interest.value': 1, campoInventado: 'x' } });
+  assert.equal(nova.status, 201);
+  const enviado = (await recebidos()).filter((r) => r.metodo === 'POST' && r.caminho === '/asaas/payments').pop().corpo;
+  assert.deepEqual(enviado, { customer: cli.id, billingType: 'BOLETO', value: 150.9, dueDate: dia(5), description: 'Avulsa', fine: { value: 2 }, interest: { value: 1 } }, 'só os campos do catálogo, no formato do Asaas');
+  // Lista com filtro e paginação; operação desconhecida e código malformado são recusados.
+  const lista = await ex('cobrancas', { filtros: { status: 'PENDING', inventado: '1' }, porPagina: 5 });
+  assert.equal(lista.status, 201);
+  assert.ok(lista.dados.data.some((p) => p.id === nova.dados.id));
+  const consulta = (await recebidos()).filter((r) => r.metodo === 'GET' && r.caminho.startsWith('/asaas/payments?')).pop();
+  assert.deepEqual(Object.fromEntries(new URLSearchParams(consulta.caminho.split('?')[1])), { status: 'PENDING', offset: '0', limit: '5' }, 'filtro inventado não vai para o Asaas');
+  assert.equal((await ex('apagar.tudo')).status, 400);
+  assert.equal((await ex('cobrancas.ver', { id: '../transfers' })).status, 400);
+  assert.equal((await ex('cobrancas.ver')).status, 400);
+  // Editar e excluir a avulsa (não é de título): passa direto.
+  assert.equal((await ex('cobrancas.editar', { id: nova.dados.id, corpo: { value: 20000 } })).dados.value, 200);
+  assert.equal((await ex('cobrancas.excluir', { id: nova.dados.id })).dados.deleted, true);
+
+  // Cobrança de um título do sistema: editar e "recebido em dinheiro" são barrados; estorno total desfaz a baixa.
+  const [t] = await ok('POST', '/financeiro/titulos', { empresaId: emp.id, tipo: 'receber', pessoaId: pessoa.id, descricao: 'Título com boleto do módulo', valor: 8000, vencimento: dia(3) });
+  const cob = await ok('POST', `/financeiro/titulos/${t.id}/cobranca`, { tipo: 'PIX' });
+  const idCob = (await recebidos()).filter((r) => r.metodo === 'POST' && r.caminho === '/asaas/payments').pop();
+  const lista2 = await ex('cobrancas', {});
+  const linha = lista2.dados.data.find((p) => p._titulo?.id === t.id);
+  assert.ok(linha, 'a lista mostra a qual título a cobrança pertence');
+  const barrado = await ex('cobrancas.editar', { id: linha.id, corpo: { value: 100 } });
+  assert.equal(barrado.status, 400);
+  assert.match(barrado.dados.mensagem, /2ª via/);
+  assert.equal((await ex('cobrancas.dinheiro', { id: linha.id, corpo: { paymentDate: dia(0), value: 8000 } })).status, 400);
+  assert.equal((await ex('cobrancas.estornar', { id: linha.id })).status, 400, 'título ainda não pago');
+  const salvo = token;
+  token = '';
+  await fetch(API + '/webhooks/asaas', { method: 'POST', headers: { 'content-type': 'application/json', 'asaas-access-token': 'token-webhook-teste' }, body: JSON.stringify({ id: 'evt_modulo_1', event: 'PAYMENT_RECEIVED', payment: { id: linha.id, value: 80, paymentDate: dia(0), externalReference: t.id } }) });
+  token = salvo;
+  assert.equal((await ok('GET', `/financeiro/titulos?tipo=receber&aba=pagos&busca=boleto do módulo`)).itens.length, 1);
+  assert.equal((await ex('cobrancas.estornar', { id: linha.id, corpo: { value: 3000 } })).status, 400, 'estorno parcial de título não passa por aqui');
+  const est = await ex('cobrancas.estornar', { id: linha.id, corpo: { description: 'Cliente desistiu' } });
+  assert.equal(est.status, 201);
+  assert.match(est.dados._efeito, /voltou para "em aberto"/);
+  const voltou = (await ok('GET', `/financeiro/titulos?tipo=receber&aba=abertos&busca=boleto do módulo`)).itens[0];
+  assert.deepEqual([voltou.status, voltou.cobrancaUrl, voltou.pagoEm], ['aberto', null, null]);
+  void cob; void idCob;
+
+  // Dinheiro saindo: só a gestão (Financeiro com "excluir"). O grupo Financeiro comum cobra, mas não transfere.
+  const transf = await ex('transferencias.pix', { corpo: { value: 3000, pixAddressKey: 'financeiro@aritana.exemplo', pixAddressKeyType: 'EMAIL', description: 'Fornecedor' } });
+  assert.equal(transf.status, 201);
+  assert.deepEqual([transf.dados.value, transf.dados.status], [30, 'PENDING']);
+  assert.match((await ex('transferencias.pix', { corpo: { value: 999999900, pixAddressKey: 'x@y.z', pixAddressKeyType: 'EMAIL' } })).dados.mensagem, /Asaas: Saldo insuficiente/);
+  const banco = await ex('transferencias.banco', { corpo: { value: 1000, 'bankAccount.ownerName': 'Fornecedor Ltda', 'bankAccount.cpfCnpj': '11222333000181', 'bankAccount.bank.code': '756', 'bankAccount.agency': '3008', 'bankAccount.account': '12345', 'bankAccount.accountDigit': '6', 'bankAccount.bankAccountType': 'CONTA_CORRENTE' } });
+  assert.equal(banco.dados.bankAccount.bank.code, '756');
+  assert.equal((await ex('contas.simular', { corpo: { identificationField: '83620000000 5 67890123456 7' } })).dados.bankSlipInfo.value, 150.5);
+  assert.equal((await ex('extrato', { filtros: { startDate: dia(-30), finishDate: dia(0) } })).dados.data.length, 2);
+  const pg = createRequire(import.meta.url)('pg');
+  const banco_ = new pg.Client({ connectionString: process.env.DATABASE_URL ?? 'postgres://aritana:aritana@localhost:5432/aritana_teste' });
+  await banco_.connect();
+  const auditoria = (await banco_.query(`select dados from auditoria where acao = 'asaas' order by criado_em desc limit 20`)).rows.map((r) => r.dados.operacao);
+  await banco_.end();
+  assert.ok(['transferencias.banco', 'transferencias.pix', 'cobrancas.estornar', 'cobrancas.criar'].every((o) => auditoria.includes(o)), 'o que muda fica na auditoria');
+
+  const grupos = await ok('GET', '/grupos');
+  const fin = grupos.find((g) => g.nome === 'Financeiro');
+  const operador = await ok('POST', '/usuarios', { nome: 'Operadora do Asaas', email: 'asaas.operadora@aritana.local', grupoId: fin.id });
+  const admin = token;
+  token = (await ok('POST', '/auth/login', { email: 'asaas.operadora@aritana.local', senha: operador.senhaProvisoria })).token;
+  await ok('POST', '/auth/trocar-senha', { atual: operador.senhaProvisoria, nova: 'SenhaDoAsaas2026' });
+  const catOp = await ok('GET', '/financeiro/asaas/catalogo');
+  assert.ok(catOp.operacoes.some((o) => o.chave === 'cobrancas.criar') && !catOp.operacoes.some((o) => o.nivel === 'dinheiro' || o.nivel === 'gestao'), 'sem as operações de dinheiro e de gestão');
+  assert.equal((await ex('transferencias.pix', { corpo: { value: 100, pixAddressKey: 'a@b.c', pixAddressKeyType: 'EMAIL' } })).status, 403);
+  assert.equal((await ex('cobrancas.estornar', { id: 'pay_1' })).status, 403);
+  assert.equal((await ex('webhooks')).status, 403);
+  assert.equal((await chamar('POST', '/financeiro/asaas/webhook-sistema')).status, 403);
+  assert.equal((await ex('saldo')).dados.balance, 1234.56);
+  token = admin;
+
+  // Webhook do sistema: cria com token novo (o antigo era curto), guarda o mesmo token e não duplica.
+  const w1 = await ok('POST', '/financeiro/asaas/webhook-sistema');
+  assert.equal(w1.criado, true);
+  const criado = (await recebidos()).filter((r) => r.metodo === 'POST' && r.caminho === '/asaas/webhooks').pop().corpo;
+  assert.ok(criado.authToken.length >= 32 && criado.events.includes('PAYMENT_RECEIVED') && criado.url.endsWith('/api/webhooks/asaas'));
+  const w2 = await ok('POST', '/financeiro/asaas/webhook-sistema');
+  assert.deepEqual([w2.criado, w2.id], [false, w1.id]);
+  token = '';
+  const aceito = await fetch(API + '/webhooks/asaas', { method: 'POST', headers: { 'content-type': 'application/json', 'asaas-access-token': criado.authToken }, body: JSON.stringify({ id: 'evt_modulo_2', event: 'PAYMENT_CREATED', payment: { id: 'pay_x' } }) });
+  assert.equal(aceito.status, 200, 'o sistema passou a aceitar o token novo');
+  token = admin;
+  // Volta o token dos outros testes.
+  await ok('PUT', '/integracoes/asaas', { valores: { ASAAS_WEBHOOK_TOKEN: '' } });
+});
+
 test('implantação: apagar dados de teste exige APAGAR e mantém o que é configuração', async () => {
   assert.equal((await chamar('POST', '/implantacao/apagar-dados-de-teste', { confirmacao: 'apagar' })).status, 400);
   const bloq = await chamar('POST', '/implantacao/apagar-dados-de-teste', { confirmacao: 'APAGAR', manterProdutos: true });

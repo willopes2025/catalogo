@@ -16,6 +16,7 @@ const wa = { n: 0, zapiConectado: true, webhookZapi: null };
 const evo = new Map();
 // Notificações recebidas pelos simuladores do Firebase e da Apple
 const pushes = [];
+const asaas = { pagamentos: new Map(), transferencias: [], webhooks: [] };
 const cra = { chamadas: [], titulos: [], confirmacoes: [], retornos: [] };
 const fcmChaves = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
 const apnsChaves = crypto.generateKeyPairSync('ec', { namedCurve: 'prime256v1' });
@@ -582,6 +583,7 @@ http
       if (req.method === 'POST' && url.pathname === '/asaas/payments') {
         if (!corpo?.customer || !corpo?.value || !corpo?.dueDate || !corpo?.billingType) return responder(res, 400, { errors: [{ description: 'Campos obrigatórios' }] });
         const id = `pay_${++seq}`;
+        asaas.pagamentos.set(id, { id, object: 'payment', status: 'PENDING', value: corpo.value, netValue: corpo.value - 1.99, dueDate: corpo.dueDate, billingType: corpo.billingType, customer: corpo.customer, description: corpo.description ?? null, externalReference: corpo.externalReference ?? null, fine: corpo.fine, interest: corpo.interest, invoiceUrl: `https://sandbox.asaas.com/i/${id}` });
         return responder(res, 200, { id, status: 'PENDING', value: corpo.value, invoiceUrl: `https://sandbox.asaas.com/i/${id}`, bankSlipUrl: corpo.billingType === 'BOLETO' ? `https://sandbox.asaas.com/b/pdf/${id}` : null, externalReference: corpo.externalReference });
       }
       const pix = url.pathname.match(/^\/asaas\/payments\/(pay_\d+)\/pixQrCode$/);
@@ -590,8 +592,40 @@ http
       const cash = url.pathname.match(/^\/asaas\/payments\/(pay_\d+)\/receiveInCash$/);
       if (req.method === 'POST' && cash) return responder(res, 200, { id: cash[1], status: 'RECEIVED_IN_CASH' });
       if (req.method === 'GET' && url.pathname === '/asaas/customers') return responder(res, 200, { totalCount: 0, data: [] });
+      // ── Módulo Financeiro › Asaas ──
+      const lista = (itens) => { const o = Number(url.searchParams.get('offset') ?? 0), l = Number(url.searchParams.get('limit') ?? 10); return responder(res, 200, { object: 'list', hasMore: itens.length > o + l, totalCount: itens.length, limit: l, offset: o, data: itens.slice(o, o + l) }); };
+      const cam = url.pathname.slice('/asaas'.length);
+      if (req.method === 'GET' && cam === '/finance/balance') return responder(res, 200, { balance: 1234.56 });
+      if (req.method === 'GET' && cam === '/finance/payment/statistics') return responder(res, 200, { quantity: 3, value: 300.5, netValue: 294.53, status: url.searchParams.get('status') });
+      if (req.method === 'GET' && cam === '/myAccount/status') return responder(res, 200, { general: 'APPROVED', commercialInfo: 'APPROVED', bankAccountInfo: 'APPROVED', documentation: 'APPROVED' });
+      if (req.method === 'GET' && cam === '/myAccount/accountNumber') return responder(res, 200, { agency: '0001', account: '1234567', accountDigit: '8' });
+      if (req.method === 'GET' && cam === '/financialTransactions') return lista([{ id: 'ft_2', value: -30, balance: 1234.56, type: 'TRANSFER', date: '2026-11-20', description: 'Transferência para conta bancária' }, { id: 'ft_1', value: 100, balance: 1264.56, type: 'PAYMENT_RECEIVED', date: '2026-11-19', description: 'Cobrança recebida' }]);
+      if (req.method === 'GET' && cam === '/payments') { const st = url.searchParams.get('status'); return lista([...asaas.pagamentos.values()].filter((x) => !x.deleted && (!st || x.status === st)).reverse()); }
+      const pg = cam.match(/^\/payments\/(pay_\d+)(\/\w+)?$/);
+      if (pg && asaas.pagamentos.has(pg[1])) {
+        const x = asaas.pagamentos.get(pg[1]);
+        if (req.method === 'GET' && !pg[2]) return responder(res, 200, x);
+        if (req.method === 'PUT' && !pg[2]) { Object.assign(x, corpo); return responder(res, 200, x); }
+        if (req.method === 'POST' && pg[2] === '/refund') { if (corpo?.value > x.value) return responder(res, 400, { errors: [{ description: 'O valor do estorno é maior que o da cobrança.' }] }); x.status = 'REFUNDED'; return responder(res, 200, { ...x, refundedValue: corpo?.value ?? x.value }); }
+        if (req.method === 'DELETE' && !pg[2]) { x.deleted = true; return responder(res, 200, { deleted: true, id: x.id }); }
+      }
+      if (req.method === 'POST' && cam === '/transfers') {
+        if (!corpo?.value || !(corpo.pixAddressKey || corpo.bankAccount || corpo.walletId)) return responder(res, 400, { errors: [{ description: 'Informe o valor e o destino.' }] });
+        if (corpo.value > 1234.56) return responder(res, 400, { errors: [{ description: 'Saldo insuficiente.' }] });
+        const t = { id: `tra_${++seq}`, object: 'transfer', status: 'PENDING', authorized: false, value: corpo.value, operationType: corpo.pixAddressKey ? 'PIX' : (corpo.operationType ?? 'TED'), dateCreated: '2026-11-22', description: corpo.description ?? null, bankAccount: corpo.bankAccount ?? { pixAddressKey: corpo.pixAddressKey } };
+        asaas.transferencias.push(t);
+        return responder(res, 200, t);
+      }
+      if (req.method === 'GET' && cam === '/transfers') return lista([...asaas.transferencias].reverse());
+      if (req.method === 'POST' && cam === '/bill/simulate') return responder(res, 200, { minimumScheduleDate: '2026-11-23', fee: 0, bankSlipInfo: { identificationField: corpo?.identificationField, value: 150.5, dueDate: '2026-11-30', companyName: 'CONCESSIONARIA DE ENERGIA', allowLinkedPayments: false } });
+      if (req.method === 'GET' && cam === '/webhooks') return lista(asaas.webhooks);
+      if (req.method === 'POST' && cam === '/webhooks') { if (!corpo?.authToken || corpo.authToken.length < 32) return responder(res, 400, { errors: [{ description: 'O token precisa ter ao menos 32 caracteres.' }] }); const w = { id: `wh_${++seq}`, ...corpo }; asaas.webhooks.push(w); return responder(res, 200, w); }
+      const wh = cam.match(/^\/webhooks\/(wh_\d+)$/);
+      if (req.method === 'PUT' && wh) { const w = asaas.webhooks.find((x) => x.id === wh[1]); Object.assign(w, corpo); return responder(res, 200, w); }
+      if (req.method === 'GET' && cam === '/pix/addressKeys') return lista([{ id: 'key_1', key: 'b6295ee1-f054-47d1-9e90-ee57b74f60d9', type: 'EVP', status: 'ACTIVE' }]);
       if (req.method === 'PUT' && /^\/asaas\/customers\/[\w-]+$/.test(url.pathname)) return responder(res, 200, { id: url.pathname.split('/').pop(), ...corpo });
       if (req.method === 'GET' && pix) return responder(res, 200, { encodedImage: 'iVBOR', payload: `00020126580014br.gov.bcb.pix-${pix[1]}`, expirationDate: '2027-01-01 23:59:59' });
+      return responder(res, 404, { errors: [{ description: `Simulador do Asaas: ${req.method} ${url.pathname} não existe` }] });
     }
 
     // ── Focus NFe ──

@@ -20,6 +20,7 @@ import { CobrancaController } from './cobranca/cobranca.controller';
 import { PlanoContasService } from './financeiro/plano.service';
 import { DreService } from './financeiro/dre.service';
 import { GerencialController } from './financeiro/gerencial.controller';
+import { AsaasModuloController } from './asaas/asaas-modulo.controller';
 import { CobrancaConfigService } from './cobranca/cobranca-config.service';
 import { CobrancaService } from './cobranca/cobranca.service';
 import { CraService } from './cobranca/cra.service';
@@ -141,6 +142,7 @@ if (!segredo || (process.env.NODE_ENV === 'production' && segredo.length < 32)) 
     IaController,
     CobrancaController,
     GerencialController,
+    AsaasModuloController,
     AssistenteController,
   ],
   providers: [

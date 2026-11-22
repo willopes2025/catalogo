@@ -43,7 +43,7 @@ export class AsaasService {
     return { ok: true, mensagem: `Conectado ao Asaas (${this.ambiente}).` };
   }
 
-  private async chamar<T>(metodo: string, caminho: string, corpo?: unknown): Promise<T> {
+  async chamar<T>(metodo: string, caminho: string, corpo?: unknown): Promise<T> {
     if (!this.configurado) throw new ServiceUnavailableException('O Asaas ainda não foi ligado: falta a chave da API da Aritana.');
     const r = await fetch(this.url + caminho, {
       method: metodo,
@@ -69,7 +69,7 @@ export class AsaasService {
    * Cria (uma vez) a pessoa como cliente no Asaas. Com `atualizar`, manda de novo nome, e-mail, celular e endereço
    * do cadastro (o boleto novo sai com os dados de hoje, e os avisos do Asaas vão para o contato certo).
    */
-  private async clienteAsaas(pessoaId: string, atualizar = false) {
+  async clienteAsaas(pessoaId: string, atualizar = false) {
     const [p] = await this.db.select().from(pessoas).where(eq(pessoas.id, pessoaId));
     if (!p) throw new BadRequestException('Pessoa não encontrada.');
     if (!p.documento && !p.asaasClienteId) throw new BadRequestException('Para gerar boleto ou Pix, o cadastro precisa ter CPF ou CNPJ.');
