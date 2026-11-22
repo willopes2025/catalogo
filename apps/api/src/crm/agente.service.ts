@@ -4,7 +4,7 @@ import { and, asc, desc, eq, inArray, sql } from 'drizzle-orm';
 import { DB, type Db } from '../comum/db.module';
 import { configuracoes, crmCanais, crmContatos, crmConversas, crmMensagens, empresas, iaAgentes, maletas, pessoas, titulos } from '../db/schema';
 import { ArquivosService } from '../arquivos/arquivos.service';
-import { IaService, type Bloco, type MensagemIa } from '../ia/ia.service';
+import { IaService, TAGS_VOZ, semTagsDeVoz, type Bloco, type MensagemIa } from '../ia/ia.service';
 import { CrmService } from './crm.service';
 import { CanaisService } from './canais.service';
 import { TranscricaoService } from './transcricao.service';
@@ -25,9 +25,17 @@ export interface ConfigAgente {
   nome: string;
   /** Quantas vezes a conversa pode passar de um especialista para outro antes de ir para a equipe. */
   maxTransferencias: number;
+  /** Responder em áudio: nunca, só quando o cliente mandou áudio (espelhar) ou sempre. */
+  respostaAudio: 'nunca' | 'espelhar' | 'sempre';
+  /** Quem fala: automática = ElevenLabs se tiver a chave, senão OpenAI. */
+  vozProvedor: 'automatica' | 'elevenlabs' | 'openai';
+  vozElevenlabs: string;
+  vozOpenai: string;
+  /** Manda também o texto depois do áudio (para quem não pode ouvir na hora). */
+  audioComTexto: boolean;
 }
 
-const PADRAO: ConfigAgente = { ativo: false, canais: [], instrucoes: '', conhecimento: '', maxRespostas: 10, nome: '', maxTransferencias: 2 };
+const PADRAO: ConfigAgente = { ativo: false, canais: [], instrucoes: '', conhecimento: '', maxRespostas: 10, nome: '', maxTransferencias: 2, respostaAudio: 'nunca', vozProvedor: 'automatica', vozElevenlabs: 'ec54d9BmuMSN4IinPrjv', vozOpenai: 'ash', audioComTexto: false };
 type Especialista = typeof iaAgentes.$inferSelect;
 type Resposta = { resposta?: string; passar?: boolean; motivo?: string; transferir?: string | null };
 const CHAVE = 'ia_agente';
@@ -94,7 +102,7 @@ export class AgenteService implements OnModuleInit, OnModuleDestroy {
   }
 
   /** O que a IA recebe: quem é a empresa, como falar, o que sabe, e as regras de quando passar a vez. */
-  private async sistema(cfg: ConfigAgente, contato: typeof crmContatos.$inferSelect, canalNome: string, modo: 'agente' | 'sugestao', agente?: Especialista | null, outros: Especialista[] = []) {
+  private async sistema(cfg: ConfigAgente, contato: typeof crmContatos.$inferSelect, canalNome: string, modo: 'agente' | 'sugestao', agente?: Especialista | null, outros: Especialista[] = [], falado = false) {
     const [matriz] = await this.db.select({ nome: empresas.nome, cidade: empresas.cidade, uf: empresas.uf }).from(empresas).where(eq(empresas.tipo, 'matriz')).limit(1);
     const agora = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo', weekday: 'long', day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
     const nome = contato.nome && contato.nome !== contato.telefone ? contato.nome : null;
@@ -108,7 +116,9 @@ export class AgenteService implements OnModuleInit, OnModuleDestroy {
       cfg.conhecimento.trim() ? `O QUE VOCÊ SABE SOBRE A EMPRESA (use só isto como fato):\n${cfg.conhecimento.trim()}` : 'Você não recebeu informações da empresa (endereço, horário, preços). Não invente nenhuma.',
       [
         'REGRAS:',
-        '- Escreva em português do Brasil, como no WhatsApp: mensagens curtas, sem títulos, sem listas com marcadores, sem negrito. No máximo um emoji, e só quando combinar.',
+        falado
+          ? `- A sua resposta vai virar um ÁUDIO de WhatsApp: escreva como se estivesse falando, frases curtas e naturais, sem emoji, sem listas, sem links nem símbolos (diga "te mando o link por escrito" se precisar). Números do jeito que se fala ("trinta e nove e noventa"). Até uns 40 segundos de fala. Para dar emoção à voz, pode usar no máximo uma destas marcações no início de uma frase: ${TAGS_VOZ.map((t) => `[${t}]`).join(', ')}.`
+          : '- Escreva em português do Brasil, como no WhatsApp: mensagens curtas, sem títulos, sem listas com marcadores, sem negrito. No máximo um emoji, e só quando combinar.',
         '- Nunca invente preço, prazo, estoque, endereço, desconto ou política. Se não está no que você sabe, diga que vai confirmar com a equipe.',
         '- Não prometa nada em nome da empresa e não feche venda, troca, devolução ou acerto de maleta: isso é com uma pessoa da equipe.',
         '- Não peça senha, código recebido por SMS nem dados de cartão.',
@@ -242,6 +252,9 @@ export class AgenteService implements OnModuleInit, OnModuleDestroy {
       if (mensagens.at(-1)?.role !== 'user') return; // alguém já respondeu
       const ultimoTexto = ((mensagens.at(-1)!.content as Bloco[]).filter((b) => b.type === 'text') as { text: string }[]).map((b) => b.text).join(' ');
       if (PEDIU_SAIR.test(ultimoTexto)) return this.passar(conversaId, 'Pediu para não receber mais mensagens.');
+      // Responder em áudio? (sempre, ou espelhando quando o cliente mandou áudio)
+      const [ultimaDoCliente] = await this.db.select({ tipo: crmMensagens.tipo }).from(crmMensagens).where(and(eq(crmMensagens.conversaId, conversaId), eq(crmMensagens.direcao, 'entrada'))).orderBy(desc(crmMensagens.criadoEm)).limit(1);
+      const falado = !!this.ia.vozDisponivel && (cfg.respostaAudio === 'sempre' || (cfg.respostaAudio === 'espelhar' && ultimaDoCliente?.tipo === 'audio'));
       if (c.cv.iaRespostas >= Math.max(1, cfg.maxRespostas)) return this.passar(conversaId, `Chegou ao limite de ${cfg.maxRespostas} respostas seguidas.`);
       const lista = await this.especialistas();
       let agente = lista.find((a) => a.id === c.cv.iaAgenteId) ?? null;
@@ -256,7 +269,7 @@ export class AgenteService implements OnModuleInit, OnModuleDestroy {
         if (t.agente === 'perguntar' && t.pergunta && c.cv.iaRespostas < 2) {
           const [agora] = await this.db.select().from(crmConversas).where(eq(crmConversas.id, conversaId));
           if (!agora || !this.atende(agora, cfg)) return;
-          await this.canais.enviar({ conversaId, tipo: 'texto', texto: t.pergunta, ia: true });
+          await this.enviarResposta(conversaId, t.pergunta, cfg, falado);
           await this.db.update(crmConversas).set({ iaRespostas: sql`${crmConversas.iaRespostas} + 1` }).where(eq(crmConversas.id, conversaId));
           return;
         }
@@ -270,7 +283,7 @@ export class AgenteService implements OnModuleInit, OnModuleDestroy {
         const outros = lista.filter((a) => a.id !== agente?.id);
         let r: Resposta;
         try {
-          r = await this.ia.perguntarJson<Resposta>({ recurso: 'agente', sistema: await this.sistema(cfg, c.contato, c.canal.nome, 'agente', agente, outros), mensagens, maxTokens: 700 });
+          r = await this.ia.perguntarJson<Resposta>({ recurso: 'agente', sistema: await this.sistema(cfg, c.contato, c.canal.nome, 'agente', agente, outros, falado), mensagens, maxTokens: 700 });
         } catch (e) {
           // IA fora do ar ou sem crédito: a conversa fica na fila para a equipe, com o motivo anotado.
           return this.passar(conversaId, `A IA não conseguiu responder: ${(e as Error).message}`);
@@ -290,7 +303,7 @@ export class AgenteService implements OnModuleInit, OnModuleDestroy {
         if (!agora || !this.atende(agora, cfg)) return;
         const texto = String(r.resposta ?? '').trim().slice(0, 4000);
         if (texto) {
-          await this.canais.enviar({ conversaId, tipo: 'texto', texto, ia: true });
+          await this.enviarResposta(conversaId, texto, cfg, falado);
           await this.db.update(crmConversas).set({ iaRespostas: sql`${crmConversas.iaRespostas} + 1` }).where(eq(crmConversas.id, conversaId));
         }
         if (r.passar || !texto) await this.passar(conversaId, String(r.motivo ?? '').trim().slice(0, 300) || 'A IA achou melhor uma pessoa continuar.');
@@ -300,6 +313,26 @@ export class AgenteService implements OnModuleInit, OnModuleDestroy {
     } finally {
       this.respondendo.delete(conversaId);
     }
+  }
+
+  /** Manda a resposta: em áudio (voz configurada) quando for o caso, senão em texto. Se a voz falhar, vai em texto. */
+  private async enviarResposta(conversaId: string, texto: string, cfg: ConfigAgente, falado: boolean) {
+    const limpo = semTagsDeVoz(texto);
+    if (falado) {
+      const provedor = cfg.vozProvedor === 'elevenlabs' && this.ia.temElevenlabs ? 'elevenlabs' : cfg.vozProvedor === 'openai' && this.ia.imagem ? 'openai' : this.ia.vozDisponivel;
+      if (provedor) {
+        try {
+          const audio = await this.ia.falar({ texto: texto.replace(/https?:\/\/\S+/g, 'o link'), provedor, voz: provedor === 'elevenlabs' ? cfg.vozElevenlabs : cfg.vozOpenai });
+          await this.canais.enviar({ conversaId, tipo: 'audio', texto: limpo, midia: { conteudo: audio, mime: 'audio/mpeg', nome: 'resposta.mp3' }, ia: true });
+          if (cfg.audioComTexto || /https?:\/\//.test(texto)) await this.canais.enviar({ conversaId, tipo: 'texto', texto: limpo, ia: true });
+          return;
+        } catch (e) {
+          this.log.warn(`Conversa ${conversaId}: áudio não saiu (${(e as Error).message}); vai em texto.`);
+          await this.nota(conversaId, `🤖 O áudio da resposta não saiu (${(e as Error).message.slice(0, 150)}); foi em texto.`);
+        }
+      }
+    }
+    await this.canais.enviar({ conversaId, tipo: 'texto', texto: limpo, ia: true });
   }
 
   /** A IA sai da conversa e deixa um recado interno para a equipe. A conversa fica (ou volta) na fila. */

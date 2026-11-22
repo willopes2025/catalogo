@@ -1828,6 +1828,45 @@ test('transcrição de áudio no chat: sozinha quando chega, o agente responde a
   await ok('DELETE', `/crm/canais/${c.id}`);
 });
 
+test('agente responde em áudio: espelha o áudio do cliente, voz escolhida, sempre com texto junto, exemplo para ouvir', async () => {
+  const c = await ok('POST', '/crm/canais', { nome: 'Áudio de volta', tipo: 'evolution' });
+  await fetch(`${SIM}/__evo/conectar?i=${encodeURIComponent(c.config.instancia)}`);
+  const hook = (await recebidos()).filter((r) => r.caminho === '/evo/instance/create').pop().corpo.webhook.url.replace('http://localhost:3100', '');
+  let n = 0;
+  const chegar = (tel, message) => fetch(API.replace(/\/api$/, '') + hook, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ event: 'messages.upsert', instance: c.config.instancia, data: { key: { remoteJid: `${tel}@s.whatsapp.net`, fromMe: false, id: `VOZ${++n}` }, pushName: 'Cliente da Voz', message, messageTimestamp: Math.floor(Date.now() / 1000) } }) });
+  const espera = (ms = 1500) => new Promise((r) => setTimeout(r, ms));
+  const msgs = async (tel) => (await ok('GET', `/crm/conversas/${(await ok('GET', `/crm/conversas?aba=todas&canalId=${c.id}`)).find((x) => x.telefone === tel).id}/mensagens`)).mensagens.filter((m) => m.ia && m.direcao === 'saida');
+
+  await ok('PUT', '/crm/ia-agente', { ativo: true, canais: [c.id], instrucoes: '', conhecimento: 'Vendemos brincos, colares e anéis.', maxRespostas: 5, respostaAudio: 'espelhar', vozProvedor: 'openai', vozOpenai: 'coral' });
+  const cfg = await ok('GET', '/crm/ia-agente');
+  assert.equal(cfg.respostaAudio, 'espelhar');
+  assert.equal(cfg.voz.disponivel, 'openai');
+  // Cliente escreveu: resposta em texto.
+  await chegar('5527944441111', { conversation: 'Oi' });
+  await espera(900);
+  assert.equal((await msgs('5527944441111')).at(-1).tipo, 'texto');
+  // Cliente mandou áudio: resposta em áudio, com a voz escolhida; o texto fica guardado para a equipe ler.
+  await chegar('5527944441111', { audioMessage: { mimetype: 'audio/ogg; codecs=opus', seconds: 5, ptt: true, url: 'https://mmg.whatsapp.net/audio-1' } });
+  await espera();
+  const resposta = (await msgs('5527944441111')).at(-1);
+  assert.equal(resposta.tipo, 'audio');
+  assert.match(resposta.texto, /^Temos sim!/);
+  const tts = (await recebidos()).filter((r) => r.caminho === '/openai/v1/audio/speech').pop();
+  assert.equal(tts.corpo.voice, 'coral');
+  assert.match(tts.corpo.input, /^Temos sim!/);
+  assert.ok((await recebidos()).some((r) => r.caminho.includes('message/sendWhatsAppAudio')), 'saiu como áudio de WhatsApp');
+  // "Sempre", com o texto junto.
+  await ok('PUT', '/crm/ia-agente', { ativo: true, canais: [c.id], instrucoes: '', conhecimento: 'Vendemos brincos.', maxRespostas: 5, respostaAudio: 'sempre', audioComTexto: true });
+  await chegar('5527944442222', { conversation: 'Oi' });
+  await espera();
+  assert.deepEqual((await msgs('5527944442222')).map((m) => m.tipo), ['audio', 'texto']);
+  // Exemplo da voz.
+  const ex = await fetch(API + '/crm/ia-agente/ouvir', { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` }, body: JSON.stringify({ texto: 'Oi!', provedor: 'openai', voz: 'nova' }) });
+  assert.equal(ex.headers.get('content-type'), 'audio/mpeg');
+  await ok('PUT', '/crm/ia-agente', { ativo: false, canais: [], instrucoes: '', conhecimento: '', maxRespostas: 10, respostaAudio: 'nunca', audioComTexto: false });
+  await ok('DELETE', `/crm/canais/${c.id}`);
+});
+
 test('multiagentes: recepção pergunta e escolhe o especialista, troca quando o assunto muda, limite de trocas, mesmo nome', async () => {
   const c = await ok('POST', '/crm/canais', { nome: 'Multiagentes', tipo: 'evolution' });
   await fetch(`${SIM}/__evo/conectar?i=${encodeURIComponent(c.config.instancia)}`);
@@ -3128,6 +3167,17 @@ test('Assistente: consulta inadimplentes, prepara envio em lote, confirma por vo
   assert.ok(amostra.resultado.amostra[0].cliente.length >= 1);
   assert.equal(v.acoes.filter((x) => x.ferramenta === 'ler_conversa').at(-1).status, 'concluida');
   assert.match(v.mensagens.at(-1).texto, /^Li \d+ mensagens\.$/);
+  // O assistente configura o áudio do agente do WhatsApp (com confirmação).
+  await ok('POST', `/assistente/sessoes/${s.id}/mensagens`, { texto: 'liga o áudio do agente quando o cliente mandar áudio, com a voz nova' });
+  v = await esperar(s.id, (x) => !x.ocupada);
+  const aud = v.acoes.filter((x) => x.ferramenta === 'alterar_agentes_whatsapp').at(-1);
+  assert.equal(aud.status, 'aguardando', aud.erro ?? '');
+  assert.match(aud.resumo, /Resposta em áudio: quando o cliente manda áudio, voz Nova/);
+  await ok('POST', `/assistente/sessoes/${s.id}/mensagens`, { texto: 'pode' });
+  await esperar(s.id, (x) => !x.ocupada && x.acoes.find((y) => y.id === aud.id).status === 'concluida');
+  const agCfg = await ok('GET', '/crm/ia-agente');
+  assert.deepEqual([agCfg.respostaAudio, agCfg.vozProvedor, agCfg.vozOpenai], ['espelhar', 'openai', 'nova']);
+  await ok('PUT', '/crm/ia-agente', { ativo: agCfg.ativo, canais: agCfg.canais, instrucoes: agCfg.instrucoes, conhecimento: agCfg.conhecimento, maxRespostas: agCfg.maxRespostas, respostaAudio: 'nunca' });
   // Consulta flexível (motor de conjuntos) e agenda.
   await ok('POST', `/assistente/sessoes/${s.id}/mensagens`, { texto: 'quais os produtos mais vendidos?' });
   v = await esperar(s.id, (x) => !x.ocupada);

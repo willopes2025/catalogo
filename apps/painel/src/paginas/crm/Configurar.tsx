@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { api, pode } from '../../api';
+import { api, lerSessao, pode } from '../../api';
+import { Link } from 'react-router-dom';
 import { Abas, Campo, Carregando, Erro, camposComErro } from '../../componentes/ui';
 import { Distribuicao } from './Distribuicao';
 import { NOME_TIPO_CANAL, NovoCampo, TIPOS_CAMPO, usarAtendentes, usarCampos, usarCanais, usarFunis, variavelDoCampo, type CampoDef, type Canal, type Template, type TipoCanal } from './comum';
@@ -452,7 +453,8 @@ function Ramais() {
 // ───────────── Agente de IA ─────────────
 
 interface Especialista { id: string; funcao: string; nome: string; quando: string; instrucoes: string; conhecimento: string; ativo: boolean; ordem: number }
-interface ConfigAgente { ativo: boolean; canais: string[]; instrucoes: string; conhecimento: string; maxRespostas: number; nome: string; maxTransferencias: number; ligada: boolean; especialistas: Especialista[] }
+interface OpcaoVoz { id: string; nome: string }
+interface ConfigAgente { ativo: boolean; canais: string[]; instrucoes: string; conhecimento: string; maxRespostas: number; nome: string; maxTransferencias: number; ligada: boolean; especialistas: Especialista[]; respostaAudio: 'nunca' | 'espelhar' | 'sempre'; vozProvedor: 'automatica' | 'elevenlabs' | 'openai'; vozElevenlabs: string; vozOpenai: string; audioComTexto: boolean; voz?: { disponivel: 'elevenlabs' | 'openai' | null; elevenlabs: boolean; openai: boolean; opcoes: { elevenlabs: OpcaoVoz[]; openai: OpcaoVoz[] } } }
 
 /** O agente que atende no WhatsApp enquanto ninguém da equipe pegou a conversa. */
 function AgenteIa() {
@@ -462,11 +464,12 @@ function AgenteIa() {
   const canais = usarCanais();
   const [f, setF] = useState<ConfigAgente | null>(null);
   useEffect(() => { if (q.data && !f) setF(q.data); }, [q.data, f]);
-  const salvar = useMutation({ mutationFn: () => api<ConfigAgente>('/crm/ia-agente', { metodo: 'PUT', corpo: { ativo: f!.ativo, canais: f!.canais, instrucoes: f!.instrucoes, conhecimento: f!.conhecimento, maxRespostas: f!.maxRespostas, nome: f!.nome, maxTransferencias: f!.maxTransferencias } }), onSuccess: (r) => { setF({ ...f!, ...r }); qc.invalidateQueries({ queryKey: ['crm', 'ia-agente'] }); } });
+  const salvar = useMutation({ mutationFn: () => api<ConfigAgente>('/crm/ia-agente', { metodo: 'PUT', corpo: { ativo: f!.ativo, canais: f!.canais, instrucoes: f!.instrucoes, conhecimento: f!.conhecimento, maxRespostas: f!.maxRespostas, nome: f!.nome, maxTransferencias: f!.maxTransferencias, respostaAudio: f!.respostaAudio, vozProvedor: f!.vozProvedor, vozElevenlabs: f!.vozElevenlabs, vozOpenai: f!.vozOpenai, audioComTexto: f!.audioComTexto } }), onSuccess: (r) => { setF({ ...f!, ...r }); qc.invalidateQueries({ queryKey: ['crm', 'ia-agente'] }); } });
   if (q.isLoading || !f) return <Carregando />;
   if (q.error) return <Erro erro={q.error} />;
   return (
     <div className="coluna" style={{ gap: 12 }}>
+      <div className="aviso">Dica: em <Link to="/assistente">Assistente</Link> você vê todos os agentes numa lista (os do WhatsApp e os agendados) e pode pedir para ele montar ou ajustar um agente conversando, inclusive a voz.</div>
       {!f.ligada && <div className="aviso alerta">A inteligência artificial ainda não está ligada. Cole a chave do Claude em Configurações › Integrações › Inteligência artificial. Sem a chave, o agente não atende e os botões de IA do chat ficam escondidos.</div>}
       <div className="cartao form">
         <div className="secao" style={{ gridColumn: '1 / -1', marginTop: 0 }}>Agente que atende no WhatsApp</div>
@@ -493,6 +496,7 @@ function AgenteIa() {
         <Campo rotulo="Respostas seguidas antes de passar para a equipe" className="l2" ajuda="Evita conversa em círculo. Chegando ao limite, a conversa fica na fila com um recado.">
           <input type="number" min={1} max={50} disabled={!admin} value={f.maxRespostas} onChange={(e) => setF({ ...f, maxRespostas: Math.max(1, Math.min(50, Number(e.target.value) || 1)) })} />
         </Campo>
+        <AudioDoAgente f={f} setF={setF} admin={admin} />
         {salvar.error && <div className="l4"><Erro erro={salvar.error} /></div>}
         {salvar.isSuccess && <div className="aviso ok l4">Salvo. {f.ativo ? 'O agente já está atendendo as conversas novas.' : 'O agente está desligado.'}</div>}
         {admin && <div className="l4"><button className="botao" disabled={salvar.isPending} onClick={() => salvar.mutate()}>Salvar</button></div>}
@@ -510,6 +514,71 @@ function AgenteIa() {
         </ul>
       </div>
     </div>
+  );
+}
+
+/** Resposta em áudio do agente: quando, com qual voz, e exemplo para ouvir. */
+function AudioDoAgente({ f, setF, admin }: { f: ConfigAgente; setF: (c: ConfigAgente) => void; admin: boolean }) {
+  const [ouvindo, setOuvindo] = useState(false);
+  const [erro, setErro] = useState<unknown>(null);
+  const v = f.voz;
+  const provedor = f.vozProvedor === 'automatica' ? (v?.elevenlabs ? 'elevenlabs' : v?.openai ? 'openai' : null) : f.vozProvedor;
+  const ouvir = async () => {
+    if (!provedor) return;
+    setOuvindo(true);
+    setErro(null);
+    try {
+      const r = await fetch('/api/crm/ia-agente/ouvir', { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${lerSessao()?.token ?? ''}` }, body: JSON.stringify({ texto: `Oi, tudo bem? ${f.nome ? `Aqui é a ${f.nome}, ` : ''}da Aritana. Vi que você se interessou pelas nossas semijoias. Quer que eu te mande o catálogo?`, provedor, voz: provedor === 'elevenlabs' ? f.vozElevenlabs : f.vozOpenai }) });
+      if (!r.ok) throw new Error(((await r.json().catch(() => ({}))) as { mensagem?: string }).mensagem ?? 'Não deu para gerar o exemplo.');
+      await new Audio(URL.createObjectURL(await r.blob())).play();
+    } catch (e) {
+      setErro(e);
+    } finally {
+      setOuvindo(false);
+    }
+  };
+  return (
+    <>
+      <div className="secao l4">Áudio</div>
+      <p className="muted l4" style={{ margin: 0 }}>Os áudios que o cliente manda são transcritos e ela entende. Aqui você escolhe se ela também <b>responde em áudio</b>, com voz natural.</p>
+      {!v?.disponivel && <div className="aviso alerta l4">Para responder em áudio, cole a chave da ElevenLabs (voz mais natural) ou da OpenAI em Configurações › Integrações › Inteligência artificial.</div>}
+      <Campo rotulo="Responder em áudio" className="l2">
+        <select disabled={!admin || !v?.disponivel} value={f.respostaAudio} onChange={(e) => setF({ ...f, respostaAudio: e.target.value as ConfigAgente['respostaAudio'] })}>
+          <option value="nunca">Nunca (só texto)</option>
+          <option value="espelhar">Quando o cliente mandar áudio</option>
+          <option value="sempre">Sempre</option>
+        </select>
+      </Campo>
+      <Campo rotulo="Quem fala" className="l2">
+        <select disabled={!admin || f.respostaAudio === 'nunca'} value={f.vozProvedor} onChange={(e) => setF({ ...f, vozProvedor: e.target.value as ConfigAgente['vozProvedor'] })}>
+          <option value="automatica">Automática (a melhor disponível)</option>
+          <option value="elevenlabs" disabled={!v?.elevenlabs}>ElevenLabs (mais natural){v?.elevenlabs ? '' : ' · falta a chave'}</option>
+          <option value="openai" disabled={!v?.openai}>OpenAI{v?.openai ? '' : ' · falta a chave'}</option>
+        </select>
+      </Campo>
+      {f.respostaAudio !== 'nunca' && provedor === 'elevenlabs' && (
+        <Campo rotulo="Voz" className="l2" ajuda="Para outra voz da ElevenLabs, cole o Voice ID.">
+          <input list="vozes-eleven" disabled={!admin} value={f.vozElevenlabs} onChange={(e) => setF({ ...f, vozElevenlabs: e.target.value.trim() })} />
+          <datalist id="vozes-eleven">{v?.opcoes.elevenlabs.map((o) => <option key={o.id} value={o.id}>{o.nome}</option>)}</datalist>
+          <small className="muted">{v?.opcoes.elevenlabs.find((o) => o.id === f.vozElevenlabs)?.nome ?? 'voz personalizada'}</small>
+        </Campo>
+      )}
+      {f.respostaAudio !== 'nunca' && provedor === 'openai' && (
+        <Campo rotulo="Voz" className="l2">
+          <select disabled={!admin} value={f.vozOpenai} onChange={(e) => setF({ ...f, vozOpenai: e.target.value })}>{v?.opcoes.openai.map((o) => <option key={o.id} value={o.id}>{o.nome}</option>)}</select>
+        </Campo>
+      )}
+      {f.respostaAudio !== 'nunca' && (
+        <>
+          <label className="check l2"><input type="checkbox" disabled={!admin} checked={f.audioComTexto} onChange={(e) => setF({ ...f, audioComTexto: e.target.checked })} /> Mandar também o texto depois do áudio</label>
+          <div className="l4 flex" style={{ gap: 8, alignItems: 'center' }}>
+            <button className="botao claro pequeno" disabled={ouvindo || !provedor} onClick={ouvir}>{ouvindo ? 'Gerando…' : '🔊 Ouvir exemplo'}</button>
+            <small className="muted">Links nunca vão falados: quando a resposta tem link, o texto vai junto.</small>
+          </div>
+          {erro != null && <div className="l4"><Erro erro={erro} /></div>}
+        </>
+      )}
+    </>
   );
 }
 
