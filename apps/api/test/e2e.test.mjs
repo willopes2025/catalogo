@@ -3128,6 +3128,29 @@ test('Assistente: consulta inadimplentes, prepara envio em lote, confirma por vo
   assert.ok(amostra.resultado.amostra[0].cliente.length >= 1);
   assert.equal(v.acoes.filter((x) => x.ferramenta === 'ler_conversa').at(-1).status, 'concluida');
   assert.match(v.mensagens.at(-1).texto, /^Li \d+ mensagens\.$/);
+  // Consulta flexível (motor de conjuntos) e agenda.
+  await ok('POST', `/assistente/sessoes/${s.id}/mensagens`, { texto: 'quais os produtos mais vendidos?' });
+  v = await esperar(s.id, (x) => !x.ocupada);
+  const dados = v.acoes.filter((x) => x.ferramenta === 'consultar_dados').at(-1);
+  assert.equal(dados.status, 'concluida', dados.erro ?? '');
+  assert.ok(dados.resultado.linhas.length >= 1);
+  assert.match(dados.resultado.linhas[0].faturamento, /^R\$/);
+  assert.equal(typeof dados.resultado.linhas[0].pecas, 'number');
+  await ok('POST', `/assistente/sessoes/${s.id}/mensagens`, { texto: 'me mostra o estoque por loja e categoria' });
+  v = await esperar(s.id, (x) => !x.ocupada);
+  const est = v.acoes.filter((x) => x.ferramenta === 'consultar_dados').at(-1);
+  assert.equal(est.status, 'concluida', est.erro ?? '');
+  assert.ok('local' in est.resultado.linhas[0] && 'categoria' in est.resultado.linhas[0]);
+  await ok('POST', `/assistente/sessoes/${s.id}/mensagens`, { texto: 'marca uma reunião amanhã às 10h' });
+  v = await esperar(s.id, (x) => !x.ocupada);
+  const comp = v.acoes.filter((x) => x.ferramenta === 'criar_compromisso').at(-1);
+  assert.equal(comp.status, 'aguardando');
+  assert.match(comp.resumo, /Reunião de resultados.*10:00/);
+  await ok('POST', `/assistente/sessoes/${s.id}/mensagens`, { texto: 'pode' });
+  v = await esperar(s.id, (x) => !x.ocupada && x.acoes.find((y) => y.id === comp.id).status !== 'executando');
+  const marcado = v.acoes.find((y) => y.id === comp.id);
+  assert.equal(marcado.status, 'concluida', marcado.erro ?? '');
+  assert.equal(marcado.resultado.marcado, true);
   // Voz: sem ElevenLabs, fala pela OpenAI; com a chave, pela ElevenLabs. Links e marcadores não são lidos.
   const falarAudio = async (corpo) => {
     const r = await fetch(API + '/assistente/falar', { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` }, body: JSON.stringify(corpo) });

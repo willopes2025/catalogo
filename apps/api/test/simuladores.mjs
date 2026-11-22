@@ -355,6 +355,10 @@ http
             return resp([{ type: 'tool_use', id: `tu_${++wa.n}`, name: 'ler_conversa', input: { conversaId: d.amostra[0].conversaId } }], 'tool_use');
           }
           if (uso?.name === 'ler_conversa') return resp([{ type: 'text', text: `Li ${JSON.parse(String(resultado.content)).mensagens.length} mensagens.` }]);
+          if (uso?.name === 'consultar_dados') {
+            const d = JSON.parse(String(resultado.content));
+            return resp([{ type: 'text', text: `Dados (${d.conjunto}): ${d.linhas.length} linha(s); primeira: ${JSON.stringify(d.linhas[0] ?? {})}` }]);
+          }
           if (uso?.name === 'resumo_negocio') {
             const d = JSON.parse(c);
             return resp([{ type: 'text', text: `${sistemaTxt.includes('CONVERSA FALADA') ? '[excited] ' : ''}No período vendemos ${d.vendas.liquido} (${d.vendas.variacao}); inadimplência hoje: ${d.hoje.inadimplencia}.` }]);
@@ -374,6 +378,12 @@ http
         if (/cria um especialista de pós-venda/i.test(fala)) return resp([{ type: 'tool_use', id: `tu_${++wa.n}`, name: 'alterar_agentes_whatsapp', input: { acao: 'criar', especialista: { chave: 'posvenda', nome: 'Pós-venda', atendeQuando: 'Cliente que já comprou e quer trocar, consertar ou tirar dúvida da peça.', instrucoes: 'Seja atenciosa, peça o número da venda e passe para a equipe quando for troca.' } } }], 'tool_use');
         if (/quanto vence hoje/i.test(fala)) return resp([{ type: 'tool_use', id: `tu_${++wa.n}`, name: 'consultar_financeiro', input: { situacao: 'a_vencer' } }], 'tool_use');
         if (/analisa as conversas/i.test(fala)) return resp([{ type: 'tool_use', id: `tu_${++wa.n}`, name: 'amostra_conversas', input: { quantidade: 20 } }], 'tool_use');
+        if (/mais vendidos/i.test(fala)) return resp([{ type: 'tool_use', id: `tu_${++wa.n}`, name: 'consultar_dados', input: { conjunto: 'vendas_itens', metricas: ['pecas', 'faturamento'], agruparPor: ['produto'], limite: 5 } }], 'tool_use');
+        if (/estoque por loja e categoria/i.test(fala)) return resp([{ type: 'tool_use', id: `tu_${++wa.n}`, name: 'consultar_dados', input: { conjunto: 'estoque', metricas: ['quantidade', 'valor_venda'], agruparPor: ['local', 'categoria'] } }], 'tool_use');
+        if (/marca uma reunião amanhã às 10h/i.test(fala)) {
+          const am = new Date(Date.now() - 3 * 3600_000 + 86400_000).toISOString().slice(0, 10);
+          return resp([{ type: 'tool_use', id: `tu_${++wa.n}`, name: 'criar_compromisso', input: { tipo: 'reuniao', inicio: `${am}T10:00`, titulo: 'Reunião de resultados', online: false, local: 'Matriz' } }], 'tool_use');
+        }
         const busca = /inadimplentes (.+)$/i.exec(fala)?.[1];
         if (busca) return resp([{ type: 'tool_use', id: `tu_${++wa.n}`, name: 'consultar_inadimplentes', input: { busca, limite: 20 } }], 'tool_use');
         if (/como foi o m[eê]s/i.test(fala)) {
