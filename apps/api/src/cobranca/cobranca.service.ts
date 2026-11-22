@@ -10,6 +10,7 @@ import { EmailService } from '../integracoes/email.service';
 import { CanaisService } from '../crm/canais.service';
 import { hoje } from '../maletas/maletas.service';
 import { CobrancaConfigService, type ConfigCobranca } from './cobranca-config.service';
+import { PlanoContasService } from '../financeiro/plano.service';
 
 /** O que este usuário pode ver na cobrança. */
 export interface Escopo {
@@ -37,6 +38,7 @@ export class CobrancaService implements OnModuleInit, OnModuleDestroy {
     private readonly canais: CanaisService,
     private readonly email: EmailService,
     private readonly auditoria: AuditoriaService,
+    private readonly plano: PlanoContasService,
   ) {}
 
   onModuleInit() {
@@ -327,6 +329,7 @@ export class CobrancaService implements OnModuleInit, OnModuleDestroy {
         if (!atualizado.length) throw new BadRequestException(`"${t.descricao}" mudou enquanto o acordo era feito. Abra a ficha de novo.`);
       }
       const novas = [...(r.entrada ? [{ ...r.entrada, numero: 0 }] : []), ...r.parcelas];
+      const planoRecebimentos = (await this.plano.daChave('recebimentos')).planoContaId;
       const total = novas.length;
       const criadas = await tx
         .insert(titulos)
@@ -337,6 +340,7 @@ export class CobrancaService implements OnModuleInit, OnModuleDestroy {
             pessoaId,
             descricao: `Acordo nº ${a.numero} · ${p.numero === 0 ? 'entrada' : `parcela ${p.numero}/${r.parcelas.length}`}`,
             categoria: 'Acordo de cobrança',
+            planoContaId: planoRecebimentos,
             valor: p.valor,
             vencimento: p.vencimento,
             parcela: i + 1,

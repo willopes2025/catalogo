@@ -450,8 +450,8 @@ export class IndicadoresController {
         ac as (select date_trunc('month', data)::date as mes, sum((resultado->>'totalVendido')::bigint) as rede, sum((resultado->>'comissao')::bigint) as comissao from acertos where data >= date_trunc('month', current_date) - interval '5 months' group by 1),
         vd as (select date_trunc('month', criado_em)::date as mes, sum(total) as vendas, sum(devolvido) as devolucoes from vendas where status = 'concluida' and criado_em >= date_trunc('month', current_date) - interval '5 months' group by 1),
         cm as (select date_trunc('month', x.dia)::date as mes, sum(x.custo) as cmv from ${ITENS_VENDIDOS} x where x.dia >= date_trunc('month', current_date) - interval '5 months' group by 1),
-        dp as (select date_trunc('month', pago_em)::date as mes, sum(valor_pago) as despesas from titulos where tipo = 'pagar' and status = 'pago' and coalesce(categoria, '') <> 'Devoluções' and pago_em >= date_trunc('month', current_date) - interval '5 months' group by 1),
-        rc as (select date_trunc('month', pago_em)::date as mes, sum(valor_pago) as recebido from titulos where tipo = 'receber' and status = 'pago' and pago_em >= date_trunc('month', current_date) - interval '5 months' group by 1)
+        dp as (select date_trunc('month', pago_em)::date as mes, sum(valor_pago) as despesas from titulos where tipo = 'pagar' and status = 'pago' and coalesce(categoria, '') <> 'Devoluções' and not exists (select 1 from plano_contas pc where pc.id = titulos.plano_conta_id and pc.grupo = 'fora') and pago_em >= date_trunc('month', current_date) - interval '5 months' group by 1),
+        rc as (select date_trunc('month', pago_em)::date as mes, sum(valor_pago) as recebido from titulos where tipo = 'receber' and status = 'pago' and coalesce(origem_tipo, '') <> 'transferencia' and pago_em >= date_trunc('month', current_date) - interval '5 months' group by 1)
         select to_char(m.mes, 'YYYY-MM') as mes, coalesce(ac.rede, 0) as rede, coalesce(vd.vendas, 0) as vendas, coalesce(vd.devolucoes, 0) as devolucoes, coalesce(ac.comissao, 0) as comissao,
           coalesce(cm.cmv, 0) as cmv, coalesce(dp.despesas, 0) as despesas, coalesce(rc.recebido, 0) as recebido
         from meses m left join ac on ac.mes = m.mes left join vd on vd.mes = m.mes left join cm on cm.mes = m.mes left join dp on dp.mes = m.mes left join rc on rc.mes = m.mes order by m.mes`),
@@ -464,7 +464,7 @@ export class IndicadoresController {
     const despesas = numeros<{ mes: string; categoria: string; valor: number }>(
       await this.db.execute(sql`
         select to_char(date_trunc('month', pago_em), 'YYYY-MM') as mes, coalesce(nullif(categoria, ''), 'Sem categoria') as categoria, sum(valor_pago) as valor
-        from titulos where tipo = 'pagar' and status = 'pago' and coalesce(categoria, '') <> 'Devoluções' and pago_em >= date_trunc('month', current_date) - interval '5 months'
+        from titulos where tipo = 'pagar' and status = 'pago' and coalesce(categoria, '') <> 'Devoluções' and not exists (select 1 from plano_contas pc where pc.id = titulos.plano_conta_id and pc.grupo = 'fora') and pago_em >= date_trunc('month', current_date) - interval '5 months'
         group by 1, 2 order by 3 desc`),
     );
     const semanas = numeros<N & { semana: string }>(

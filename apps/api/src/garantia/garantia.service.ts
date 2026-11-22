@@ -8,6 +8,7 @@ import { EstoqueService } from '../estoque/estoque.service';
 import { ConfiguracoesService } from '../configuracoes/configuracoes.service';
 import { empresas, locaisEstoque, maletaItens, maletas, ordensServico, produtos, titulos, vendaItens, vendas } from '../db/schema';
 import { hoje } from '../maletas/maletas.service';
+import { PlanoContasService } from '../financeiro/plano.service';
 
 export interface NovaOS {
   tipo: 'garantia' | 'conserto';
@@ -39,6 +40,7 @@ export class GarantiaService {
     private readonly estoque: EstoqueService,
     private readonly config: ConfiguracoesService,
     private readonly auditoria: AuditoriaService,
+    private readonly plano: PlanoContasService,
   ) {}
 
   /** Local das peças com defeito; criado na primeira vez, na matriz. */
@@ -178,6 +180,7 @@ export class GarantiaService {
           pessoaId: os.clienteId ?? os.representanteId,
           descricao: `Conserto · OS nº ${os.numero}`,
           categoria: 'Consertos',
+          ...(await this.plano.daChave('consertos')),
           valor: os.valor,
           vencimento: hoje(),
           formaPagamento,

@@ -1,0 +1,30 @@
+/* Financeiro gerencial: DRE, plano de contas e contas bancárias */
+.dre-rolagem { overflow-x: auto; border: 1px solid var(--linha); border-radius: var(--raio); background: var(--papel); }
+.dre { width: 100%; border-collapse: collapse; font-size: 14px; font-variant-numeric: tabular-nums; }
+.dre th, .dre td { padding: 7px 12px; white-space: nowrap; text-align: right; border-bottom: 1px solid var(--linha); }
+.dre th:first-child, .dre td:first-child { text-align: left; position: sticky; left: 0; background: inherit; min-width: 300px; white-space: normal; z-index: 1; }
+.dre thead th, .dre thead th:first-child { background: var(--marrom); color: #faf6ef; font-weight: 600; font-size: 13px; }
+.dre tbody tr { background: var(--papel); }
+.dre tr.grupo { background: var(--creme-2); font-weight: 600; cursor: pointer; }
+.dre tr.subtotal { background: #efe6d6; font-weight: 700; }
+.dre tr.subtotal.final { background: var(--marrom); color: #faf6ef; }
+.dre tr.subtotal.final td { border-bottom: 0; }
+.dre tr.conta td:first-child { color: var(--texto, inherit); }
+.dre tr.conta:hover { background: #fbf6ec; }
+.dre .seta { display: inline-block; width: 16px; color: var(--suave); }
+.dre .cod { color: var(--suave); font-size: 12px; margin-right: 6px; }
+.dre .pc { display: block; font-size: 11px; color: var(--suave); font-weight: 400; }
+.dre tr.final .pc { color: #e6d9c2; }
+.dre .neg { color: #a23a2a; }
+.dre tr.final .neg { color: #ffd2c8; }
+.dre td.clicavel { cursor: pointer; }
+.dre td.clicavel:hover { text-decoration: underline; }
+.dre .barra { display: inline-block; height: 5px; border-radius: 3px; background: var(--dourado); vertical-align: middle; margin-left: 6px; opacity: 0.75; }
+.dre .tag { font-size: 11px; font-weight: 400; color: var(--suave); margin-left: 6px; }
+.plano-linha { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 7px 10px; border-bottom: 1px solid var(--linha); }
+.plano-linha.raiz { background: var(--creme-2); font-weight: 600; }
+.plano-linha.inativa { opacity: 0.5; }
+.plano-linha .cod { color: var(--suave); font-size: 12px; margin-right: 8px; font-variant-numeric: tabular-nums; }
+.plano-linha .acoes { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.modal-fundo { position: fixed; inset: 0; background: rgba(43, 35, 29, 0.45); z-index: 60; display: flex; align-items: flex-start; justify-content: center; padding: 8vh 16px; overflow-y: auto; }
+.modal { width: 100%; }

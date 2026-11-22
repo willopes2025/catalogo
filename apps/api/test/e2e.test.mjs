@@ -3247,6 +3247,134 @@ test('Assistente: consulta inadimplentes, prepara envio em lote, confirma por vo
   assert.equal((await ok('GET', '/assistente/estado')).nome, 'Cláudio');
 });
 
+test('financeiro gerencial: plano de contas, lançamentos classificados, contas bancárias com transferência e extrato, DRE aberta por conta', async () => {
+  const dia = (n) => new Date(Date.now() - 3 * 3600_000 + n * 86400_000).toISOString().slice(0, 10);
+  const mes = dia(0).slice(0, 7);
+  const mesMais = (n) => { const d = new Date(Date.UTC(Number(mes.slice(0, 4)), Number(mes.slice(5)) - 1 + n, 1)); return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`; };
+  const emp = (await ok('GET', '/empresas'))[0];
+
+  // Plano padrão: 9 grupos (as linhas da DRE) e as contas do sistema.
+  let plano = await ok('GET', '/financeiro/plano-contas');
+  assert.equal(plano.grupos.length, 9);
+  const raiz = (g) => plano.contas.find((c) => !c.paiId && c.grupo === g);
+  const daChave = (k) => plano.contas.find((c) => c.chave === k);
+  assert.deepEqual(plano.contas.filter((c) => !c.paiId).map((c) => c.codigo), ['1', '2', '3', '4', '5', '6', '7', '8', '9']);
+  assert.ok(daChave('cmv').calculada && daChave('vendas_rede').calculada && !daChave('comissoes').calculada);
+  // O que o sistema lançou sozinho nos outros testes já caiu na conta certa.
+  const autom = await ok('GET', '/financeiro/titulos?tipo=receber&aba=pagos');
+  assert.ok(autom.itens.filter((t) => ['venda', 'acerto'].includes(t.origemTipo)).every((t) => t.planoNome === 'Recebimento de vendas e acertos'), 'recebimentos de venda e acerto ficam fora do resultado');
+
+  // Conta nova, subconta, código repetido, conta calculada não aceita subconta.
+  const aluguel = await ok('POST', '/financeiro/plano-contas', { nome: 'Aluguel da loja do centro', paiId: raiz('despesas_administrativas').id });
+  assert.equal(aluguel.codigo, '6.10');
+  assert.equal(aluguel.grupo, 'despesas_administrativas');
+  const sub = await ok('POST', '/financeiro/plano-contas', { nome: 'IPTU da loja', paiId: aluguel.id });
+  assert.equal(sub.codigo, '6.10.01');
+  assert.equal((await chamar('POST', '/financeiro/plano-contas', { nome: 'Repetida', paiId: raiz('despesas_administrativas').id, codigo: '6.01' })).status, 400);
+  assert.equal((await chamar('POST', '/financeiro/plano-contas', { nome: 'Dentro do CMV', paiId: daChave('cmv').id })).status, 400);
+  // Mover de grupo leva as subcontas junto (grupo e código).
+  const movida = await ok('PATCH', `/financeiro/plano-contas/${aluguel.id}`, { paiId: raiz('despesas_vendas').id });
+  assert.deepEqual([movida.grupo, movida.codigo], ['despesas_vendas', '4.08']);
+  plano = await ok('GET', '/financeiro/plano-contas');
+  assert.deepEqual([plano.contas.find((c) => c.id === sub.id).grupo, plano.contas.find((c) => c.id === sub.id).codigo], ['despesas_vendas', '4.08.01']);
+  assert.equal((await chamar('PATCH', `/financeiro/plano-contas/${aluguel.id}`, { paiId: sub.id })).status, 400, 'não entra dentro da própria subconta');
+  await ok('PATCH', `/financeiro/plano-contas/${aluguel.id}`, { paiId: raiz('despesas_administrativas').id, nome: 'Aluguel loja centro' });
+  assert.equal((await chamar('DELETE', `/financeiro/plano-contas/${daChave('comissoes').id}`)).status, 400, 'conta do sistema não é excluída');
+  assert.equal((await chamar('PATCH', `/financeiro/plano-contas/${daChave('cmv').id}`, { ativo: false })).status, 400);
+  assert.equal((await chamar('DELETE', `/financeiro/plano-contas/${aluguel.id}`)).status, 400, 'tem subconta');
+
+  // Contas bancárias: cadastro, nome repetido, transferência e extrato.
+  const banco = await ok('POST', '/financeiro/contas', { empresaId: emp.id, nome: 'Banco do teste DRE', tipo: 'banco', saldoInicial: 1000000, banco: 'Sicoob', agencia: '3008', numero: '12345-6' });
+  const caixa = await ok('POST', '/financeiro/contas', { empresaId: emp.id, nome: 'Cofre do teste DRE', tipo: 'caixa' });
+  assert.equal((await chamar('POST', '/financeiro/contas', { empresaId: emp.id, nome: 'banco do teste dre' })).status, 400);
+  assert.equal((await chamar('POST', '/financeiro/transferencias', { origemId: banco.id, destinoId: banco.id, valor: 100, data: dia(0) })).status, 400);
+  assert.equal((await chamar('POST', '/financeiro/transferencias', { origemId: banco.id, destinoId: caixa.id, valor: 100, data: dia(2) })).status, 400, 'data no futuro');
+  await ok('POST', '/financeiro/transferencias', { origemId: banco.id, destinoId: caixa.id, valor: 30000, data: dia(0), descricao: 'Troco' });
+
+  // Lançamentos: despesa já paga com conta do plano; parcelada sem classificar; receita de serviço.
+  const [pagoAluguel] = await ok('POST', '/financeiro/titulos', { empresaId: emp.id, tipo: 'pagar', descricao: 'Aluguel do mês', planoContaId: aluguel.id, valor: 250000, vencimento: dia(0), pagoEm: dia(0), contaId: banco.id });
+  assert.deepEqual([pagoAluguel.status, pagoAluguel.categoria, pagoAluguel.planoContaId], ['pago', 'Aluguel loja centro', aluguel.id]);
+  assert.equal((await chamar('POST', '/financeiro/titulos', { empresaId: emp.id, tipo: 'pagar', descricao: 'No CMV', planoContaId: daChave('cmv').id, valor: 100, vencimento: dia(0) })).status, 400, 'conta calculada não recebe lançamento');
+  assert.equal((await chamar('POST', '/financeiro/titulos', { empresaId: emp.id, tipo: 'pagar', descricao: 'No grupo', planoContaId: raiz('custos').id, valor: 100, vencimento: dia(0) })).status, 400, 'grupo não recebe lançamento');
+  assert.equal((await chamar('POST', '/financeiro/titulos', { empresaId: emp.id, tipo: 'pagar', descricao: 'Paga sem conta', valor: 100, vencimento: dia(0), pagoEm: dia(0) })).status, 400);
+  const parcelas = await ok('POST', '/financeiro/titulos', { empresaId: emp.id, tipo: 'pagar', descricao: 'Sistema de gestão', valor: 90000, vencimento: `${mes}-10`, parcelas: 3 });
+  assert.deepEqual(parcelas.map((p) => p.vencimento), [`${mes}-10`, `${mesMais(1)}-10`, `${mesMais(2)}-10`]);
+  const semConta = (await ok('GET', '/financeiro/titulos?tipo=pagar&aba=abertos&semPlano=1&busca=Sistema de gestão')).itens;
+  assert.equal(semConta.length, 3);
+  const sistemas = plano.contas.find((c) => c.nome === 'Sistemas e assinaturas');
+  assert.equal((await ok('POST', '/financeiro/titulos/classificar', { ids: parcelas.map((p) => p.id), planoContaId: sistemas.id })).classificados, 3);
+  assert.equal((await ok('GET', '/financeiro/titulos?tipo=pagar&aba=abertos&semPlano=1&busca=Sistema de gestão')).itens.length, 0);
+  assert.equal((await ok('GET', `/financeiro/titulos?tipo=pagar&aba=abertos&planoContaId=${sistemas.id}`)).itens.length, 3);
+  // Corrige o valor de uma parcela em aberto; depois paga pela conta do banco.
+  const corrigida = await ok('PATCH', `/financeiro/titulos/${parcelas[0].id}`, { valor: 32000, descricao: 'Sistema de gestão (1/3) · com reajuste' });
+  assert.equal(corrigida.valor, 32000);
+  await ok('POST', `/financeiro/titulos/${parcelas[0].id}/baixar`, { contaId: banco.id });
+  assert.equal((await chamar('PATCH', `/financeiro/titulos/${parcelas[0].id}`, { valor: 100 })).status, 400, 'pago não muda de valor');
+  await ok('PATCH', `/financeiro/titulos/${parcelas[0].id}`, { descricao: 'Sistema de gestão (1/3)' });
+  // Uma despesa paga fica sem classificar de propósito.
+  const [solta] = await ok('POST', '/financeiro/titulos', { empresaId: emp.id, tipo: 'pagar', descricao: 'Despesa solta', valor: 7000, vencimento: dia(0), pagoEm: dia(0), contaId: caixa.id });
+
+  // Extrato do banco: saldo inicial, menos transferência, aluguel e a parcela.
+  const ext = await ok('GET', `/financeiro/contas/${banco.id}/extrato?de=${mes}-01&ate=${dia(0)}`);
+  assert.deepEqual([ext.saldoAnterior, ext.entradas, ext.saidas, ext.saldoFinal], [1000000, 0, 30000 + 250000 + 32000, 1000000 - 312000]);
+  assert.equal(ext.linhas.at(-1).saldo, ext.saldoFinal);
+  const cad = await ok('GET', '/financeiro/contas-cadastro');
+  assert.equal(cad.find((c) => c.id === caixa.id).saldo, 30000 - 7000);
+  assert.equal((await chamar('PATCH', `/financeiro/contas/${banco.id}`, { ativo: false })).status, 400, 'conta com saldo não desativa');
+
+  // DRE no regime de caixa, mês atual.
+  const dre = await ok('GET', `/financeiro/dre?de=${mes}&ate=${mes}&regime=caixa`);
+  assert.deepEqual(dre.meses, [mes]);
+  const grupo = (d, k) => d.grupos.find((g) => g.chave === k);
+  const achar = (linhas, id) => { for (const l of linhas) { if (l.id === id) return l; const f = achar(l.filhos, id); if (f) return f; } return null; };
+  const adm = grupo(dre, 'despesas_administrativas');
+  assert.equal(achar(adm.contas, aluguel.id).total, -250000);
+  assert.equal(achar(adm.contas, sistemas.id).total, -32000);
+  assert.equal(adm.total, adm.contas.reduce((a, c) => a + c.total, 0), 'o grupo é a soma das contas');
+  // Sem classificar entra em "Despesas a classificar" e o aviso conta os títulos.
+  assert.ok(dre.semClassificar >= 1);
+  assert.ok(achar(grupo(dre, 'outras').contas, daChave('classificar_despesas').id).total <= -7000);
+  // Subtotais fecham com os grupos; transferência fica fora e não muda o resultado.
+  const t = (k) => grupo(dre, k).total;
+  assert.equal(dre.subtotais.receitaLiquida.total, t('receita') + t('deducoes'));
+  assert.equal(dre.subtotais.lucroBruto.total, dre.subtotais.receitaLiquida.total + t('custos'));
+  assert.equal(dre.subtotais.resultado.total, dre.subtotais.lucroBruto.total + t('despesas_vendas') + t('despesas_pessoal') + t('despesas_administrativas') + t('financeiro') + t('outras'));
+  assert.equal(achar(dre.fora.contas, daChave('transferencias').id).total, 0, 'entrada e saída da transferência se anulam');
+  assert.ok(!dre.grupos.some((g) => g.chave === 'fora'));
+  // Receita e custo batem com os indicadores (mesmas fontes).
+  const ind = (await ok('GET', '/indicadores/financeiro')).meses.find((m) => m.mes === mes);
+  const calcReceita = grupo(dre, 'receita').contas.filter((c) => c.calculada).reduce((a, c) => a + c.total, 0);
+  assert.equal(calcReceita, ind.bruta, 'receita das vendas e acertos igual à dos indicadores');
+  assert.equal(achar(grupo(dre, 'custos').contas, daChave('cmv').id).total, -ind.cmv);
+  assert.equal(achar(grupo(dre, 'deducoes').contas, daChave('devolucoes').id).total, -ind.devolucoes);
+  // Transferência não virou despesa nos indicadores antigos.
+  assert.ok(!(await ok('GET', '/indicadores/financeiro')).despesas.some((d) => d.categoria === 'Transferência entre contas'));
+
+  // Abrir a linha: lançamentos da conta no mês; a conta-mãe traz os das subcontas.
+  const lan = await ok('GET', `/financeiro/dre/lancamentos?contaId=${aluguel.id}&mes=${mes}&regime=caixa`);
+  assert.deepEqual(lan.itens.map((x) => x.descricao), ['Aluguel do mês']);
+  await ok('PATCH', `/financeiro/titulos/${solta.id}`, { planoContaId: sub.id });
+  assert.equal((await ok('GET', `/financeiro/dre/lancamentos?contaId=${aluguel.id}&mes=${mes}&regime=caixa`)).itens.length, 2);
+  const dre2 = await ok('GET', `/financeiro/dre?de=${mes}&ate=${mes}&regime=caixa`);
+  const linhaAluguel = achar(grupo(dre2, 'despesas_administrativas').contas, aluguel.id);
+  assert.deepEqual([linhaAluguel.total, linhaAluguel.filhos[0].total], [-257000, -7000], 'a conta soma as subcontas');
+  assert.match((await ok('GET', `/financeiro/dre/lancamentos?contaId=${daChave('cmv').id}&mes=${mes}&regime=caixa`)).calculadas[0].nome, /Custo das peças/);
+
+  // Competência: as parcelas em aberto aparecem nos meses do vencimento.
+  const comp = await ok('GET', `/financeiro/dre?de=${mes}&ate=${mesMais(2)}&regime=competencia`);
+  assert.deepEqual(achar(grupo(comp, 'despesas_administrativas').contas, sistemas.id).valores, [-32000, -30000, -30000]);
+  assert.equal((await chamar('GET', `/financeiro/dre?de=${mesMais(2)}&ate=${mes}`)).status, 400);
+
+  // Com lançamentos, a conta não é excluída; desativada, some das escolhas e continua na DRE.
+  assert.equal((await chamar('DELETE', `/financeiro/plano-contas/${sub.id}`)).status, 400);
+  await ok('PATCH', `/financeiro/plano-contas/${sub.id}`, { ativo: false });
+  assert.equal((await chamar('PATCH', `/financeiro/titulos/${parcelas[1].id}`, { planoContaId: sub.id })).status, 400, 'conta desativada não recebe lançamento novo');
+  assert.equal(achar(grupo(await ok('GET', `/financeiro/dre?de=${mes}&ate=${mes}`), 'despesas_administrativas').contas, sub.id).total, -7000);
+  // Renomear a conta atualiza a categoria dos títulos.
+  await ok('PATCH', `/financeiro/plano-contas/${aluguel.id}`, { nome: 'Aluguel da loja' });
+  assert.equal((await ok('GET', `/financeiro/titulos?tipo=pagar&aba=pagos&planoContaId=${aluguel.id}`)).itens[0].categoria, 'Aluguel da loja');
+});
+
 test('implantação: apagar dados de teste exige APAGAR e mantém o que é configuração', async () => {
   assert.equal((await chamar('POST', '/implantacao/apagar-dados-de-teste', { confirmacao: 'apagar' })).status, 400);
   const bloq = await chamar('POST', '/implantacao/apagar-dados-de-teste', { confirmacao: 'APAGAR', manterProdutos: true });

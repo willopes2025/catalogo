@@ -7,6 +7,7 @@ import { AuditoriaService } from '../comum/auditoria.service';
 import { EstoqueService } from '../estoque/estoque.service';
 import { caixaMovimentos, caixas, configuracoes, creditos, locaisEstoque, pessoas, produtos, titulos, vendaItens, vendaPagamentos, vendas } from '../db/schema';
 import { hoje } from '../maletas/maletas.service';
+import { PlanoContasService } from '../financeiro/plano.service';
 
 export const FORMAS = ['dinheiro', 'pix', 'debito', 'credito', 'credito_loja', 'boleto'] as const;
 export type Forma = (typeof FORMAS)[number];
@@ -36,7 +37,7 @@ export interface DadosVenda {
 
 @Injectable()
 export class VendasService {
-  constructor(@Inject(DB) private readonly db: Db, private readonly estoque: EstoqueService, private readonly auditoria: AuditoriaService) {}
+  constructor(@Inject(DB) private readonly db: Db, private readonly estoque: EstoqueService, private readonly auditoria: AuditoriaService, private readonly plano: PlanoContasService) {}
 
   async regras(tx?: Tx | Db): Promise<RegrasVenda> {
     const [c] = await (tx ?? this.db).select().from(configuracoes).where(eq(configuracoes.chave, 'regras_venda'));
@@ -215,6 +216,7 @@ export class VendasService {
             pessoaId: p.forma === 'debito' || p.forma === 'credito' ? null : cliente?.id ?? null,
             descricao: `Venda nº ${venda.numero} · ${NOME_FORMA[p.forma]}${n > 1 ? ` (${i + 1}/${n})` : ''}${p.maquininha ? ` · ${p.maquininha}` : ''}`,
             categoria: d.tipo === 'revenda' ? 'Revenda' : 'Venda loja',
+            ...(await this.plano.daChave('recebimentos')),
             valor,
             vencimento: venc,
             parcela: i + 1,
@@ -330,7 +332,7 @@ export class VendasService {
         const { porForma } = await this.resumoCaixa(caixa.id, tx);
         if ((porForma.dinheiro ?? 0) < valor) throw new BadRequestException('Não há dinheiro suficiente no caixa para esta devolução; devolva como crédito.');
         await tx.insert(caixaMovimentos).values({ caixaId: caixa.id, tipo: 'devolucao', forma: 'dinheiro', valor: -valor, descricao: `Devolução da venda nº ${v.numero}`, vendaId: id, usuarioId });
-        await tx.insert(titulos).values({ empresaId: v.empresaId, tipo: 'pagar', pessoaId: v.clienteId, descricao: `Devolução da venda nº ${v.numero}`, categoria: 'Devoluções', valor, vencimento: hoje(), status: 'pago', pagoEm: hoje(), valorPago: valor, origemTipo: 'devolucao', origemId: id });
+        await tx.insert(titulos).values({ empresaId: v.empresaId, tipo: 'pagar', pessoaId: v.clienteId, descricao: `Devolução da venda nº ${v.numero}`, categoria: 'Devoluções', ...(await this.plano.daChave('devolucoes_caixa')), valor, vencimento: hoje(), status: 'pago', pagoEm: hoje(), valorPago: valor, origemTipo: 'devolucao', origemId: id });
       }
       await this.auditoria.registrar({ usuarioId, acao: 'devolucao', entidade: 'venda', entidadeId: id, dados: { valor: total, abatido, destino } }, tx);
       return { ok: true, valor: total, abatidoEmParcelas: abatido, destino };

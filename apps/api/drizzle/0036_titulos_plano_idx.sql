@@ -1,0 +1,1 @@
+CREATE INDEX "titulos_plano_idx" ON "titulos" USING btree ("plano_conta_id");

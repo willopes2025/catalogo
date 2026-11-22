@@ -5,6 +5,7 @@ import { DB, type Db } from '../comum/db.module';
 import { AuditoriaService } from '../comum/auditoria.service';
 import { ConfiguracoesService } from '../configuracoes/configuracoes.service';
 import { comissoes, empresas, fechamentosComissao, titulos } from '../db/schema';
+import { PlanoContasService } from '../financeiro/plano.service';
 
 export interface LinhaComissao {
   tipo: 'loja' | 'rede' | 'link';
@@ -26,7 +27,7 @@ export interface LinhaComissao {
  */
 @Injectable()
 export class ComissoesService {
-  constructor(@Inject(DB) private readonly db: Db, private readonly config: ConfiguracoesService, private readonly auditoria: AuditoriaService) {}
+  constructor(@Inject(DB) private readonly db: Db, private readonly config: ConfiguracoesService, private readonly auditoria: AuditoriaService, private readonly plano: PlanoContasService) {}
 
   private periodo(mes: string) {
     if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(mes)) throw new BadRequestException('Mês no formato AAAA-MM.');
@@ -138,7 +139,7 @@ export class ComissoesService {
       for (const l of aPagar) {
         const [t] = await tx
           .insert(titulos)
-          .values({ empresaId: matriz.id, tipo: 'pagar', pessoaId: l.pessoaId, descricao: `Comissão ${l.tipo === 'rede' ? 'da rede' : l.tipo === 'link' ? 'de vendas pelo link' : 'de vendas'} · ${l.nome} · ${mes.slice(5)}/${mes.slice(0, 4)}`, categoria: 'Comissões', valor: l.valor, vencimento: venc, origemTipo: 'comissao', origemId: f.id })
+          .values({ empresaId: matriz.id, tipo: 'pagar', pessoaId: l.pessoaId, descricao: `Comissão ${l.tipo === 'rede' ? 'da rede' : l.tipo === 'link' ? 'de vendas pelo link' : 'de vendas'} · ${l.nome} · ${mes.slice(5)}/${mes.slice(0, 4)}`, categoria: 'Comissões', ...(await this.plano.daChave('comissoes')), valor: l.valor, vencimento: venc, origemTipo: 'comissao', origemId: f.id })
           .returning();
         await tx.insert(comissoes).values({ fechamentoId: f.id, tipo: l.tipo, usuarioId: l.usuarioId, pessoaId: l.pessoaId, nome: l.nome, base: l.base, percentualPb: l.percentualPb, valor: l.valor, meta: l.meta, detalhes: l.detalhes, tituloId: t.id });
       }

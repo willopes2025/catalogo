@@ -17,6 +17,9 @@ import { CatalogoController } from './catalogo/catalogo.controller';
 import { PrivacidadeController } from './catalogo/privacidade.controller';
 import { ConsultasController } from './consultas/consultas.controller';
 import { CobrancaController } from './cobranca/cobranca.controller';
+import { PlanoContasService } from './financeiro/plano.service';
+import { DreService } from './financeiro/dre.service';
+import { GerencialController } from './financeiro/gerencial.controller';
 import { CobrancaConfigService } from './cobranca/cobranca-config.service';
 import { CobrancaService } from './cobranca/cobranca.service';
 import { CraService } from './cobranca/cra.service';
@@ -137,6 +140,7 @@ if (!segredo || (process.env.NODE_ENV === 'production' && segredo.length < 32)) 
     MetaController,
     IaController,
     CobrancaController,
+    GerencialController,
     AssistenteController,
   ],
   providers: [
@@ -173,6 +177,8 @@ if (!segredo || (process.env.NODE_ENV === 'production' && segredo.length < 32)) 
     ContabilidadeService,
     AvisosService,
     CobrancaConfigService,
+    PlanoContasService,
+    DreService,
     CobrancaService,
     CraService,
     FerramentasAssistente,

@@ -18,6 +18,7 @@ import { EstoqueService } from '../estoque/estoque.service';
 import { ConfiguracoesService } from '../configuracoes/configuracoes.service';
 import { DocumentosService } from '../documentos/documentos.service';
 import { acertos, creditos, documentos, locaisEstoque, maletaItens, maletas, pessoas, produtos, titulos } from '../db/schema';
+import { PlanoContasService } from '../financeiro/plano.service';
 
 export const hoje = () => new Date(Date.now() - 3 * 3600_000).toISOString().slice(0, 10); // horário de Brasília
 
@@ -47,6 +48,7 @@ export class MaletasService {
     private readonly config: ConfiguracoesService,
     private readonly auditoria: AuditoriaService,
     private readonly documentos: DocumentosService,
+    private readonly plano: PlanoContasService,
   ) {}
 
   /** Situação de crédito da representante: limite, quanto está usado e pendências. */
@@ -380,6 +382,7 @@ export class MaletasService {
           pessoaId: m.representanteId,
           descricao: `Acerto da maleta nº ${m.numero}${parcelas.length > 1 ? ` (${p.numero}/${parcelas.length})` : ''}`,
           categoria: 'Acerto de maleta',
+          ...(await this.plano.daChave('recebimentos')),
           valor: p.valor,
           vencimento: p.vencimento,
           parcela: p.numero,

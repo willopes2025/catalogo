@@ -6,9 +6,10 @@ import { DB, type Db } from '../comum/db.module';
 import { Permissao, Usuario, type UsuarioLogado } from '../comum/auth';
 import { centavos, dataISO, validar } from '../comum/validacao';
 import { AuditoriaService } from '../comum/auditoria.service';
-import { contas, empresas, pessoas, titulos } from '../db/schema';
+import { contas, empresas, pessoas, planoContas, titulos } from '../db/schema';
 import { hoje } from '../maletas/maletas.service';
 import { AsaasService } from '../integracoes/asaas.service';
+import { PlanoContasService } from './plano.service';
 
 const tituloSchema = z.object({
   empresaId: z.string().uuid(),
@@ -16,6 +17,10 @@ const tituloSchema = z.object({
   pessoaId: z.string().uuid().optional().nullable(),
   descricao: z.string().min(2).max(200),
   categoria: z.string().max(80).optional().nullable(),
+  planoContaId: z.string().uuid().optional().nullable(),
+  /** Lança já como pago (despesa paga na hora, receita recebida): conta e dia do pagamento. */
+  pagoEm: dataISO.optional().nullable(),
+  contaId: z.string().uuid().optional().nullable(),
   valor: centavos.refine((v) => v > 0, 'Informe o valor'),
   vencimento: dataISO,
   formaPagamento: z.string().max(30).optional().nullable(),
@@ -33,7 +38,7 @@ const baixaSchema = z.object({
 
 @Controller('financeiro')
 export class FinanceiroController {
-  constructor(@Inject(DB) private readonly db: Db, private readonly auditoria: AuditoriaService, private readonly asaas: AsaasService) {}
+  constructor(@Inject(DB) private readonly db: Db, private readonly auditoria: AuditoriaService, private readonly asaas: AsaasService, private readonly plano: PlanoContasService) {}
 
   @Get('titulos')
   @Permissao('financeiro', 'ver')
@@ -45,9 +50,13 @@ export class FinanceiroController {
     @Query('ate') ate?: string,
     @Query('busca') busca?: string,
     @Query('semPessoa') semPessoa?: string,
+    @Query('semPlano') semPlano?: string,
+    @Query('planoContaId') planoContaId?: string,
   ) {
     const f: SQL[] = [eq(titulos.tipo, tipo)];
     if (semPessoa === '1') f.push(isNull(titulos.pessoaId));
+    if (semPlano === '1') f.push(isNull(titulos.planoContaId));
+    if (planoContaId && /^[0-9a-f-]{36}$/i.test(planoContaId)) f.push(eq(titulos.planoContaId, planoContaId));
     if (busca?.trim()) f.push(or(ilike(titulos.descricao, `%${busca.trim()}%`), ilike(pessoas.nome, `%${busca.trim()}%`))!);
     if (aba === 'abertos') f.push(eq(titulos.status, 'aberto'));
     if (aba === 'vencidos') f.push(eq(titulos.status, 'aberto'), lt(titulos.vencimento, hoje()));
@@ -64,6 +73,10 @@ export class FinanceiroController {
         pessoaId: titulos.pessoaId,
         empresa: empresas.nome,
         categoria: titulos.categoria,
+        planoContaId: titulos.planoContaId,
+        planoCodigo: planoContas.codigo,
+        planoNome: planoContas.nome,
+        origemTipo: titulos.origemTipo,
         valor: titulos.valor,
         vencimento: titulos.vencimento,
         parcela: titulos.parcela,
@@ -82,6 +95,7 @@ export class FinanceiroController {
       .innerJoin(empresas, eq(empresas.id, titulos.empresaId))
       .leftJoin(pessoas, eq(pessoas.id, titulos.pessoaId))
       .leftJoin(contas, eq(contas.id, titulos.contaId))
+      .leftJoin(planoContas, eq(planoContas.id, titulos.planoContaId))
       .where(and(...f))
       .orderBy(aba === 'pagos' ? desc(titulos.pagoEm) : asc(titulos.vencimento))
       .limit(500);
@@ -115,6 +129,14 @@ export class FinanceiroController {
   @Permissao('financeiro', 'criar')
   async criar(@Usuario() u: UsuarioLogado, @Body() body: unknown) {
     const d = validar(tituloSchema, body);
+    const conta = d.planoContaId ? await this.plano.paraLancar(d.planoContaId) : null;
+    if (d.pagoEm) {
+      if (d.parcelas > 1) throw new BadRequestException('Lançamento já pago é de uma parcela só.');
+      if (d.pagoEm > hoje()) throw new BadRequestException('A data do pagamento não pode ser no futuro.');
+      if (!d.contaId) throw new BadRequestException('Escolha a conta por onde o dinheiro passou.');
+      const [cb] = await this.db.select({ ativo: contas.ativo }).from(contas).where(eq(contas.id, d.contaId));
+      if (!cb?.ativo) throw new BadRequestException('Conta bancária não encontrada ou desativada.');
+    }
     const base = Math.floor(d.valor / d.parcelas);
     const resto = d.valor - base * d.parcelas;
     const [a, m, dia] = d.vencimento.split('-').map(Number);
@@ -127,7 +149,9 @@ export class FinanceiroController {
         tipo: d.tipo,
         pessoaId: d.pessoaId ?? null,
         descricao: d.parcelas > 1 ? `${d.descricao} (${i + 1}/${d.parcelas})` : d.descricao,
-        categoria: d.categoria ?? null,
+        categoria: conta?.nome ?? d.categoria ?? null,
+        planoContaId: conta?.id ?? null,
+        ...(d.pagoEm ? { status: 'pago' as const, pagoEm: d.pagoEm, valorPago: d.valor, contaId: d.contaId } : {}),
         valor: base + (i === 0 ? resto : 0),
         vencimento: venc,
         parcela: i + 1,
@@ -278,7 +302,7 @@ export class FinanceiroController {
       if (taxa > 0) {
         [despesa] = await tx
           .insert(titulos)
-          .values({ empresaId: ts[0].empresaId, tipo: 'pagar', descricao: `Taxa da maquininha · ${ts.length} recebimento(s) de cartão`, categoria: 'Taxas de cartão', valor: taxa, vencimento: d.recebidoEm, formaPagamento: 'debito_em_conta', status: 'pago', pagoEm: d.recebidoEm, valorPago: taxa, contaId: d.contaId, origemTipo: 'conciliacao_cartao', origemId: lote })
+          .values({ empresaId: ts[0].empresaId, tipo: 'pagar', descricao: `Taxa da maquininha · ${ts.length} recebimento(s) de cartão`, categoria: 'Taxas de cartão', ...(await this.plano.daChave('taxas_cartao')), valor: taxa, vencimento: d.recebidoEm, formaPagamento: 'debito_em_conta', status: 'pago', pagoEm: d.recebidoEm, valorPago: taxa, contaId: d.contaId, origemTipo: 'conciliacao_cartao', origemId: lote })
           .returning();
       }
       await this.auditoria.registrar({ usuarioId: u.id, acao: 'conciliar', entidade: 'titulo', entidadeId: despesa?.id ?? null, dados: { lote, ids, bruto, recebido: d.valorRecebido, taxa, contaId: d.contaId } }, tx);

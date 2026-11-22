@@ -15,6 +15,7 @@ import { acertos, categorias, empresas, importacoes, jueriHistorico, jueriHistor
 import { hoje } from '../maletas/maletas.service';
 import { ArquivosService } from '../arquivos/arquivos.service';
 import { ativo, centavos, primeiroCampo, extrairLista, umRegistro, contaEmAberto, dataISO, estrutura, inteiro, pb, pedidoAberto, pegar, qtdEmAberto, txt, type Reg } from './mapear';
+import { PlanoContasService } from '../financeiro/plano.service';
 
 export const ETAPAS = ['cadastros', 'produtos', 'pessoas', 'maletas', 'financeiro', 'historico', 'fotos'] as const;
 export type Etapa = (typeof ETAPAS)[number];
@@ -84,6 +85,7 @@ export class JueriService {
     private readonly config: ConfiguracoesService,
     private readonly auditoria: AuditoriaService,
     private readonly arquivos: ArquivosService,
+    private readonly plano: PlanoContasService,
   ) {}
 
   get configurado() {
@@ -1109,6 +1111,7 @@ export class JueriService {
       return null;
     };
 
+    const planoRecebimentos = await this.plano.daChave('recebimentos');
     for (const c of contas) {
       this.checar();
       pc.lidos++;
@@ -1145,6 +1148,7 @@ export class JueriService {
           pessoaId,
           descricao: [txt(c.descricao) ?? `Conta a receber nº ${pegar(c, 'numero_parcela', 'id')} (Jueri)`, !pessoaId && contato ? `· ${contato}` : null, pago > 0 ? '(saldo após pagamento parcial)' : null].filter(Boolean).join(' '),
           categoria: txt(pegar(c, 'categoria.nome', 'categoria.descricao', 'categoria')) ?? 'Migração Jueri',
+          ...planoRecebimentos,
           valor,
           vencimento,
           parcela: (fracao ? Number(fracao[1]) : inteiro(parcelaTxt)) ?? 1,

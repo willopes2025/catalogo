@@ -387,10 +387,42 @@ export const contas = pgTable('contas', {
   id: id(),
   empresaId: uuid('empresa_id').notNull().references(() => empresas.id),
   nome: text('nome').notNull(),
+  /** banco | caixa | carteira (Asaas, maquininha) | aplicacao */
   tipo: text('tipo').notNull().default('banco'),
   saldoInicial: integer('saldo_inicial').notNull().default(0),
   ativo: boolean('ativo').notNull().default(true),
+  banco: text('banco'),
+  agencia: text('agencia'),
+  numero: text('numero'),
+  pix: text('pix'),
+  observacao: text('observacao'),
 });
+
+/**
+ * Plano de contas: a árvore em que cada lançamento é classificado, e de onde sai a DRE.
+ * As contas de primeiro nível são os grupos da DRE; as demais herdam o grupo da conta-mãe.
+ * Conta "calculada" recebe o valor do próprio sistema (vendas, acertos, custo das peças vendidas), não dos títulos.
+ */
+export const planoContas = pgTable(
+  'plano_contas',
+  {
+    id: id(),
+    codigo: text('codigo').notNull(),
+    nome: text('nome').notNull(),
+    paiId: uuid('pai_id').references((): AnyPgColumn => planoContas.id),
+    /** receita | deducoes | custos | despesas_vendas | despesas_pessoal | despesas_administrativas | financeiro | outras | fora */
+    grupo: text('grupo').notNull(),
+    calculada: boolean('calculada').notNull().default(false),
+    /** Nome fixo usado pelo sistema para lançar sozinho (ex.: comissoes, taxas_cartao). */
+    chave: text('chave'),
+    ativo: boolean('ativo').notNull().default(true),
+    criadoEm: criadoEm(),
+  },
+  (t) => ({
+    codigo: uniqueIndex('plano_contas_codigo').on(t.codigo),
+    chave: uniqueIndex('plano_contas_chave').on(t.chave),
+  }),
+);
 
 export const titulos = pgTable(
   'titulos',
@@ -401,6 +433,8 @@ export const titulos = pgTable(
     pessoaId: uuid('pessoa_id').references(() => pessoas.id),
     descricao: text('descricao').notNull(),
     categoria: text('categoria'),
+    /** Conta do plano de contas (a categoria em texto continua, com o nome da conta). */
+    planoContaId: uuid('plano_conta_id').references(() => planoContas.id),
     valor: integer('valor').notNull(),
     vencimento: date('vencimento').notNull(),
     parcela: integer('parcela').notNull().default(1),
@@ -430,6 +464,7 @@ export const titulos = pgTable(
   (t) => ({
     porVenc: index('titulos_venc_idx').on(t.tipo, t.status, t.vencimento),
     porPessoa: index('titulos_pessoa_idx').on(t.pessoaId),
+    porPlano: index('titulos_plano_idx').on(t.planoContaId),
   }),
 );
 

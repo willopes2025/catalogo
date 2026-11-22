@@ -246,6 +246,20 @@
       "when": 1795303070668,
       "tag": "0034_assistente_aprovacao_anexos",
       "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1795367427504,
+      "tag": "0035_plano_contas",
+      "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1795367467886,
+      "tag": "0036_titulos_plano_idx",
+      "breakpoints": true
     }
   ]
 }
