@@ -5,7 +5,7 @@ import { calcularEncargos, formatarReais, preencherTexto } from '@aritana/regras
 import { DB, type Db } from '../comum/db.module';
 import { temPermissao, type UsuarioLogado } from '../comum/auth';
 import { AuditoriaService } from '../comum/auditoria.service';
-import { assistenteAnexos, assistentePedidos, assistenteRotinas, cobrancaCarteira, crmContatos, crmConversas, crmMensagens, usuarios, chamadoMensagens, iaAgentes, chamados, crmCanais, crmTemplates, empresas, maletas, pessoas, titulos, vendas } from '../db/schema';
+import { assistenteAnexos, assistentePedidos, assistenteRotinas, cobrancaCarteira, crmContatos, crmConversas, crmEtapas, crmLeads, crmMensagens, crmTarefas, usuarios, chamadoMensagens, iaAgentes, chamados, crmCanais, crmTemplates, empresas, maletas, pessoas, titulos, vendas } from '../db/schema';
 import { CanaisService } from '../crm/canais.service';
 import { CobrancaService } from '../cobranca/cobranca.service';
 import { CobrancaConfigService } from '../cobranca/cobranca-config.service';
@@ -21,6 +21,9 @@ import { ArquivosService } from '../arquivos/arquivos.service';
 import { readFile } from 'node:fs/promises';
 import type { DefinicaoFerramenta } from '../ia/ia.service';
 import { csv, descreverAgenda, proximaDaRotina, type Agenda } from './rotinas';
+import { CONJUNTOS, catalogoConjuntos, montarConsulta } from './dados';
+import { AgendaService, TIPOS_COMPROMISSO } from '../agenda/agenda.service';
+import { CrmService } from '../crm/crm.service';
 
 /**
  * leitura: consulta, executa na hora.
@@ -92,6 +95,8 @@ export class FerramentasAssistente {
     private readonly agente: AgenteService,
     private readonly ia: IaService,
     private readonly arquivos: ArquivosService,
+    private readonly agenda: AgendaService,
+    private readonly crm: CrmService,
   ) {
     this.lista = [
       this.consultarInadimplentes(),
@@ -99,6 +104,7 @@ export class FerramentasAssistente {
       this.buscarPessoas(),
       this.fichaPessoa(),
       this.maletasAtrasadas(),
+      this.consultarDados(),
       this.resumoNegocio(),
       this.resumoVendas(),
       this.numerosWhatsapp(),
@@ -109,6 +115,10 @@ export class FerramentasAssistente {
       this.enviarWhatsappEmLote(),
       this.emitirSegundaVia(),
       this.registrarPromessa(),
+      this.criarCompromisso(),
+      this.criarTarefaCrm(),
+      this.anotarLead(),
+      this.moverLead(),
       this.verRegras(),
       this.alterarRegras(),
       this.verAgentesWhatsapp(),
@@ -362,6 +372,59 @@ export class FerramentasAssistente {
           .orderBy(asc(maletas.dataLimite))
           .limit(e.limite ?? 50);
         return { quantidade: r.length, maletas: r.map((m) => ({ ...m, dataLimite: dataBR(m.dataLimite), diasAtraso: diasEntre(m.dataLimite, h) })) };
+      },
+    };
+  }
+
+  private consultarDados(): Ferramenta {
+    const nomes = Object.keys(CONJUNTOS) as [string, ...string[]];
+    const schema = z.object({
+      conjunto: z.enum(nomes),
+      modo: z.enum(['resumo', 'lista']).optional().describe('resumo = métricas agrupadas (padrão); lista = linhas com detalhes (até 200)'),
+      metricas: z.array(z.string()).max(6).optional().describe('Nomes das métricas do conjunto (padrão: a primeira)'),
+      agruparPor: z.array(z.string()).max(2).optional().describe('Até 2 dimensões do conjunto'),
+      filtros: z.array(z.object({ campo: z.string().describe('Uma dimensão do conjunto'), operador: z.enum(['igual', 'contem', 'diferente']), valor: z.string().max(120) })).max(6).optional(),
+      de: dataIso.optional().describe('Início do período (quando o conjunto tem período)'),
+      ate: dataIso.optional(),
+      ordenarPor: z.string().optional().describe('Métrica, dimensão ou coluna'),
+      ordem: z.enum(['asc', 'desc']).optional(),
+      limite: z.number().int().min(1).max(200).optional(),
+    });
+    return {
+      nome: 'consultar_dados',
+      descricao: `Consulta flexível em qualquer área do sistema: escolha o conjunto, as métricas, até 2 dimensões para agrupar, filtros e período (ex.: produtos mais vendidos do mês por loja; estoque abaixo do mínimo; maletas por nível; candidatas por origem; leads perdidos por motivo; comissões do mês). Os valores em R$ já vêm formatados. Conjuntos:\n${catalogoConjuntos(nomes)}`,
+      schema,
+      risco: 'leitura',
+      permitido: (u) => nomes.some((n) => CONJUNTOS[n].permissoes.some(([m, a]) => temPermissao(u.permissoes, m, a))),
+      executar: async (e: z.infer<typeof schema>, ctx) => {
+        const c = CONJUNTOS[e.conjunto];
+        if (!c.permissoes.some(([m, a]) => temPermissao(ctx.usuario.permissoes, m, a))) throw new BadRequestException(`Sem acesso a "${e.conjunto}" (precisa de: ${c.permissoes.map(([m]) => m).join(' ou ')}).`);
+        let montada: ReturnType<typeof montarConsulta>;
+        try {
+          montada = montarConsulta({ conjunto: e.conjunto, modo: e.modo ?? 'resumo', metricas: e.metricas ?? [], agruparPor: e.agruparPor ?? [], filtros: e.filtros ?? [], de: e.de, ate: e.ate, ordenarPor: e.ordenarPor, ordem: e.ordem ?? 'desc', limite: e.limite ?? 50 });
+        } catch (err) {
+          throw new BadRequestException((err as Error).message);
+        }
+        // Só leitura, com tempo máximo: uma consulta pesada não trava o sistema.
+        const linhas = await this.db.transaction(async (tx) => {
+          await tx.execute(sql`set transaction read only`);
+          await tx.execute(sql`set local statement_timeout = 8000`);
+          return (await tx.execute(montada.consulta)).rows as Record<string, unknown>[];
+        });
+        const fmt = (k: string, v: unknown) => {
+          if (v == null) return null;
+          const t = montada.tipos[k];
+          if (t === 'reais') return formatarReais(Number(v));
+          if (t === 'pct') return `${(Number(v) / 100).toLocaleString('pt-BR', { maximumFractionDigits: 1 })}%`;
+          if (t === 'data') return new Date(String(v)).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit', year: 'numeric', ...(String(v).length > 10 ? { hour: '2-digit', minute: '2-digit' } : {}) });
+          return typeof v === 'string' && /^-?\d+(\.\d+)?$/.test(v) ? Number(v) : v;
+        };
+        return {
+          conjunto: e.conjunto,
+          ...(e.de || e.ate ? { periodo: `${dataBR(e.de ?? null) ?? 'início'} a ${dataBR(e.ate ?? null) ?? 'hoje'}` } : {}),
+          linhas: linhas.map((l) => Object.fromEntries(Object.entries(l).map(([k, v]) => [k, fmt(k, v)]))),
+          ...(linhas.length === (e.limite ?? 50) ? { observacao: 'Chegou no limite de linhas: pode haver mais (aumente o limite ou filtre).' } : {}),
+        };
       },
     };
   }
@@ -826,6 +889,124 @@ export class FerramentasAssistente {
       executar: async (e: z.infer<typeof schema>, ctx) => {
         const c = await this.cobranca.registrarContato(await this.cobranca.escopo(ctx.usuario), ctx.usuario, e.pessoaId, { tipo: 'nota', texto: `Promessa de pagamento registrada pelo assistente${e.observacao ? `: ${e.observacao}` : '.'}`, promessaData: e.data, promessaValor: e.valor ? Math.round(e.valor * 100) : null });
         return { registrada: true, id: c.id, data: dataBR(e.data), valor: e.valor ? formatarReais(Math.round(e.valor * 100)) : null };
+      },
+    };
+  }
+
+  // ───────────── Agenda e CRM ─────────────
+
+  private quandoBrasilia(t: string) {
+    const d = new Date(`${t.length === 16 ? `${t}:00` : t}-03:00`);
+    if (Number.isNaN(d.getTime())) throw new BadRequestException('Data e hora no formato AAAA-MM-DDTHH:MM (horário de Brasília).');
+    return d;
+  }
+
+  private criarCompromisso(): Ferramenta {
+    const schema = z.object({
+      tipo: z.enum(Object.keys(TIPOS_COMPROMISSO) as [string, ...string[]]).describe(Object.entries(TIPOS_COMPROMISSO).map(([k, v]) => `${k} = ${v.nome}`).join('; ')),
+      inicio: z.string().regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/).describe('AAAA-MM-DDTHH:MM, horário de Brasília'),
+      duracaoMin: z.number().int().min(10).max(600).optional(),
+      titulo: z.string().max(150).optional(),
+      online: z.boolean().optional().describe('Com link do Meet (se o Google estiver conectado)'),
+      local: z.string().max(200).optional(),
+      pessoaId: uuid.optional().describe('Revendedora ou cliente cadastrada'),
+      leadId: uuid.optional().describe('Card do CRM'),
+      convidadoNome: z.string().max(120).optional(),
+      convidadoTelefone: z.string().max(30).optional(),
+      observacao: z.string().max(1000).optional(),
+      avisar: z.boolean().optional().describe('Avisa a pessoa pelo WhatsApp (marcação e lembretes)'),
+      responsavelId: uuid.optional().describe('Padrão: quem pediu'),
+    });
+    return {
+      nome: 'criar_compromisso',
+      descricao: 'Marca um compromisso na agenda (entrevista de candidata, acerto por vídeo, retirada de maleta, reunião), com lembretes e, se pedir, aviso pelo WhatsApp para a pessoa.',
+      schema,
+      risco: 'confirmar',
+      permitido: pode('agenda', 'criar'),
+      preparar: async (e: z.infer<typeof schema>) => {
+        try {
+          const ini = this.quandoBrasilia(e.inicio);
+          const t = TIPOS_COMPROMISSO[e.tipo as keyof typeof TIPOS_COMPROMISSO];
+          return { resumo: `Marcar "${e.titulo ?? t.nome}" em ${ini.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo', weekday: 'short', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })} (${e.duracaoMin ?? t.duracao} min, ${(e.online ?? t.online) ? 'online' : (e.local ?? 'presencial')})${e.avisar ? ', avisando a pessoa pelo WhatsApp' : ''}.` };
+        } catch (err) {
+          return { resumo: '', impedimento: (err as Error).message };
+        }
+      },
+      executar: async (e: z.infer<typeof schema>, ctx) => {
+        const t = TIPOS_COMPROMISSO[e.tipo as keyof typeof TIPOS_COMPROMISSO];
+        const c = await this.agenda.criar({ tipo: e.tipo as keyof typeof TIPOS_COMPROMISSO, titulo: e.titulo ?? null, inicio: this.quandoBrasilia(e.inicio), duracaoMin: e.duracaoMin ?? t.duracao, online: e.online ?? t.online, local: e.local ?? null, pessoaId: e.pessoaId ?? null, leadId: e.leadId ?? null, convidadoNome: e.convidadoNome ?? null, convidadoTelefone: e.convidadoTelefone ?? null, observacao: e.observacao ?? null, avisar: !!e.avisar, responsavelId: e.responsavelId ?? ctx.usuario.id }, ctx.usuario.id);
+        return { marcado: true, compromissoId: c.id, titulo: c.titulo, link: c.link ?? null, avisos: (c as { avisos?: string[] }).avisos ?? [] };
+      },
+    };
+  }
+
+  private async leadVisivel(leadId: string) {
+    const [l] = await this.db.select({ id: crmLeads.id, funilId: crmLeads.funilId, titulo: crmLeads.titulo }).from(crmLeads).where(eq(crmLeads.id, leadId));
+    if (!l) throw new BadRequestException('Card do CRM não encontrado (use consultar_dados com o conjunto crm_leads em modo lista para achar o leadId).');
+    return l;
+  }
+
+  private criarTarefaCrm(): Ferramenta {
+    const schema = z.object({ leadId: uuid, titulo: z.string().trim().min(2).max(200), venceEm: z.string().regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/).describe('AAAA-MM-DDTHH:MM, Brasília'), responsavelId: uuid.optional() });
+    return {
+      nome: 'criar_tarefa_crm',
+      descricao: 'Cria uma tarefa num card do CRM (ex.: "ligar para a candidata amanhã às 10h"). Aparece no painel de tarefas do responsável.',
+      schema,
+      risco: 'acao',
+      permitido: pode('crm', 'editar'),
+      executar: async (e: z.infer<typeof schema>, ctx) => {
+        const l = await this.leadVisivel(e.leadId);
+        const [t] = await this.db.insert(crmTarefas).values({ leadId: l.id, titulo: e.titulo, venceEm: this.quandoBrasilia(e.venceEm), responsavelId: e.responsavelId ?? ctx.usuario.id, criadoPor: ctx.usuario.id }).returning();
+        await this.crm.evento(l.id, 'tarefa', `Tarefa (pelo assistente): ${e.titulo}.`, ctx.usuario.id);
+        return { criada: true, tarefaId: t.id, card: l.titulo };
+      },
+    };
+  }
+
+  private anotarLead(): Ferramenta {
+    const schema = z.object({ leadId: uuid, texto: z.string().trim().min(2).max(2000) });
+    return {
+      nome: 'anotar_lead',
+      descricao: 'Escreve uma anotação no histórico de um card do CRM.',
+      schema,
+      risco: 'acao',
+      permitido: pode('crm', 'editar'),
+      executar: async (e: z.infer<typeof schema>, ctx) => {
+        const l = await this.leadVisivel(e.leadId);
+        await this.crm.evento(l.id, 'nota', e.texto, ctx.usuario.id);
+        return { anotado: true, card: l.titulo };
+      },
+    };
+  }
+
+  private moverLead(): Ferramenta {
+    const schema = z.object({ leadId: uuid, etapa: z.string().trim().min(2).max(80).describe('Nome da etapa de destino, no mesmo funil'), motivo: z.string().max(300).optional().describe('Obrigatório ao mover para uma etapa de perdido') });
+    const resolver = async (e: z.infer<typeof schema>) => {
+      const l = await this.leadVisivel(e.leadId);
+      const etapas = await this.db.select().from(crmEtapas).where(eq(crmEtapas.funilId, l.funilId)).orderBy(asc(crmEtapas.ordem));
+      const alvo = etapas.find((x) => x.nome.toLowerCase() === e.etapa.toLowerCase()) ?? etapas.find((x) => x.nome.toLowerCase().includes(e.etapa.toLowerCase()));
+      if (!alvo) throw new BadRequestException(`Etapa "${e.etapa}" não existe neste funil. Etapas: ${etapas.map((x) => x.nome).join(', ')}.`);
+      if (alvo.tipo === 'perdido' && !e.motivo) throw new BadRequestException('Para mover para perdido, diga o motivo.');
+      return { l, alvo };
+    };
+    return {
+      nome: 'mover_lead',
+      descricao: 'Move um card do CRM para outra etapa do mesmo funil (ex.: candidata para "Entrevista", lead para "Perdido" com motivo). Pode disparar os gatilhos automáticos da etapa (mensagens, tarefas).',
+      schema,
+      risco: 'confirmar',
+      permitido: pode('crm', 'editar'),
+      preparar: async (e: z.infer<typeof schema>) => {
+        try {
+          const r = await resolver(e);
+          return { resumo: `Mover o card "${r.l.titulo}" para a etapa "${r.alvo.nome}"${e.motivo ? ` (motivo: ${e.motivo})` : ''}. Os gatilhos dessa etapa, se houver, rodam.` };
+        } catch (err) {
+          return { resumo: '', impedimento: (err as Error).message };
+        }
+      },
+      executar: async (e: z.infer<typeof schema>, ctx) => {
+        const r = await resolver(e);
+        await this.crm.moverLead(r.l.id, r.alvo.id, { usuarioId: ctx.usuario.id, motivo: e.motivo ?? null, origem: 'assistente' });
+        return { movido: true, card: r.l.titulo, etapa: r.alvo.nome };
       },
     };
   }
