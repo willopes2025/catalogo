@@ -3111,6 +3111,14 @@ test('Assistente: consulta inadimplentes, prepara envio em lote, confirma por vo
   assert.ok(painelAg.rotinas.every((r) => typeof r.quando === 'string'));
   assert.ok(painelAg.whatsapp.especialistas.some((x) => x.funcao === 'posvenda'));
   assert.equal(painelAg.podeEditarWhatsapp, true);
+  // Parcelas que vencem hoje (consulta financeira por período e situação).
+  await ok('POST', '/financeiro/titulos', { empresaId: emp.id, tipo: 'receber', pessoaId: p.id, descricao: 'Vence hoje', valor: 12345, vencimento: dia(0) });
+  await ok('POST', `/assistente/sessoes/${s.id}/mensagens`, { texto: 'quanto vence hoje?' });
+  v = await esperar(s.id, (x) => !x.ocupada);
+  const fin = v.acoes.filter((x) => x.ferramenta === 'consultar_financeiro').at(-1);
+  assert.equal(fin.status, 'concluida');
+  assert.ok(fin.resultado.parcelas.some((x) => x.descricao === 'Vence hoje' && x.valor.includes('123,45')));
+  assert.match(v.mensagens.at(-1).texto, /^Vence hoje: R\$/);
   // Voz: sem ElevenLabs, fala pela OpenAI; com a chave, pela ElevenLabs. Links e marcadores não são lidos.
   const falarAudio = async (corpo) => {
     const r = await fetch(API + '/assistente/falar', { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` }, body: JSON.stringify(corpo) });

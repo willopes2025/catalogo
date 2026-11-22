@@ -5,7 +5,7 @@ import { calcularEncargos, formatarReais, preencherTexto } from '@aritana/regras
 import { DB, type Db } from '../comum/db.module';
 import { temPermissao, type UsuarioLogado } from '../comum/auth';
 import { AuditoriaService } from '../comum/auditoria.service';
-import { assistenteAnexos, assistentePedidos, assistenteRotinas, chamadoMensagens, iaAgentes, chamados, crmCanais, crmTemplates, empresas, maletas, pessoas, titulos, vendas } from '../db/schema';
+import { assistenteAnexos, assistentePedidos, assistenteRotinas, cobrancaCarteira, chamadoMensagens, iaAgentes, chamados, crmCanais, crmTemplates, empresas, maletas, pessoas, titulos, vendas } from '../db/schema';
 import { CanaisService } from '../crm/canais.service';
 import { CobrancaService } from '../cobranca/cobranca.service';
 import { CobrancaConfigService } from '../cobranca/cobranca-config.service';
@@ -95,6 +95,7 @@ export class FerramentasAssistente {
   ) {
     this.lista = [
       this.consultarInadimplentes(),
+      this.consultarFinanceiro(),
       this.buscarPessoas(),
       this.fichaPessoa(),
       this.maletasAtrasadas(),
@@ -171,6 +172,81 @@ export class FerramentasAssistente {
             cobrancaPausada: i.pausada,
             emProtesto: i.emProtesto > 0,
           })),
+        };
+      },
+    };
+  }
+
+  private consultarFinanceiro(): Ferramenta {
+    const schema = z.object({
+      tipo: z.enum(['receber', 'pagar']).optional().describe('Contas a receber (padrão) ou a pagar'),
+      situacao: z.enum(['a_vencer', 'vencido', 'em_aberto', 'pago', 'todos']).optional().describe('a_vencer = vence de hoje em diante e não foi paga; vencido = venceu e não foi paga; em_aberto = as duas; pago = recebido/pago no período; todos. Padrão: em_aberto'),
+      de: dataIso.optional().describe('Início do período (vencimento; para "pago", a data do pagamento). Padrão: hoje'),
+      ate: dataIso.optional().describe('Fim do período, inclusive. Padrão: igual ao início'),
+      pessoaId: uuid.optional(),
+      agruparPor: z.enum(['dia', 'pessoa', 'forma', 'nenhum']).optional().describe('Padrão: dia'),
+      limite: z.number().int().min(1).max(300).optional().describe('Quantas parcelas listar (padrão 50); os totais consideram todas'),
+    });
+    return {
+      nome: 'consultar_financeiro',
+      descricao:
+        'Parcelas a receber ou a pagar por período e situação: o que vence hoje, nesta semana ou no mês, o que venceu e não foi pago, o que foi recebido ou pago num período. Devolve total, quantidade, agrupamento (por dia, pessoa ou forma de pagamento) e a lista com boleto/Pix. Ex.: "quanto vence hoje?", "o que recebi ontem?", "contas a pagar da semana".',
+      schema,
+      risco: 'leitura',
+      permitido: algum(pode('financeiro', 'ver'), pode('cobranca', 'ver')),
+      executar: async (e: z.infer<typeof schema>, ctx) => {
+        const tipo = e.tipo ?? 'receber';
+        const fin = temPermissao(ctx.usuario.permissoes, 'financeiro', 'ver');
+        if (tipo === 'pagar' && !fin) throw new BadRequestException('Contas a pagar exigem acesso ao Financeiro.');
+        const situacao = e.situacao ?? 'em_aberto';
+        const h = hoje();
+        const de = e.de ?? h;
+        const ate = e.ate ?? de;
+        if (ate < de) throw new BadRequestException('A data final é antes da inicial.');
+        const filtros = [eq(titulos.tipo, tipo), e.pessoaId ? eq(titulos.pessoaId, e.pessoaId) : undefined];
+        if (situacao === 'pago') filtros.push(eq(titulos.status, 'pago'), gte(titulos.pagoEm, de), lte(titulos.pagoEm, ate));
+        else {
+          filtros.push(gte(titulos.vencimento, de), lte(titulos.vencimento, ate));
+          if (situacao === 'a_vencer') filtros.push(eq(titulos.status, 'aberto'), gte(titulos.vencimento, h));
+          else if (situacao === 'vencido') filtros.push(inArray(titulos.status, ['aberto', 'protestado']), lt(titulos.vencimento, h));
+          else if (situacao === 'em_aberto') filtros.push(inArray(titulos.status, ['aberto', 'protestado']));
+          else filtros.push(sql`${titulos.status} not in ('cancelado', 'renegociado')`);
+        }
+        // Sem acesso ao Financeiro e terceirizada da cobrança: só a carteira dela.
+        if (!fin && tipo === 'receber') {
+          const escopo = await this.cobranca.escopo(ctx.usuario);
+          if (escopo.restrito) filtros.push(inArray(titulos.pessoaId, this.db.select({ id: cobrancaCarteira.pessoaId }).from(cobrancaCarteira).where(eq(cobrancaCarteira.cobradorId, escopo.cobradorId!))));
+        }
+        const linhas = await this.db
+          .select({ t: titulos, nome: pessoas.nome, telefone: pessoas.telefone1 })
+          .from(titulos)
+          .leftJoin(pessoas, eq(pessoas.id, titulos.pessoaId))
+          .where(and(...filtros))
+          .orderBy(asc(situacao === 'pago' ? titulos.pagoEm : titulos.vencimento), desc(titulos.valor))
+          .limit(5000);
+        const valorDe = (x: (typeof linhas)[number]) => (situacao === 'pago' ? (x.t.valorPago ?? x.t.valor) : x.t.valor);
+        const total = linhas.reduce((s, x) => s + valorDe(x), 0);
+        const agrupar = e.agruparPor ?? 'dia';
+        const grupos = new Map<string, { quantidade: number; total: number }>();
+        if (agrupar !== 'nenhum')
+          for (const x of linhas) {
+            const chave = agrupar === 'dia' ? (dataBR(situacao === 'pago' ? x.t.pagoEm : x.t.vencimento) ?? '—') : agrupar === 'pessoa' ? (x.nome ?? '—') : (x.t.formaPagamento ?? 'não informada');
+            const g = grupos.get(chave) ?? { quantidade: 0, total: 0 };
+            g.quantidade++;
+            g.total += valorDe(x);
+            grupos.set(chave, g);
+          }
+        const limite = e.limite ?? 50;
+        return {
+          tipo: tipo === 'receber' ? 'a receber' : 'a pagar',
+          situacao,
+          periodo: de === ate ? dataBR(de) : `${dataBR(de)} a ${dataBR(ate)}`,
+          quantidade: linhas.length,
+          total: formatarReais(total),
+          ...(agrupar !== 'nenhum' ? { [`por${agrupar[0].toUpperCase()}${agrupar.slice(1)}`]: [...grupos].map(([chave, g]) => ({ [agrupar]: chave, quantidade: g.quantidade, total: formatarReais(g.total) })).slice(0, 100) } : {}),
+          parcelas: linhas.slice(0, limite).map((x) => ({ tituloId: x.t.id, pessoa: x.nome, telefone: x.telefone, descricao: x.t.descricao, valor: formatarReais(valorDe(x)), vencimento: dataBR(x.t.vencimento), pagoEm: dataBR(x.t.pagoEm), status: x.t.status, forma: x.t.formaPagamento, boletoOuPix: x.t.cobrancaUrl ?? null })),
+          ...(linhas.length > limite ? { observacao: `Mostrando ${limite} de ${linhas.length}; os totais consideram todas.` } : {}),
+          ...(tipo === 'receber' ? { lembrete: 'Parcelas de cartão (débito/crédito) são recebidas pela maquininha, não por boleto.' } : {}),
         };
       },
     };
