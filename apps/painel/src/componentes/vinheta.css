@@ -1,0 +1,129 @@
+/* Vinheta de abertura: logo revelada da esquerda para a direita, estrela brilhando sobre o "i",
+   reflexo dourado, linha e poeira dourada. Total ~3s, depois some. */
+.vinheta {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  background: #3f3229;
+  cursor: pointer;
+  animation: vinheta-entrar 0.5s ease-out both;
+}
+.vinheta.saindo { animation: vinheta-sair 0.7s cubic-bezier(0.6, 0, 0.4, 1) forwards; pointer-events: none; }
+.vinheta.saindo .vinheta-palco { animation: vinheta-palco-sair 0.7s cubic-bezier(0.6, 0, 0.4, 1) forwards; }
+
+.vinheta-brilho-fundo {
+  position: absolute;
+  inset: -20%;
+  background:
+    radial-gradient(circle at 50% 48%, rgba(224, 203, 166, 0.22), transparent 42%),
+    radial-gradient(circle at 50% 50%, #5c4a3d 0%, #3f3229 55%, #2b221c 100%);
+  animation: vinheta-respirar 3.2s ease-in-out both;
+}
+
+.vinheta-palco { position: relative; display: flex; flex-direction: column; align-items: center; gap: 22px; width: min(440px, 76vw); }
+
+.vinheta-logo { position: relative; width: 100%; aspect-ratio: 764 / 257; }
+.vinheta-logo img {
+  display: block;
+  width: 100%;
+  height: auto;
+  user-select: none;
+  animation: vinheta-revelar 1.3s cubic-bezier(0.22, 1, 0.36, 1) 0.3s both;
+}
+
+/* Reflexo dourado que passa por dentro das letras (máscara com a própria logo). */
+.vinheta-reflexo {
+  position: absolute;
+  inset: 0;
+  -webkit-mask: url('/logo-creme.png') center / 100% 100% no-repeat;
+  mask: url('/logo-creme.png') center / 100% 100% no-repeat;
+  background: linear-gradient(105deg, transparent 35%, rgba(255, 236, 196, 0.15) 42%, #fff4d6 50%, rgba(255, 236, 196, 0.15) 58%, transparent 65%) no-repeat;
+  background-size: 300% 100%;
+  background-position: 150% 0;
+  animation: vinheta-reflexo 1.1s ease-in-out 1.55s both;
+}
+
+/* Estrela de 4 pontas sobre o "i" da logo. */
+.vinheta-estrela {
+  position: absolute;
+  left: 37.7%;
+  top: 14.8%;
+  width: 9%;
+  aspect-ratio: 1;
+  translate: -50% -50%;
+  filter: drop-shadow(0 0 6px rgba(255, 230, 180, 0.9)) drop-shadow(0 0 18px rgba(224, 203, 166, 0.6));
+  animation: vinheta-estrela 1s cubic-bezier(0.34, 1.56, 0.64, 1) 1.3s both;
+}
+.vinheta-estrela::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(circle, #fffaf0 0%, #f1dcb3 45%, #e0cba6 100%);
+  clip-path: polygon(50% 0, 60% 40%, 100% 50%, 60% 60%, 50% 100%, 40% 60%, 0 50%, 40% 40%);
+}
+.vinheta-estrela::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 900%;
+  height: 2px;
+  translate: -50% -50%;
+  background: linear-gradient(90deg, transparent, rgba(255, 240, 210, 0.85), transparent);
+  border-radius: 2px;
+  animation: vinheta-raio 1.2s ease-out 1.4s both;
+}
+
+.vinheta-linha {
+  height: 1px;
+  width: 62%;
+  background: linear-gradient(90deg, transparent, #c9ad80, transparent);
+  animation: vinheta-linha 0.9s cubic-bezier(0.22, 1, 0.36, 1) 1.2s both;
+}
+
+.vinheta-particulas { position: absolute; inset: 0; pointer-events: none; }
+.vinheta-particulas i {
+  position: absolute;
+  bottom: -10px;
+  border-radius: 50%;
+  background: #e8d2a8;
+  box-shadow: 0 0 6px rgba(232, 210, 168, 0.8);
+  opacity: 0;
+  animation-name: vinheta-poeira;
+  animation-timing-function: ease-out;
+  animation-fill-mode: both;
+}
+
+@keyframes vinheta-entrar { from { opacity: 0; } to { opacity: 1; } }
+@keyframes vinheta-sair { to { opacity: 0; visibility: hidden; } }
+@keyframes vinheta-palco-sair { to { transform: scale(1.08); filter: blur(4px); } }
+@keyframes vinheta-respirar { from { opacity: 0; transform: scale(1.1); } to { opacity: 1; transform: scale(1); } }
+@keyframes vinheta-revelar {
+  from { clip-path: inset(0 100% 0 0); opacity: 0; filter: blur(8px); transform: scale(1.04); }
+  40% { opacity: 1; }
+  to { clip-path: inset(0 0 0 0); opacity: 1; filter: blur(0); transform: scale(1); }
+}
+@keyframes vinheta-reflexo { from { background-position: 150% 0; } to { background-position: -50% 0; } }
+@keyframes vinheta-estrela {
+  from { opacity: 0; transform: scale(0) rotate(-90deg); }
+  to { opacity: 1; transform: scale(1) rotate(0); }
+}
+@keyframes vinheta-raio {
+  from { opacity: 0; transform: scaleX(0); }
+  35% { opacity: 1; transform: scaleX(1); }
+  to { opacity: 0; transform: scaleX(1.2); }
+}
+@keyframes vinheta-linha { from { transform: scaleX(0); opacity: 0; } to { transform: scaleX(1); opacity: 1; } }
+@keyframes vinheta-poeira {
+  from { opacity: 0; transform: translateY(0); }
+  20% { opacity: 0.9; }
+  to { opacity: 0; transform: translateY(-70vh); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .vinheta *, .vinheta *::before, .vinheta *::after { animation-duration: 0.01s !important; animation-delay: 0s !important; }
+  .vinheta-particulas { display: none; }
+}

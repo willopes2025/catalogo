@@ -196,7 +196,10 @@ function Chat({ id, estado, aoApagar }: { id: string; estado: Estado; aoApagar: 
   const seletor = useRef<HTMLInputElement>(null);
   const [ouvir, setOuvir] = useState(() => localStorage.getItem('aritana.assistente.ouvir') === '1');
   const fim = useRef<HTMLDivElement>(null);
+  const caixa = useRef<HTMLDivElement>(null);
   const faladas = useRef<Set<string> | null>(null);
+  const conhecidas = useRef<Set<string> | null>(null);
+  const [digitando, setDigitando] = useState<Set<string>>(() => new Set());
   const s = useQuery({
     queryKey: ['assistente', 'sessao', id],
     queryFn: () => api<Sessao>(`/assistente/sessoes/${id}`),
@@ -235,6 +238,26 @@ function Chat({ id, estado, aoApagar }: { id: string; estado: Estado; aoApagar: 
   useEffect(() => {
     if (ocupada === false) qc.invalidateQueries({ queryKey: ['assistente', 'sessoes'] });
   }, [ocupada, qc]);
+
+  // Respostas que chegam com a conversa aberta aparecem sendo digitadas (as antigas, não).
+  useEffect(() => {
+    if (!s.data) return;
+    const ids = s.data.mensagens.filter((m) => m.papel === 'assistant' && m.origem !== 'sistema').map((m) => m.id);
+    if (!conhecidas.current) {
+      conhecidas.current = new Set(ids);
+      return;
+    }
+    const novas = ids.filter((i) => !conhecidas.current!.has(i));
+    if (!novas.length) return;
+    novas.forEach((i) => conhecidas.current!.add(i));
+    setDigitando((d) => new Set([...d, ...novas]));
+  }, [s.data]);
+  const terminouDeDigitar = (mid: string) => setDigitando((d) => { const n = new Set(d); n.delete(mid); return n; });
+  /** Durante a digitação, acompanha o fim da conversa (se a pessoa não rolou para cima). */
+  const acompanhar = () => {
+    const c = caixa.current;
+    if (c && c.scrollHeight - c.scrollTop - c.clientHeight < 160) c.scrollTop = c.scrollHeight;
+  };
 
   // Rola para o fim e, com "ouvir" ligado, lê as respostas novas.
   useEffect(() => {
@@ -310,7 +333,7 @@ function Chat({ id, estado, aoApagar }: { id: string; estado: Estado; aoApagar: 
         </label>
         <button className="botao claro pequeno" onClick={() => window.confirm('Excluir esta conversa? Não dá para desfazer.') && apagar.mutate()} disabled={s.data.ocupada}>Excluir conversa</button>
       </div>
-      <div className="assistente-mensagens">
+      <div className="assistente-mensagens" ref={caixa}>
         {linha.length === 0 && (
           <div className="assistente-sugestoes">
             {SUGESTOES.map((t) => <button key={t} className="botao claro" onClick={() => mandar(t, 'texto')}>{t}</button>)}
@@ -320,13 +343,18 @@ function Chat({ id, estado, aoApagar }: { id: string; estado: Estado; aoApagar: 
           <div key={x.m.id} className={`fala ${x.m.papel === 'user' ? 'minha' : 'dele'}`}>
             {x.m.anexos?.length > 0 && <div className="assistente-anexos-msg">{x.m.anexos.map((a) => <AnexoNaMensagem key={a.id} a={a} />)}</div>}
             {x.m.origem === 'voz' && <span className="muted" title="Falado">🎤 </span>}
-            {x.m.texto}
-            {x.m.papel === 'assistant' && <button className="assistente-falar" title="Ouvir" onClick={() => void falar(x.m.fala ?? x.m.texto, estado.vozResposta)}>🔊</button>}
+            {x.m.papel === 'assistant' && digitando.has(x.m.id) ? <Digitado texto={x.m.texto} aoAvancar={acompanhar} aoTerminar={() => terminouDeDigitar(x.m.id)} /> : x.m.texto}
+            {x.m.papel === 'assistant' && !digitando.has(x.m.id) && <button className="assistente-falar" title="Ouvir" onClick={() => void falar(x.m.fala ?? x.m.texto, estado.vozResposta)}>🔊</button>}
           </div>
         ) : (
           <CartaoAcao key={x.a.id} a={x.a} decidir={(confirmar) => decidir.mutate({ acaoId: x.a.id, confirmar })} ocupado={decidir.isPending} />
         )))}
-        {s.data.ocupada && <div className="fala dele muted">{estado.nome} está trabalhando…</div>}
+        {s.data.ocupada && (
+          <div className="fala dele assistente-pensando" aria-live="polite">
+            <span className="assistente-pontinhos" aria-hidden="true"><i /><i /><i /></span>
+            <span className="muted">{estado.nome} está pensando…</span>
+          </div>
+        )}
         {decidir.error && <Erro erro={decidir.error} />}
         <div ref={fim} />
       </div>
@@ -368,6 +396,50 @@ function Chat({ id, estado, aoApagar }: { id: string; estado: Estado; aoApagar: 
         <button className="botao" disabled={(!texto.trim() && !prontos.length) || s.data.ocupada || enviar.isPending || enviandoAnexo} onClick={() => mandar(texto, 'texto')}>Enviar</button>
       </div>
     </section>
+  );
+}
+
+/**
+ * Mostra a resposta como se estivesse sendo digitada (estilo ChatGPT): vai revelando o texto
+ * em pedacinhos, com cursor piscando. Respostas longas aceleram para não passar de ~4 s.
+ * Clique na mensagem para mostrar tudo de uma vez.
+ */
+function Digitado({ texto, aoAvancar, aoTerminar }: { texto: string; aoAvancar: () => void; aoTerminar: () => void }) {
+  const [n, setN] = useState(0);
+  const avancar = useRef(aoAvancar);
+  const terminar = useRef(aoTerminar);
+  avancar.current = aoAvancar;
+  terminar.current = aoTerminar;
+  useEffect(() => {
+    if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
+      terminar.current();
+      return;
+    }
+    const total = texto.length;
+    const porSegundo = Math.max(90, total / 4); // mínimo ~90 caracteres/s, máximo ~4 s no total
+    let inicio: number | null = null;
+    let quadro = 0;
+    const passo = (agora: number) => {
+      inicio ??= agora;
+      let alvo = Math.min(total, Math.floor(((agora - inicio) / 1000) * porSegundo));
+      // Não corta palavra no meio: avança até o fim da palavra atual.
+      while (alvo < total && /\S/.test(texto[alvo] ?? '') && alvo > 0 && /\S/.test(texto[alvo - 1] ?? '')) alvo++;
+      setN(alvo);
+      avancar.current();
+      if (alvo >= total) {
+        terminar.current();
+        return;
+      }
+      quadro = requestAnimationFrame(passo);
+    };
+    quadro = requestAnimationFrame(passo);
+    return () => cancelAnimationFrame(quadro);
+  }, [texto]);
+  return (
+    <span className="assistente-digitado" onClick={() => terminar.current()} title="Clique para mostrar tudo">
+      {texto.slice(0, n)}
+      <span className="assistente-cursor" aria-hidden="true" />
+    </span>
   );
 }
 

@@ -78,3 +78,24 @@
 .assistente-agentes-topo .espaco { flex: 1; }
 .secao small { font-weight: 400; letter-spacing: 0; text-transform: none; margin-left: 6px; }
 .acoes-linha .assistente-aprovacao, .assistente-topo .assistente-aprovacao { width: auto; flex: 0 0 auto; }
+
+/* Resposta sendo digitada e indicador de "pensando" (estilo ChatGPT) */
+.assistente-digitado { cursor: default; }
+.assistente-cursor {
+  display: inline-block;
+  width: 0.55em;
+  height: 1.05em;
+  margin-left: 2px;
+  vertical-align: -0.15em;
+  border-radius: 2px;
+  background: var(--marrom);
+  animation: assistente-piscar 0.9s steps(1) infinite;
+}
+@keyframes assistente-piscar { 50% { opacity: 0; } }
+.assistente .fala.assistente-pensando { display: inline-flex; align-items: center; gap: 10px; }
+.assistente-pontinhos { display: inline-flex; gap: 4px; }
+.assistente-pontinhos i { width: 7px; height: 7px; border-radius: 50%; background: var(--dourado); animation: assistente-pulo 1.2s ease-in-out infinite; }
+.assistente-pontinhos i:nth-child(2) { animation-delay: 0.15s; }
+.assistente-pontinhos i:nth-child(3) { animation-delay: 0.3s; }
+@keyframes assistente-pulo { 0%, 60%, 100% { transform: translateY(0); opacity: 0.45; } 30% { transform: translateY(-5px); opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .assistente-cursor, .assistente-pontinhos i { animation: none; } }

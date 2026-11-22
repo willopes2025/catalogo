@@ -53,6 +53,7 @@ import { Cadastro } from './paginas/Cadastro';
 import { Cobranca } from './paginas/cobranca/Cobranca';
 import { Devedor } from './paginas/cobranca/Devedor';
 import { Assistente } from './paginas/Assistente';
+import { Vinheta } from './componentes/Vinheta';
 
 const cliente = new QueryClient({ defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: false, staleTime: 15_000 } } });
 
@@ -64,6 +65,7 @@ ReactDOM.createRoot(document.getElementById('raiz')!).render(
   <React.StrictMode>
     <QueryClientProvider client={cliente}>
       <BrowserRouter>
+        <Vinheta />
         <Routes>
           <Route path="/entrar" element={<Entrar />} />
           <Route path="/pedido/:token" element={<LinkPedido />} />
