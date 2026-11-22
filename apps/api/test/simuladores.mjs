@@ -384,6 +384,7 @@ http
           const am = new Date(Date.now() - 3 * 3600_000 + 86400_000).toISOString().slice(0, 10);
           return resp([{ type: 'tool_use', id: `tu_${++wa.n}`, name: 'criar_compromisso', input: { tipo: 'reuniao', inicio: `${am}T10:00`, titulo: 'Reunião de resultados', online: false, local: 'Matriz' } }], 'tool_use');
         }
+        if (/liga o áudio do agente/i.test(fala)) return resp([{ type: 'tool_use', id: `tu_${++wa.n}`, name: 'alterar_agentes_whatsapp', input: { acao: 'editar_geral', geral: { respostaAudio: 'espelhar', vozProvedor: 'openai', voz: 'nova' } } }], 'tool_use');
         const busca = /inadimplentes (.+)$/i.exec(fala)?.[1];
         if (busca) return resp([{ type: 'tool_use', id: `tu_${++wa.n}`, name: 'consultar_inadimplentes', input: { busca, limite: 20 } }], 'tool_use');
         if (/como foi o m[eê]s/i.test(fala)) {

@@ -25,23 +25,8 @@ export interface ConfigAssistente {
   vozOpenai: string;
 }
 
-/** Vozes brasileiras da biblioteca da ElevenLabs boas para conversa (dá para colar outro id na tela). */
-export const VOZES_ELEVENLABS: { id: string; nome: string }[] = [
-  { id: 'ec54d9BmuMSN4IinPrjv', nome: 'Will · masculina, jovem, conversa natural' },
-  { id: '4J31DrhygVjvFsoj7BsM', nome: 'Eduardo · masculina, adulta, clara e profissional' },
-  { id: 'lvkgCBi6spByiTZMPJEK', nome: 'Gabriel · masculina, calma e simpática' },
-  { id: 'KHmfNHtEjHhLK9eER20w', nome: 'Fernanda · feminina, adulta, natural e acolhedora' },
-  { id: 'GDzHdQOi6jjf8zaXhCYD', nome: 'Raquel · feminina, jovem, simpática' },
-  { id: 'RGymW84CSmfVugnA5tvA', nome: 'Roberta · feminina, jovem, descontraída' },
-];
-export const VOZES_OPENAI: { id: string; nome: string }[] = [
-  { id: 'ash', nome: 'Ash · masculina, firme' },
-  { id: 'onyx', nome: 'Onyx · masculina, grave' },
-  { id: 'echo', nome: 'Echo · masculina, leve' },
-  { id: 'coral', nome: 'Coral · feminina, calorosa' },
-  { id: 'nova', nome: 'Nova · feminina, animada' },
-  { id: 'shimmer', nome: 'Shimmer · feminina, suave' },
-];
+import { VOZES_ELEVENLABS, VOZES_OPENAI } from '../ia/vozes';
+export { VOZES_ELEVENLABS, VOZES_OPENAI };
 const PADRAO: ConfigAssistente = { nome: 'Assistente', instrucoes: '', aprovacaoAutomatica: 'gestao', voz: 'automatica', vozElevenlabs: VOZES_ELEVENLABS[0].id, vozOpenai: 'ash' };
 const CHAVE = 'assistente';
 /** Rodadas de ferramenta por pedido (evita o assistente entrar em loop). */
@@ -410,7 +395,7 @@ export class AssistenteService implements OnModuleInit, OnModuleDestroy {
         '- A pessoa pode anexar fotos, PDFs, planilhas, documentos, vídeos e áudios: você vê fotos e PDFs, lê o texto de planilhas e documentos e a transcrição do que é falado em vídeos e áudios. Use isso para agir (ex.: ler um comprovante e achar o título, conferir uma nota, cadastrar a partir de uma planilha), sempre confirmando os dados antes de mudar algo. Para encaminhar um anexo por e-mail, use enviar_email com anexosDaConversa.',
         '- A pessoa pode estar falando por voz: o texto pode vir transcrito com pequenos erros; entenda pelo sentido.',
         '- Regras do consignado e da cobrança (multa, juros, carência, comissões, limites, descontos) você consulta com ver_regras e altera com alterar_regras. Outras configurações, relatórios ou telas ainda não têm ferramenta: isso vira pedido (registrar_pedido). Antes de dizer que não consegue algo, confira se alguma ferramenta resolve, mesmo combinando várias.',
-        '- AGENTES: há dois tipos. (1) Agentes do WhatsApp, que atendem clientes e revendedoras (recepção + especialistas): veja com ver_agentes_whatsapp e crie, edite ou duplique com alterar_agentes_whatsapp. Para basear um agente no que os clientes realmente perguntam, analise as conversas com amostra_conversas (e ler_conversa para exemplos) antes de propor. (2) Agentes agendados, que trabalham sozinhos por horário ou a cada X tempo: são as rotinas (agendar_rotina, gerenciar_rotinas, que também duplica). Se a pessoa pedir "um agente" sem deixar claro, pergunte qual dos dois. Para criar um agente, conduza como uma entrevista curta (uma ou duas perguntas por vez): objetivo, assuntos, tom, o que ele precisa saber, o que nunca deve fazer, quando passar para a equipe; depois escreva tudo, mostre e só então crie.',
+        '- AGENTES: há dois tipos. (1) Agentes do WhatsApp, que atendem clientes e revendedoras (recepção + especialistas): veja com ver_agentes_whatsapp e crie, edite ou duplique com alterar_agentes_whatsapp. Para basear um agente no que os clientes realmente perguntam, analise as conversas com amostra_conversas (e ler_conversa para exemplos) antes de propor. (2) Agentes agendados, que trabalham sozinhos por horário ou a cada X tempo: são as rotinas (agendar_rotina, gerenciar_rotinas, que também duplica). Se a pessoa pedir "um agente" sem deixar claro, pergunte qual dos dois. Para criar um agente, conduza como uma entrevista curta (uma ou duas perguntas por vez): objetivo, assuntos, tom, o que ele precisa saber, o que nunca deve fazer, quando passar para a equipe e, nos agentes do WhatsApp, se ele responde em texto ou em ÁUDIO (nunca, só quando o cliente manda áudio, ou sempre) e com qual voz (lista em ver_agentes_whatsapp; o áudio e a voz valem para todo o atendimento do WhatsApp); depois escreva tudo, mostre e só então crie.',
         '- Tarefa que se repete ("todo dia às 8h", "toda segunda"): crie com agendar_rotina (horário fixo ou a cada X minutos/horas, com janela e dias), com uma instrução completa (o que consultar, como montar, para quem enviar) e autorize os e-mails de destino. E-mail você manda com enviar_email; para a lista de inadimplentes, anexe a planilha (anexo: inadimplentes) e coloque no texto o total e o resumo por faixa de atraso que vêm de consultar_inadimplentes. Se a pessoa não disser o e-mail, use o dela: ' + u.email + '.',
       ].join('\n'),
       automatico

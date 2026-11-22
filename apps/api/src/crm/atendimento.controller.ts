@@ -39,6 +39,7 @@ import { CanaisService } from './canais.service';
 import { TranscricaoService } from './transcricao.service';
 import { AgenteService } from './agente.service';
 import { ErroIa, IaService } from '../ia/ia.service';
+import { VOZES_ELEVENLABS, VOZES_OPENAI } from '../ia/vozes';
 import { AutomacaoService } from './automacao.service';
 
 /** Lista como array do Postgres (o sql`` do Drizzle expande arrays em vários parâmetros). */
@@ -618,17 +619,50 @@ export class AtendimentoController {
   @Get('crm/ia-agente')
   @Permissao('crm', 'ver')
   async agenteConfig() {
-    return { ...(await this.agente.config()), ligada: this.ia.texto, especialistas: await this.agente.especialistas(true) };
+    return { ...(await this.agente.config()), ligada: this.ia.texto, especialistas: await this.agente.especialistas(true), voz: { disponivel: this.ia.vozDisponivel, elevenlabs: this.ia.temElevenlabs, openai: this.ia.imagem, opcoes: { elevenlabs: VOZES_ELEVENLABS, openai: VOZES_OPENAI } } };
   }
 
   @Put('crm/ia-agente')
   @Permissao('configuracoes', 'editar')
   async salvarAgente(@Usuario() u: UsuarioLogado, @Body() body: unknown) {
-    const d = validar(z.object({ ativo: z.boolean(), canais: z.array(uuid).max(50).default([]), instrucoes: z.string().max(6000).default(''), conhecimento: z.string().max(20000).default(''), maxRespostas: z.number().int().min(1).max(50).default(10), nome: z.string().trim().max(40).default(''), maxTransferencias: z.number().int().min(0).max(5).default(2) }), body);
+    const atual = await this.agente.config();
+    const d = validar(
+      z.object({
+        ativo: z.boolean(),
+        canais: z.array(uuid).max(50).default([]),
+        instrucoes: z.string().max(6000).default(''),
+        conhecimento: z.string().max(20000).default(''),
+        maxRespostas: z.number().int().min(1).max(50).default(10),
+        nome: z.string().trim().max(40).default(''),
+        maxTransferencias: z.number().int().min(0).max(5).default(2),
+        respostaAudio: z.enum(['nunca', 'espelhar', 'sempre']).default(atual.respostaAudio),
+        vozProvedor: z.enum(['automatica', 'elevenlabs', 'openai']).default(atual.vozProvedor),
+        vozElevenlabs: z.string().trim().regex(/^[A-Za-z0-9]{10,40}$/, 'Id de voz da ElevenLabs inválido').default(atual.vozElevenlabs),
+        vozOpenai: z.enum(VOZES_OPENAI.map((v) => v.id) as [string, ...string[]]).default(atual.vozOpenai),
+        audioComTexto: z.boolean().default(atual.audioComTexto),
+      }),
+      body,
+    );
+    if (d.respostaAudio !== 'nunca' && !this.ia.vozDisponivel) throw new BadRequestException('Para responder em áudio, cole a chave da ElevenLabs ou da OpenAI em Configurações › Integrações › Inteligência artificial.');
     if (d.ativo && !this.ia.texto) throw new BadRequestException('Cole a chave do Claude em Configurações › Integrações › Inteligência artificial antes de ligar o agente.');
     await this.agente.salvarConfig(d);
     await this.auditoria.registrar({ usuarioId: u.id, acao: d.ativo ? 'ligar' : 'configurar', entidade: 'ia_agente', dados: { ativo: d.ativo, canais: d.canais.length, maxRespostas: d.maxRespostas } });
     return { ...d, ligada: this.ia.texto };
+  }
+
+  /** Exemplo da voz do agente (para escolher antes de salvar). */
+  @Post('crm/ia-agente/ouvir')
+  @Permissao('crm', 'ver')
+  async ouvirVoz(@Usuario() u: UsuarioLogado, @Body() body: unknown, @Res() res: Response) {
+    const d = validar(z.object({ texto: z.string().trim().min(1).max(600), provedor: z.enum(['elevenlabs', 'openai']), voz: z.string().trim().max(40) }), body);
+    try {
+      const audio = await this.ia.falar({ texto: d.texto, provedor: d.provedor, voz: d.voz, usuarioId: u.id });
+      res.setHeader('content-type', 'audio/mpeg');
+      res.send(audio);
+    } catch (e) {
+      if (e instanceof ErroIa) throw new BadRequestException(e.message);
+      throw e;
+    }
   }
 
   // ───── Especialistas do agente (multiagentes) ─────

@@ -17,6 +17,7 @@ import { regrasSchema } from '../configuracoes/configuracoes.controller';
 import { AgenteService } from '../crm/agente.service';
 import { duplicarEspecialista } from '../crm/especialistas';
 import { IaService } from '../ia/ia.service';
+import { VOZES_ELEVENLABS, VOZES_OPENAI } from '../ia/vozes';
 import { ArquivosService } from '../arquivos/arquivos.service';
 import { readFile } from 'node:fs/promises';
 import type { DefinicaoFerramenta } from '../ia/ia.service';
@@ -1148,7 +1149,19 @@ export class FerramentasAssistente {
         const cfg = await this.agente.config();
         const lista = await this.agente.especialistas(true);
         return {
-          geral: { ligado: cfg.ativo, nome: cfg.nome, instrucoes: cfg.instrucoes, conhecimento: cfg.conhecimento.slice(0, 6000), maxRespostas: cfg.maxRespostas, maxTransferencias: cfg.maxTransferencias, numeros: cfg.canais.length ? `${cfg.canais.length} número(s)` : 'todos' },
+          geral: {
+            ligado: cfg.ativo,
+            nome: cfg.nome,
+            instrucoes: cfg.instrucoes,
+            conhecimento: cfg.conhecimento.slice(0, 6000),
+            maxRespostas: cfg.maxRespostas,
+            maxTransferencias: cfg.maxTransferencias,
+            numeros: cfg.canais.length ? `${cfg.canais.length} número(s)` : 'todos',
+            respostaEmAudio: { nunca: 'nunca (só texto)', espelhar: 'quando o cliente manda áudio', sempre: 'sempre' }[cfg.respostaAudio],
+            voz: cfg.vozProvedor === 'openai' ? `OpenAI · ${VOZES_OPENAI.find((v) => v.id === cfg.vozOpenai)?.nome ?? cfg.vozOpenai}` : `${cfg.vozProvedor === 'elevenlabs' ? 'ElevenLabs' : 'automática (ElevenLabs se tiver a chave)'} · ${VOZES_ELEVENLABS.find((v) => v.id === cfg.vozElevenlabs)?.nome ?? cfg.vozElevenlabs}`,
+            textoJuntoComAudio: cfg.audioComTexto,
+            vozesDisponiveis: { elevenlabs: this.ia.temElevenlabs ? VOZES_ELEVENLABS : 'sem chave da ElevenLabs', openai: this.ia.imagem ? VOZES_OPENAI : 'sem chave da OpenAI' },
+          },
           especialistas: lista.map((e) => ({ especialistaId: e.id, chave: e.funcao, nome: e.nome, ligado: e.ativo, atendeQuando: e.quando, instrucoes: e.instrucoes, conhecimento: e.conhecimento.slice(0, 4000), ordem: e.ordem })),
         };
       },
@@ -1169,7 +1182,18 @@ export class FerramentasAssistente {
     especialistaId: uuid.optional().describe('Para editar, duplicar, ligar, desligar ou excluir um especialista'),
     especialista: this.especialistaCampos.optional().describe('criar: chave, nome, atendeQuando e instrucoes obrigatórios; editar/duplicar: só o que muda'),
     geral: z
-      .object({ ligado: z.boolean().optional().describe('Liga ou desliga o atendimento automático no WhatsApp'), nome: z.string().trim().max(40).optional(), instrucoes: z.string().max(6000).optional(), conhecimento: z.string().max(20000).optional(), maxRespostas: z.number().int().min(1).max(50).optional(), maxTransferencias: z.number().int().min(0).max(5).optional() })
+      .object({
+        ligado: z.boolean().optional().describe('Liga ou desliga o atendimento automático no WhatsApp'),
+        nome: z.string().trim().max(40).optional(),
+        instrucoes: z.string().max(6000).optional(),
+        conhecimento: z.string().max(20000).optional(),
+        maxRespostas: z.number().int().min(1).max(50).optional(),
+        maxTransferencias: z.number().int().min(0).max(5).optional(),
+        respostaAudio: z.enum(['nunca', 'espelhar', 'sempre']).optional().describe('Responder em áudio de WhatsApp: nunca, espelhar (só quando o cliente manda áudio) ou sempre'),
+        vozProvedor: z.enum(['automatica', 'elevenlabs', 'openai']).optional(),
+        voz: z.string().trim().max(40).optional().describe('Id da voz (lista em ver_agentes_whatsapp: ElevenLabs ou OpenAI)'),
+        audioComTexto: z.boolean().optional().describe('Mandar o texto também, depois do áudio'),
+      })
       .optional()
       .describe('editar_geral: configurações que valem para todos os especialistas'),
   });
@@ -1195,7 +1219,10 @@ export class FerramentasAssistente {
     const g = e.geral ?? {};
     if (!Object.values(g).some((v) => v !== undefined)) throw new BadRequestException('Diga o que mudar nas configurações gerais.');
     if (g.ligado && !this.ia.texto) throw new BadRequestException('A chave do Claude não está configurada: não dá para ligar o agente.');
-    return { resumo: `Alterar a configuração geral do agente do WhatsApp${g.ligado === true ? ' e LIGAR o atendimento automático (ele passa a responder clientes)' : g.ligado === false ? ' e DESLIGAR o atendimento automático' : ''}: ${Object.entries(g).filter(([, v]) => v !== undefined).map(([k]) => k).join(', ')}.`, previa: Object.entries(g).filter(([k, v]) => v !== undefined && typeof v === 'string').map(([k, v]) => ({ nome: k, texto: String(v).slice(0, 3000) })) };
+    if (g.respostaAudio && g.respostaAudio !== 'nunca' && !this.ia.vozDisponivel) throw new BadRequestException('Para responder em áudio, falta a chave da ElevenLabs ou da OpenAI (Configurações › Integrações).');
+    if (g.voz && !/^[A-Za-z0-9]{2,40}$/.test(g.voz)) throw new BadRequestException('Id de voz inválido.');
+    const audio = g.respostaAudio ? ` Resposta em áudio: ${{ nunca: 'nunca', espelhar: 'quando o cliente manda áudio', sempre: 'sempre' }[g.respostaAudio]}${g.voz ? `, voz ${[...VOZES_ELEVENLABS, ...VOZES_OPENAI].find((v) => v.id === g.voz)?.nome ?? g.voz}` : ''}.` : g.voz ? ` Voz: ${[...VOZES_ELEVENLABS, ...VOZES_OPENAI].find((v) => v.id === g.voz)?.nome ?? g.voz}.` : '';
+    return { resumo: `Alterar a configuração geral do agente do WhatsApp${g.ligado === true ? ' e LIGAR o atendimento automático (ele passa a responder clientes)' : g.ligado === false ? ' e DESLIGAR o atendimento automático' : ''}: ${Object.entries(g).filter(([, v]) => v !== undefined).map(([k]) => k).join(', ')}.${audio}`, previa: Object.entries(g).filter(([k, v]) => v !== undefined && typeof v === 'string').map(([k, v]) => ({ nome: k, texto: String(v).slice(0, 3000) })) };
   }
 
   private alterarAgentesWhatsapp(): Ferramenta {
@@ -1242,7 +1269,9 @@ export class FerramentasAssistente {
         } else {
           const g = e.geral ?? {};
           const atual = await this.agente.config();
-          await this.agente.salvarConfig({ ...atual, ...(g.ligado !== undefined ? { ativo: g.ligado } : {}), ...(g.nome !== undefined ? { nome: g.nome } : {}), ...(g.instrucoes !== undefined ? { instrucoes: g.instrucoes } : {}), ...(g.conhecimento !== undefined ? { conhecimento: g.conhecimento } : {}), ...(g.maxRespostas !== undefined ? { maxRespostas: g.maxRespostas } : {}), ...(g.maxTransferencias !== undefined ? { maxTransferencias: g.maxTransferencias } : {}) });
+          // Voz da OpenAI tem nome curto (ash, coral…); qualquer outro id é da ElevenLabs.
+          const vozCampo = g.voz ? (VOZES_OPENAI.some((v) => v.id === g.voz) ? { vozOpenai: g.voz } : { vozElevenlabs: g.voz }) : {};
+          await this.agente.salvarConfig({ ...atual, ...vozCampo, ...(g.respostaAudio ? { respostaAudio: g.respostaAudio } : {}), ...(g.vozProvedor ? { vozProvedor: g.vozProvedor } : {}), ...(g.audioComTexto !== undefined ? { audioComTexto: g.audioComTexto } : {}), ...(g.ligado !== undefined ? { ativo: g.ligado } : {}), ...(g.nome !== undefined ? { nome: g.nome } : {}), ...(g.instrucoes !== undefined ? { instrucoes: g.instrucoes } : {}), ...(g.conhecimento !== undefined ? { conhecimento: g.conhecimento } : {}), ...(g.maxRespostas !== undefined ? { maxRespostas: g.maxRespostas } : {}), ...(g.maxTransferencias !== undefined ? { maxTransferencias: g.maxTransferencias } : {}) });
           r = { alterado: true };
         }
         await this.auditoria.registrar({ usuarioId: ctx.usuario.id, acao: `assistente_agente_${e.acao}`, entidade: 'ia_agente', entidadeId: e.especialistaId ?? null, dados: { especialista: e.especialista ? { ...e.especialista, conhecimento: undefined } : undefined, geral: e.geral ? { ...e.geral, conhecimento: undefined } : undefined } });
