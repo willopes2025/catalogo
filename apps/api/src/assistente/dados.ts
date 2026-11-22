@@ -238,11 +238,13 @@ const col = (c: string | { expr: string }) => (typeof c === 'string' ? c : c.exp
 
 /** Monta a consulta só com pedaços deste arquivo; os valores dos filtros e das datas vão como parâmetros. */
 export function montarConsulta(p: PedidoConsulta): { consulta: SQL; tipos: Record<string, TipoMetrica | 'data' | undefined> } {
-  const c = CONJUNTOS[p.conjunto];
+  // Só nomes que existem de fato no catálogo (um nome como "constructor" acharia uma propriedade herdada do objeto).
+  const tem = (o: object, k: string) => Object.prototype.hasOwnProperty.call(o, k);
+  const c = tem(CONJUNTOS, p.conjunto) ? CONJUNTOS[p.conjunto] : undefined;
   if (!c) throw new Error(`Conjunto desconhecido: ${p.conjunto}. Use: ${Object.keys(c ?? CONJUNTOS).join(', ')}.`);
-  for (const d of p.agruparPor) if (!c.dimensoes[d]) throw new Error(`"${d}" não é dimensão de ${p.conjunto}. Use: ${Object.keys(c.dimensoes).join(', ')}.`);
-  for (const m of p.metricas) if (!c.metricas[m]) throw new Error(`"${m}" não é métrica de ${p.conjunto}. Use: ${Object.keys(c.metricas).join(', ')}.`);
-  for (const f of p.filtros) if (!c.dimensoes[f.campo]) throw new Error(`Filtro "${f.campo}" não existe em ${p.conjunto}. Use: ${Object.keys(c.dimensoes).join(', ')}.`);
+  for (const d of p.agruparPor) if (!tem(c.dimensoes, d)) throw new Error(`"${d}" não é dimensão de ${p.conjunto}. Use: ${Object.keys(c.dimensoes).join(', ')}.`);
+  for (const m of p.metricas) if (!tem(c.metricas, m)) throw new Error(`"${m}" não é métrica de ${p.conjunto}. Use: ${Object.keys(c.metricas).join(', ')}.`);
+  for (const f of p.filtros) if (!tem(c.dimensoes, f.campo)) throw new Error(`Filtro "${f.campo}" não existe em ${p.conjunto}. Use: ${Object.keys(c.dimensoes).join(', ')}.`);
   if ((p.de || p.ate) && !c.data) throw new Error(`${p.conjunto} não tem período; filtre pelas dimensões (ex.: mes).`);
   const condicoes: SQL[] = [];
   if (c.onde) condicoes.push(sql.raw(`(${c.onde})`));
@@ -261,7 +263,7 @@ export function montarConsulta(p: PedidoConsulta): { consulta: SQL; tipos: Recor
   const limite = Math.min(Math.max(p.limite, 1), 200);
   if (p.modo === 'lista') {
     const cols = Object.entries(c.colunas);
-    const ordem = p.ordenarPor && c.colunas[p.ordenarPor] ? col(c.colunas[p.ordenarPor]) : c.data ? c.data.expr : col(cols[0][1]);
+    const ordem = p.ordenarPor && tem(c.colunas, p.ordenarPor) ? col(c.colunas[p.ordenarPor]) : c.data ? c.data.expr : col(cols[0][1]);
     const consulta = sql`select ${sql.raw(cols.map(([k, v]) => `${col(v)} as "${k}"`).join(', '))} from ${sql.raw(c.de)}${onde} order by ${sql.raw(ordem)} ${sql.raw(p.ordem === 'asc' ? 'asc' : 'desc')} nulls last limit ${limite}`;
     return { consulta, tipos: Object.fromEntries(cols.map(([k, v]) => [k, typeof v === 'string' ? undefined : v.tipo])) };
   }

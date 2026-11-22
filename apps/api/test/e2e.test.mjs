@@ -3191,6 +3191,11 @@ test('Assistente: consulta inadimplentes, prepara envio em lote, confirma por vo
   const est = v.acoes.filter((x) => x.ferramenta === 'consultar_dados').at(-1);
   assert.equal(est.status, 'concluida', est.erro ?? '');
   assert.ok('local' in est.resultado.linhas[0] && 'categoria' in est.resultado.linhas[0]);
+  // A agenda de amanhã às 10h fica livre: outro teste marca uma retirada "daqui a 20 horas", que cai nesse horário quando os testes rodam no começo da tarde.
+  const amanha = new Date(Date.now() - 3 * 3600_000 + 86400_000).toISOString().slice(0, 10);
+  for (const c of await ok('GET', `/agenda?de=${amanha}T00:00:00-03:00&ate=${amanha}T23:59:59-03:00`)) {
+    if (new Date(c.inicio) < new Date(`${amanha}T11:00:00-03:00`) && new Date(c.fim) > new Date(`${amanha}T10:00:00-03:00`)) await ok('POST', `/agenda/${c.id}/situacao`, { status: 'cancelado', motivo: 'Libera o horário para o teste do assistente' });
+  }
   await ok('POST', `/assistente/sessoes/${s.id}/mensagens`, { texto: 'marca uma reunião amanhã às 10h' });
   v = await esperar(s.id, (x) => !x.ocupada);
   const comp = v.acoes.filter((x) => x.ferramenta === 'criar_compromisso').at(-1);

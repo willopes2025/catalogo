@@ -4,6 +4,11 @@ import { NestFactory } from '@nestjs/core';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import { AppModule } from './app.module';
 
+// Uma tarefa de fundo que falha (envio, sincronização, IA) não pode derrubar a API inteira: registra e segue.
+process.on('unhandledRejection', (motivo) => {
+  console.error('Falha não tratada numa tarefa de fundo:', motivo instanceof Error ? (motivo.stack ?? motivo.message) : motivo);
+});
+
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule, { logger: ['error', 'warn', 'log'], rawBody: true });
   // rawBody: a Meta assina o webhook do WhatsApp sobre o corpo exato recebido.
