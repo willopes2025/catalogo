@@ -38,6 +38,7 @@ import { SuporteController } from './suporte/suporte.controller';
 import { ImportacaoController } from './importacao/importacao.controller';
 import { ImportacaoService } from './importacao/importacao.service';
 import { ProdutosController } from './produtos/produtos.controller';
+import { PrecificacaoController } from './precificacao/precificacao.controller';
 import { EstoqueController } from './estoque/estoque.controller';
 import { EstoqueService } from './estoque/estoque.service';
 import { MaletaPublicaController, MaletasController } from './maletas/maletas.controller';
@@ -106,6 +107,7 @@ if (!segredo || (process.env.NODE_ENV === 'production' && segredo.length < 32)) 
     PessoasController,
     NiveisController,
     ProdutosController,
+    PrecificacaoController,
     EstoqueController,
     MaletasController,
     MaletaPublicaController,

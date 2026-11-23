@@ -3510,3 +3510,53 @@ test('implantação: apagar dados de teste exige APAGAR e mantém o que é confi
   const v = await ok('POST', '/vendas', { localId: loja.id, tipo: 'avulsa', itens: [{ codigoBarras: p.codigoBarras, quantidade: 1 }], pagamentos: [{ forma: 'pix', valor: p.preco }] });
   assert.equal(v.numero, 1);
 });
+
+test('precificação: fórmula da planilha (peso × coeficiente + bruto, markup por faixa), aplicar em lote e regras configuráveis', async () => {
+  const novo = (ref, descricao, extra = {}) => ok('POST', '/produtos', { referencia: ref, descricao, preco: 9290, ...extra });
+  const prata = await novo('PRC-PRATA', 'Choker Aro com Coração Banhado a Prata');
+  const ouro = await novo('PRC-OURO', 'Choker Corrente Oval', { cor: 'B. de Ouro' });
+  const semMetal = await novo('PRC-NADA', 'Choker 3 esferas');
+  const ver = async (ref) => (await ok('GET', `/precificacao?busca=${ref}`)).itens[0];
+  // Sem peso não há conta; o metal já sai do cadastro.
+  assert.deepEqual([(await ver('PRC-PRATA')).metal, (await ver('PRC-OURO')).metal, (await ver('PRC-NADA')).metal], ['prata', 'ouro', null]);
+  assert.equal((await ver('PRC-PRATA')).calculo, null);
+  assert.ok((await ok('GET', '/precificacao?situacao=sem_peso&busca=PRC-')).itens.length >= 3);
+
+  const r = await ok('POST', '/precificacao/aplicar', {
+    itens: [
+      { id: prata.id, peso: 6, bruto: 400, preco: 11990 },
+      { id: ouro.id, peso: 20, bruto: 950 },
+      { id: semMetal.id, peso: 8.4, bruto: 850, metal: 'ouro', coeficiente: 400, insumos: 0 },
+    ],
+  });
+  assert.deepEqual([r.pecas, r.precosAlterados], [3, 1]);
+  const p = await ver('PRC-PRATA');
+  assert.deepEqual([p.peso, p.bruto, p.insumos, p.coeficiente, p.custo, p.preco], [6, 400, 500, 150, 1800, 11990]);
+  assert.deepEqual([p.calculo.banho, p.calculo.multiplicador, p.calculo.sugerido, p.calculo.arredondado], [900, 1000, 13500, 13590]);
+  const o = await ver('PRC-OURO');
+  assert.deepEqual([o.calculo.banho, o.calculo.sugerido, o.custo, o.preco], [11000, 84150, 12450, 9290], 'sem preço informado, o preço não muda');
+  const n = await ver('PRC-NADA');
+  assert.deepEqual([n.metal, n.coeficiente, n.calculo.banho, n.calculo.sugerido], ['ouro', 400, 3360, 29470]);
+  const ficha = await ok('GET', `/produtos/${prata.id}`);
+  assert.deepEqual([ficha.custos.banhoPrata, ficha.medidas.peso], [900, 6]);
+
+  // Planilha: acha a peça pelo código de barras ou pela referência; o que não existe fica de fora.
+  const achados = (await ok('POST', '/precificacao/buscar', { codigos: [prata.codigoBarras, 'PRC-OURO', 'nao-existe'] })).itens;
+  assert.deepEqual([achados[prata.codigoBarras].id, achados['PRC-OURO'].id, achados['nao-existe']], [prata.id, ouro.id, undefined]);
+
+  // Mudar a regra muda o sugerido de quem não tem coeficiente gravado; quem já foi precificado mantém o seu.
+  const regras = await ok('GET', '/configuracoes/chave/precificacao');
+  assert.equal(regras.ouro.coeficiente, 550);
+  await ok('PUT', '/configuracoes/chave/precificacao', { ...regras, prata: { ...regras.prata, coeficiente: 200 }, terminacao: null });
+  const p2 = await ver('PRC-PRATA');
+  assert.deepEqual([p2.coeficiente, p2.calculo.arredondado], [150, 13500]);
+  assert.equal((await chamar('PUT', '/configuracoes/chave/precificacao', { ...regras, ouro: { coeficiente: 550, faixas: [] } })).status, 400);
+  await ok('PUT', '/configuracoes/chave/precificacao', regras);
+
+  assert.equal((await chamar('POST', '/precificacao/aplicar', { itens: [{ id: prata.id, preco: 0 }] })).status, 400);
+  assert.equal((await chamar('POST', '/precificacao/aplicar', { itens: [{ id: prata.id, peso: 1 }, { id: prata.id, peso: 2 }] })).status, 400);
+  // Trocar o metal recalcula o banho com o coeficiente do novo metal.
+  await ok('POST', '/precificacao/aplicar', { itens: [{ id: prata.id, metal: 'ouro' }] });
+  const p3 = await ok('GET', `/produtos/${prata.id}`);
+  assert.deepEqual([p3.custos.banhoOuro, p3.custos.banhoPrata, p3.custo], [3300, undefined, 4200]);
+});

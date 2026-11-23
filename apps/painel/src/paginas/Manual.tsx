@@ -99,6 +99,16 @@ const SECOES: Secao[] = [
     ],
   },
   {
+    id: 'precificacao',
+    titulo: 'Precificação',
+    passos: [
+      { t: 'A fórmula', d: 'Em Produtos › Precificação cada peça mostra a conta da planilha: custo do banho = peso da peça × coeficiente do metal (reais por grama); custo total = custo bruto + banho; preço sugerido = custo total × markup + insumos, arredondado para a terminação escolhida (por exemplo …,90). O sugerido é só o ponto de partida: o preço que vale é o que você põe em "Novo preço".' },
+      { t: 'Ajustar e gravar', d: 'Digite o peso, o custo bruto, o metal, o coeficiente (quando a peça foge do padrão) e os insumos direto na linha: a conta refaz na hora. Clique no valor sugerido para usá-lo como novo preço, ou em "Usar o sugerido em todas". Os campos alterados ficam destacados e nada é gravado até clicar em "Gravar". Ao gravar, o custo do produto passa a ser a soma da composição e o preço muda só nas peças em que você informou novo preço.' },
+      { t: 'Regras', d: 'O botão "Regras" guarda o coeficiente do ouro e o da prata, o markup por faixa de custo (peça mais barata pode levar markup maior), os insumos por peça e a terminação do preço. Quem tem permissão de editar Configurações pode mudar. Peça já precificada guarda o coeficiente com que foi gravada; mudar a regra vale para as demais.' },
+      { t: 'Importar a planilha', d: '"Importar planilha" lê o arquivo .xlsx no formato da planilha de reprecificação (colunas Código de Barras, Referência, Peso, Cor, Custo Compra Bruto, Custo Banho Ouro/Prata, Custo Insumos e Novo Preço). O sistema acha cada peça pelo código de barras ou pela referência, mostra o que vai mudar e avisa quais códigos não encontrou. Só grava depois de você conferir e clicar em "Gravar". "Exportar" gera a planilha da tela atual.' },
+    ],
+  },
+  {
     id: 'financeiro',
     titulo: 'Financeiro',
     passos: [

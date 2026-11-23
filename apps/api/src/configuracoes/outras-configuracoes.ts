@@ -1,5 +1,14 @@
 import { z } from 'zod';
-import { REGRAS_PONTOS_PADRAO } from '@aritana/regras';
+import { REGRAS_PONTOS_PADRAO, REGRAS_PRECIFICACAO_PADRAO } from '@aritana/regras';
+
+const regraMetal = z.object({
+  coeficiente: z.number().min(0).max(1_000_000),
+  faixas: z
+    .array(z.object({ ate: z.number().int().min(1).nullable(), multiplicador: z.number().int().min(100, 'O multiplicador mínimo é 1').max(10000) }))
+    .min(1, 'Informe ao menos uma faixa')
+    .max(8)
+    .refine((f) => f.filter((x) => x.ate === null).length === 1, 'Deixe uma única faixa sem limite (a última)'),
+});
 
 /**
  * Configurações simples guardadas por chave, com valor padrão e validação.
@@ -27,6 +36,10 @@ export const CONFIGS = {
       diasAntesMaleta: z.number().int().min(0).max(15),
       diasAntesTitulo: z.number().int().min(0).max(15),
     }),
+  },
+  precificacao: {
+    padrao: { ...REGRAS_PRECIFICACAO_PADRAO },
+    schema: z.object({ ouro: regraMetal, prata: regraMetal, insumos: z.number().int().min(0).max(1_000_000), terminacao: z.number().int().min(0).max(99).nullable() }),
   },
   regras_pontos: {
     padrao: { ...REGRAS_PONTOS_PADRAO },

@@ -18,7 +18,7 @@ export function Produtos() {
   const [porFoto, setPorFoto] = useState(false);
   return (
     <>
-      <Topo eb="Produtos" titulo="Catálogo" sub={q.data ? `${q.data.total} produtos ativos` : undefined} acoes={pode('produtos', 'criar') && <Link className="botao" to="/produtos/novo">Novo produto</Link>} />
+      <Topo eb="Produtos" titulo="Catálogo" sub={q.data ? `${q.data.total} produtos ativos` : undefined} acoes={<><Link className="botao claro" to="/produtos/precificacao">Precificação</Link>{pode('produtos', 'criar') && <Link className="botao" to="/produtos/novo">Novo produto</Link>}</>} />
       <form className="busca" onSubmit={(e) => { e.preventDefault(); const p = new URLSearchParams(params); busca ? p.set('busca', busca) : p.delete('busca'); setParams(p); }}>
         <input placeholder="Descrição, referência ou código de barras" value={busca} onChange={(e) => setBusca(e.target.value)} autoFocus />
         <select value={params.get('categoriaId') ?? ''} onChange={(e) => { const p = new URLSearchParams(params); e.target.value ? p.set('categoriaId', e.target.value) : p.delete('categoriaId'); setParams(p); }}>
