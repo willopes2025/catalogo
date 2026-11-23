@@ -364,7 +364,7 @@ const SECOES: Secao[] = [
     id: 'implantacao',
     titulo: 'Implantação: o que falta para começar',
     passos: [
-      { t: 'Configurações › Implantação', d: 'Mostra o que falta: CNPJs, integrações, NCM dos produtos, textos jurídicos, usuários, senhas provisórias e importação do Jueri.' },
+      { t: 'Configurações › Implantação', d: 'Mostra o que falta para entregar o sistema, por grupo: notas fiscais, financeiro (Asaas, plano de contas, contas bancárias), cobrança, regras do negócio (inclusive a precificação), documentos, comunicação, atendimento (WhatsApp, IA, aplicativo), o que a Wide ainda vai desenvolver e a virada (usuários, senhas, importação do Jueri, treinamento).' },
       { t: 'Integrações', d: 'Quando a Aritana tiver os acessos (e-mail, Asaas, Focus NFe, Assertiva), preencha em Configurações › Integrações e use "Testar conexão".' },
       { t: 'Confirmações', d: 'Itens que só a Aritana pode garantir (certificado A1, CFOPs do contador, jurídico, regras) são marcados como "Feito" por quem confirmou.' },
       { t: 'Apagar os dados de teste', d: 'No dia da virada, a Diretoria apaga os dados de teste (digitando APAGAR) e importa os dados reais.' },

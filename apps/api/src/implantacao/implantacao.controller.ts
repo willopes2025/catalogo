@@ -13,6 +13,7 @@ import { AsaasService } from '../integracoes/asaas.service';
 import { AssertivaService } from '../integracoes/assertiva.service';
 import { FiscalService } from '../fiscal/fiscal.service';
 import { SegredosService } from '../segredos/segredos.service';
+import { IaService } from '../ia/ia.service';
 
 type Status = 'ok' | 'pendente' | 'atencao' | 'opcional';
 interface Item {
@@ -41,6 +42,24 @@ const MANUAIS: Record<string, { grupo: string; titulo: string; descricao: string
   juridico: { grupo: 'Documentos', titulo: 'Contrato e promissória revisados pelo jurídico', descricao: 'Os textos instalados são provisórios. Troque em Configurações › Modelos de documento e marque aqui.', link: '/configuracoes?aba=modelos' },
   piloto: { grupo: 'Virada', titulo: 'Piloto em paralelo com o Jueri concluído', descricao: 'Algumas semanas usando os dois sistemas para comparar acertos, estoque e financeiro antes de desligar o Jueri.' },
   jueri_fechado: { grupo: 'Virada', titulo: 'Jueri fechado e importação final feita', descricao: 'Ninguém lança mais nada no Jueri; a importação final roda com todas as partes marcadas (maletas e contas incluídas).', link: '/configuracoes?aba=importacao' },
+  asaas_conta_real: { grupo: 'Financeiro', titulo: 'Módulo Asaas testado na conta real', descricao: 'O módulo foi testado só no simulador. Com a chave de produção, abra cada seção de Financeiro › Asaas e faça uma cobrança de teste; se alguma operação der erro, avise a Wide.', link: '/financeiro?secao=asaas' },
+  plano_contas_revisado: { grupo: 'Financeiro', titulo: 'Plano de contas revisado com o contador', descricao: 'O plano instalado é um ponto de partida. Ajuste as contas e confira a DRE de um mês fechado.', link: '/financeiro?secao=plano' },
+  cra_real: { grupo: 'Cobrança', titulo: 'Protesto em cartório testado com o CRA21', descricao: 'O envio ao cartório foi testado só no simulador. Faça a primeira remessa acompanhada, com um título de valor baixo.', link: '/cobranca' },
+  regua_cobranca: { grupo: 'Cobrança', titulo: 'Régua, carteiras e terceirizadas de cobrança conferidas', descricao: 'Dias e mensagens da régua, quem cobra cada carteira e as empresas de cobrança cadastradas.', link: '/cobranca' },
+  clausula_cobranca: { grupo: 'Cobrança', titulo: 'Cláusula de cobrança no contrato das consultoras', descricao: 'A cobrança como serviço para as consultoras depende desta cláusula; sem ela, a função não é desenvolvida.', link: '/configuracoes?aba=modelos' },
+  precificacao_regras: { grupo: 'Regras do negócio', titulo: 'Coeficientes e markup da precificação confirmados', descricao: 'Ouro 5,50 e prata 1,50 por grama, markup por faixa e insumos de R$ 5,00 vieram da planilha de colares. Falta a Aritana explicar os coeficientes diferentes (4, 3, 3,5 e 2) e o que é a coluna "Novo Código do Produto".', link: '/produtos/precificacao' },
+  precificacao_jueri: { grupo: 'Regras do negócio', titulo: 'Decidido onde o preço é definido até a virada', descricao: 'O preço gravado aqui não volta para o Jueri (acesso só de leitura). Definir se a Aritana mantém os dois ou precifica só neste sistema.' },
+  scorecard_regras: { grupo: 'Regras do negócio', titulo: 'Indicadores e pesos do scorecard definidos', descricao: 'Já definido: a pontuação vira bônus, quem avalia é a gerência ou o proprietário e o ciclo é mensal. Falta escolher os indicadores de cada setor, os pesos e a regra do bônus.' },
+  agentes_revisados: { grupo: 'Atendimento', titulo: 'Roteiros dos agentes de IA revisados', descricao: 'Recepção e especialistas (Vendas, Recrutamento, Revendedora): confira o texto de cada um e faça conversas de teste antes de ligar no número principal.', link: '/crm?aba=configurar' },
+  app_publicado: { grupo: 'Atendimento', titulo: 'Aplicativo da representante publicado', descricao: 'Publicação na Google Play e na App Store, com as chaves de notificação preenchidas em Integrações.', link: '/configuracoes?aba=integracoes' },
+  dev_ferramentas_ia: { grupo: 'Desenvolvimento (Wide)', titulo: 'Ferramentas dos agentes de IA', descricao: 'A IA emitir 2ª via, registrar promessa de pagamento, consultar estoque e registrar candidatura sozinha. Ainda não desenvolvido.' },
+  dev_minha_mesa: { grupo: 'Desenvolvimento (Wide)', titulo: 'Minha mesa', descricao: 'Chat interno com notificação na tela, tarefas de cada responsável no painel dele e painel por setor. Ainda não desenvolvido.' },
+  dev_scorecard: { grupo: 'Desenvolvimento (Wide)', titulo: 'Balanced scorecard da equipe', descricao: 'Pontuação mensal de acertos e erros, avaliada pela gerência ou pelo proprietário, que vira bônus. Ainda não desenvolvido.' },
+  dev_aprendizado_ia: { grupo: 'Desenvolvimento (Wide)', titulo: 'Aprendizado da IA', descricao: 'A IA aprender com as correções da equipe, sugestões semanais e memória por cliente. Ainda não desenvolvido.' },
+  dev_precificacao_categorias: { grupo: 'Desenvolvimento (Wide)', titulo: 'Precificação das outras categorias', descricao: 'A fórmula foi montada com a planilha de colares. Falta receber as planilhas (ou a confirmação) de anéis, brincos, pulseiras e demais categorias.', link: '/produtos/precificacao' },
+  dev_cobranca_servico: { grupo: 'Desenvolvimento (Wide)', titulo: 'Cobrança como serviço para as consultoras', descricao: 'Depende da cláusula no contrato. Ainda não desenvolvido.' },
+  backup_testado: { grupo: 'Virada', titulo: 'Cópia de segurança restaurada em teste', descricao: 'A cópia diária do banco existe no servidor; falta restaurar uma delas em teste para ter certeza de que volta.' },
+  treinamento: { grupo: 'Virada', titulo: 'Equipe treinada', descricao: 'Cada setor passou pelo capítulo dele no Manual e fez as operações do dia a dia no ambiente de teste.', link: '/manual' },
   jueri_token: { grupo: 'Virada', titulo: 'Token do Jueri apagado', descricao: 'Depois da virada, apague o token no Jueri (Configurações › API) e em Integrações › Jueri.', link: '/configuracoes?aba=integracoes' },
 };
 
@@ -55,6 +74,7 @@ export class ImplantacaoController {
     private readonly assertiva: AssertivaService,
     private readonly fiscal: FiscalService,
     private readonly segredos: SegredosService,
+    private readonly ia: IaService,
   ) {}
 
   private async confirmacoes(): Promise<Record<string, { por: string; em: string }>> {
@@ -88,7 +108,23 @@ export class ImplantacaoController {
       .filter((g) => !g.permissoes['*'])
       .map((g) => ({ nome: g.nome, faltam: MODULOS.filter((m) => ['crm', 'marketing', 'pontos', 'formularios'].includes(m.chave) && !g.permissoes[m.chave]).map((m) => m.nome) }))
       .filter((g) => g.faltam.length);
+    const [canais, titulosSemPlano, contasAtivas, semPeso] = await Promise.all([
+      n(sql`select count(*) as n from crm_canais`),
+      n(sql`select count(*) as n from titulos where plano_conta_id is null and status <> 'cancelado'`),
+      n(sql`select count(*) as n from contas where ativo`),
+      n(sql`select count(*) as n from produtos where ativo and coalesce((medidas->>'peso')::numeric, 0) = 0`),
+    ]);
+    const v = (nome: string) => !!this.segredos.v(nome);
+    const cra = ['CRA_URL', 'CRA_USUARIO', 'CRA_SENHA', 'CRA_CODIGO'].every(v);
+    const push = v('FIREBASE_CONTA_SERVICO') || (v('APNS_CHAVE_P8') && v('APNS_KEY_ID') && v('APNS_TEAM_ID'));
     const itens: Item[] = [
+      { chave: 'whatsapp', grupo: 'Atendimento', titulo: 'Número de WhatsApp ligado ao CRM', descricao: 'Sem um número ligado, o chat, os disparos e os agentes de IA não funcionam.', status: canais ? 'ok' : 'pendente', detalhe: canais ? `${canais} número(s)` : undefined, link: '/crm?aba=configurar' },
+      { chave: 'ia', grupo: 'Atendimento', titulo: 'Inteligência artificial ligada', descricao: 'Chave do Claude (agentes e assistente) e, se quiser transcrição de áudio e imagens, a da OpenAI.', status: this.ia.texto ? 'ok' : 'pendente', detalhe: this.ia.texto && !this.ia.imagem ? 'Sem a chave da OpenAI: áudio não é transcrito' : undefined, link: '/configuracoes?aba=integracoes' },
+      { chave: 'push', grupo: 'Atendimento', titulo: 'Notificações do aplicativo', descricao: 'Opcional: chaves do Firebase (Android) e da Apple para avisar a representante no celular.', status: push ? 'ok' : 'opcional', link: '/configuracoes?aba=integracoes' },
+      { chave: 'cra', grupo: 'Cobrança', titulo: 'Acesso ao cartório (CRA21) preenchido', descricao: 'Opcional: só para quem vai protestar títulos pelo sistema.', status: cra ? 'ok' : 'opcional', link: '/configuracoes?aba=integracoes' },
+      { chave: 'contas_bancarias', grupo: 'Financeiro', titulo: 'Contas bancárias cadastradas', descricao: 'Caixa, bancos e Asaas, cada conta na empresa certa.', status: contasAtivas ? 'ok' : 'pendente', detalhe: contasAtivas ? `${contasAtivas} conta(s)` : undefined, link: '/financeiro?secao=contas' },
+      { chave: 'titulos_sem_plano', grupo: 'Financeiro', titulo: 'Lançamentos classificados no plano de contas', descricao: 'O que não tem conta aparece na DRE como "sem classificação". Em Financeiro, filtre "Sem classificação" e use "Classificar".', status: titulosSemPlano ? 'atencao' : 'ok', detalhe: titulosSemPlano ? `${titulosSemPlano} lançamento(s) sem conta` : undefined, link: '/financeiro' },
+      { chave: 'produtos_sem_peso', grupo: 'Regras do negócio', titulo: 'Produtos com peso para precificar', descricao: 'Sem peso, a precificação não calcula o banho nem o preço sugerido.', status: produtosAtivos && semPeso ? 'atencao' : 'ok', detalhe: semPeso ? `${semPeso} de ${produtosAtivos} sem peso` : undefined, link: '/produtos/precificacao' },
       { chave: 'empresas', grupo: 'Notas fiscais', titulo: 'Empresas com razão social, CNPJ e inscrição estadual', descricao: 'Matriz (representantes) e loja, cada uma com o seu CNPJ.', status: empresasSemCnpj ? 'pendente' : 'ok', detalhe: empresasSemCnpj ? `${empresasSemCnpj} empresa(s) com dados faltando` : undefined, link: '/configuracoes?aba=empresas' },
       {
         chave: 'focus',
@@ -133,7 +169,7 @@ export class ImplantacaoController {
       const c = conf[chave];
       itens.push({ chave, ...m, manual: true, status: c ? 'ok' : 'pendente', confirmadoPor: c?.por ?? null, confirmadoEm: c?.em ?? null });
     }
-    const ordem = ['Notas fiscais', 'Financeiro', 'Regras do negócio', 'Documentos', 'Comunicação', 'Virada'];
+    const ordem = ['Notas fiscais', 'Financeiro', 'Cobrança', 'Regras do negócio', 'Documentos', 'Comunicação', 'Atendimento', 'Desenvolvimento (Wide)', 'Virada'];
     itens.sort((a, b) => ordem.indexOf(a.grupo) - ordem.indexOf(b.grupo));
     const contam = itens.filter((i) => i.status !== 'opcional');
     return { itens, feitos: contam.filter((i) => i.status === 'ok').length, total: contam.length, importadosJueri: await this.importadosJueri() };
