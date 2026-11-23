@@ -7,7 +7,7 @@ import { Softphone } from './Softphone';
 import { AvisosDaMesa, usarAvisosDaMesa } from '../paginas/Mesa';
 
 /** Rotas já construídas nesta etapa; as demais abrem a página "em construção". */
-const ROTAS: Record<string, string> = { inicio: '/', assistente: '/assistente', rede: '/rede', cadastros: '/cadastros', produtos: '/produtos', estoque: '/estoque', maletas: '/maletas', vendas: '/vendas', lojas: '/lojas', financeiro: '/financeiro', cobranca: '/cobranca', fiscal: '/fiscal', relatorios: '/relatorios', configuracoes: '/configuracoes', suporte: '/suporte', garantia: '/garantia', comissoes: '/comissoes', crm: '/crm', pontos: '/pontos', formularios: '/formularios', marketing: '/marketing', rh: '/rh' };
+const ROTAS: Record<string, string> = { inicio: '/', assistente: '/assistente', rede: '/rede', cadastros: '/cadastros', produtos: '/produtos', estoque: '/estoque', maletas: '/maletas', vendas: '/vendas', lojas: '/lojas', financeiro: '/financeiro', cobranca: '/cobranca', fiscal: '/fiscal', relatorios: '/relatorios', configuracoes: '/configuracoes', suporte: '/suporte', garantia: '/garantia', comissoes: '/comissoes', crm: '/crm', pontos: '/pontos', formularios: '/formularios', marketing: '/marketing', rh: '/rh', scorecard: '/scorecard' };
 
 /** Menu separado por assunto. Módulo novo que não estiver aqui aparece em "Outros". */
 const GRUPOS: { titulo: string; chaves: string[] }[] = [
@@ -17,7 +17,7 @@ const GRUPOS: { titulo: string; chaves: string[] }[] = [
   { titulo: 'Vendas', chaves: ['vendas', 'lojas', 'garantia'] },
   { titulo: 'Produtos', chaves: ['produtos', 'estoque'] },
   { titulo: 'Financeiro', chaves: ['financeiro', 'cobranca', 'fiscal', 'relatorios'] },
-  { titulo: 'Equipe', chaves: ['meu-ponto', 'rh'] },
+  { titulo: 'Equipe', chaves: ['meu-ponto', 'rh', 'scorecard'] },
   { titulo: 'Sistema', chaves: ['cadastros', 'configuracoes', 'suporte'] },
 ];
 const semAcento = (t: string) => t.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();

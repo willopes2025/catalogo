@@ -11,3 +11,4 @@ export * from './formularios';
 export * from './jornada';
 export * from './cobranca';
 export * from './precificacao';
+export * from './scorecard';

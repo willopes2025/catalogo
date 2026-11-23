@@ -2163,7 +2163,12 @@ export const mesaMensagens = pgTable(
     id: id(),
     conversaId: uuid('conversa_id').notNull().references(() => mesaConversas.id, { onDelete: 'cascade' }),
     usuarioId: uuid('usuario_id').references(() => usuarios.id, { onDelete: 'set null' }),
-    texto: text('texto').notNull(),
+    texto: text('texto').notNull().default(''),
+    /** Anexo (arquivo guardado na pasta privada da mesa: só sai para quem participa da conversa). */
+    anexo: text('anexo'),
+    anexoNome: text('anexo_nome'),
+    anexoMime: text('anexo_mime'),
+    anexoTamanho: integer('anexo_tamanho'),
     criadoEm: criadoEm(),
   },
   (t) => ({ porConversa: index('mesa_mensagens_conversa_idx').on(t.conversaId, t.criadoEm) }),
@@ -2212,4 +2217,86 @@ export const iaLicoes = pgTable(
     atualizadoEm: timestamp('atualizado_em', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => ({ porStatus: index('ia_licoes_status_idx').on(t.status, t.criadoEm) }),
+);
+
+// ───────────────────────── Scorecard da equipe (balanced scorecard) ─────────────────────────
+
+/** Indicador do scorecard: vale para todos, para um setor (grupo de usuários) ou para uma pessoa. */
+export const bscIndicadores = pgTable('bsc_indicadores', {
+  id: id(),
+  nome: text('nome').notNull(),
+  descricao: text('descricao'),
+  /** financeira | clientes | processos | aprendizado */
+  perspectiva: text('perspectiva').notNull().default('processos'),
+  /** manual, ou o nome da conta automática que o sistema faz (vendas do mês, tarefas no prazo...). */
+  fonte: text('fonte').notNull().default('manual'),
+  /** numero | reais (centavos) | percentual */
+  unidade: text('unidade').notNull().default('numero'),
+  meta: doublePrecision('meta').notNull(),
+  /** maior = quanto maior melhor; menor = quanto menor melhor (atrasos, devoluções). */
+  sentido: text('sentido').notNull().default('maior'),
+  peso: integer('peso').notNull().default(1),
+  grupoId: uuid('grupo_id').references(() => grupos.id, { onDelete: 'cascade' }),
+  usuarioId: uuid('usuario_id').references(() => usuarios.id, { onDelete: 'cascade' }),
+  ativo: boolean('ativo').notNull().default(true),
+  criadoEm: criadoEm(),
+});
+
+/** A avaliação de uma pessoa num mês. Fechada, guarda a foto dos indicadores e não muda mais (salvo reabrir). */
+export const bscAvaliacoes = pgTable(
+  'bsc_avaliacoes',
+  {
+    id: id(),
+    usuarioId: uuid('usuario_id').notNull().references(() => usuarios.id, { onDelete: 'cascade' }),
+    /** AAAA-MM */
+    mes: text('mes').notNull(),
+    /** aberta | fechada */
+    status: text('status').notNull().default('aberta'),
+    notaIndicadores: doublePrecision('nota_indicadores'),
+    ajuste: doublePrecision('ajuste'),
+    nota: doublePrecision('nota'),
+    percentualBonus: doublePrecision('percentual_bonus'),
+    bonus: integer('bonus'),
+    observacao: text('observacao'),
+    avaliadorId: uuid('avaliador_id').references(() => usuarios.id, { onDelete: 'set null' }),
+    fechadaEm: timestamp('fechada_em', { withTimezone: true }),
+    criadoEm: criadoEm(),
+  },
+  (t) => ({ unica: uniqueIndex('bsc_avaliacoes_pessoa_mes_idx').on(t.usuarioId, t.mes) }),
+);
+
+/** Resultado de cada indicador na avaliação (com a meta e o peso da época, para a avaliação fechada não mudar). */
+export const bscResultados = pgTable(
+  'bsc_resultados',
+  {
+    avaliacaoId: uuid('avaliacao_id').notNull().references(() => bscAvaliacoes.id, { onDelete: 'cascade' }),
+    indicadorId: uuid('indicador_id').notNull(),
+    nome: text('nome').notNull(),
+    perspectiva: text('perspectiva').notNull(),
+    unidade: text('unidade').notNull(),
+    meta: doublePrecision('meta').notNull(),
+    sentido: text('sentido').notNull(),
+    peso: integer('peso').notNull(),
+    resultado: doublePrecision('resultado'),
+    nota: doublePrecision('nota'),
+    comentario: text('comentario'),
+  },
+  (t) => ({ pk: primaryKey({ columns: [t.avaliacaoId, t.indicadorId] }) }),
+);
+
+/** Acerto ou erro registrado durante o mês: soma ou tira pontos da nota (dentro do limite das regras). */
+export const bscOcorrencias = pgTable(
+  'bsc_ocorrencias',
+  {
+    id: id(),
+    usuarioId: uuid('usuario_id').notNull().references(() => usuarios.id, { onDelete: 'cascade' }),
+    data: date('data').notNull(),
+    /** acerto | erro */
+    tipo: text('tipo').notNull(),
+    pontos: doublePrecision('pontos').notNull(),
+    descricao: text('descricao').notNull(),
+    registradoPor: uuid('registrado_por').references(() => usuarios.id, { onDelete: 'set null' }),
+    criadoEm: criadoEm(),
+  },
+  (t) => ({ porPessoa: index('bsc_ocorrencias_pessoa_idx').on(t.usuarioId, t.data) }),
 );

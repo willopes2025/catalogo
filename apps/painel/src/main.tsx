@@ -19,6 +19,7 @@ import { Representantes, FichaRepresentante } from './paginas/Representantes';
 import { Produtos, FichaProduto } from './paginas/Produtos';
 import { Precificacao } from './paginas/Precificacao';
 import { Mesa } from './paginas/Mesa';
+import { Scorecard } from './paginas/Scorecard';
 import { Estoque } from './paginas/Estoque';
 import { Maletas } from './paginas/Maletas';
 import { NovaMaleta } from './paginas/NovaMaleta';
@@ -103,6 +104,7 @@ ReactDOM.createRoot(document.getElementById('raiz')!).render(
             <Route path="cadastros/:id" element={<FichaCadastro />} />
             <Route path="rede/:id" element={<FichaRepresentante />} />
             <Route path="mesa" element={<Mesa />} />
+            <Route path="scorecard" element={<Scorecard />} />
             <Route path="produtos" element={<Produtos />} />
             <Route path="produtos/precificacao" element={<Precificacao />} />
             <Route path="produtos/novo" element={<FichaProduto />} />

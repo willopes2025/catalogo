@@ -56,3 +56,6 @@
   .mesa-voltar { display: inline-block; }
   .mesa-catalogo { grid-template-columns: 1fr; }
 }
+.mesa-foto { max-width: 240px; max-height: 240px; border-radius: 8px; margin: 2px 0 4px; cursor: zoom-in; display: block; }
+.mesa-arquivo { font: inherit; font-size: 13.5px; text-align: left; background: rgba(255, 255, 255, 0.55); border: 1px solid var(--linha); border-radius: 8px; padding: 6px 9px; margin: 2px 0 4px; cursor: pointer; color: inherit; overflow-wrap: anywhere; }
+.mesa-anexo-pronto { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 6px 12px; border-top: 1px solid var(--linha); background: var(--creme-2); font-size: 13.5px; }

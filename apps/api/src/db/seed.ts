@@ -46,7 +46,7 @@ async function main() {
           nome: 'Gerência comercial',
           permissoes: {
             inicio: ['ver'], crm: ['ver', 'criar', 'editar'], rede: ['ver', 'criar', 'editar', 'exportar'], cadastros: ['ver', 'criar', 'editar'],
-            produtos: ['ver'], estoque: ['ver'], maletas: ['ver', 'criar', 'editar', 'exportar'], relatorios: ['ver', 'exportar'],
+            produtos: ['ver'], estoque: ['ver'], maletas: ['ver', 'criar', 'editar', 'exportar'], relatorios: ['ver', 'exportar'], scorecard: ['ver', 'criar', 'editar', 'exportar'],
           },
         },
         {

@@ -1,8 +1,8 @@
 /**
  * Modelos de documento que vêm instalados.
  * O contrato é o texto que a Aritana usa (contrato estimatório para vendas em consignação com reserva de domínio),
- * com os dados das partes trocados por variáveis. A promissória ainda é PROVISÓRIA.
- * Ambos podem ser trocados em Configurações › Modelos de documento.
+ * com os dados das partes trocados por variáveis. A promissória e o aditivo de cobrança ainda são PROVISÓRIOS.
+ * Todos podem ser trocados em Configurações › Modelos de documento.
  */
 export const MODELOS_INICIAIS = [
   {
@@ -140,5 +140,54 @@ CPF: {{cpf}}
 Endereço: {{endereco}}, {{cidade}}/{{uf}}
 
 {{cidade}}, {{data_extenso}}.`,
+  },
+  {
+    tipo: 'aditivo' as const,
+    modeloTrabalho: 'consignado' as const,
+    titulo: 'Aditivo: serviço de cobrança · {{nome}}',
+    conteudo: `MODELO PROVISÓRIO — revisar com o jurídico da Aritana antes de usar.
+
+TERMO ADITIVO AO CONTRATO ESTIMATÓRIO PARA VENDAS EM CONSIGNAÇÃO COM RESERVA DE DOMÍNIO
+SERVIÇO DE COBRANÇA DAS VENDAS A PRAZO DA CONSIGNATÁRIA
+
+{{empresa_nome}}, inscrita no CNPJ {{empresa_cnpj}}, com sede na {{empresa_endereco}}, doravante denominada CONSIGNANTE.
+
+{{nome}}, {{estado_civil}}, {{profissao}}, inscrita no CPF sob o nº {{cpf}}, domiciliada à {{endereco}}, {{cidade}}/{{uf}}, CEP: {{cep}}, doravante denominada CONSIGNATÁRIA.
+
+As partes, já vinculadas pelo Contrato Estimatório para Vendas em Consignação com Reserva de Domínio, resolvem firmar o presente Termo Aditivo, que se regerá pelas cláusulas a seguir.
+
+DO OBJETO
+Cláusula 1ª. Por este aditivo, a CONSIGNATÁRIA adere, de forma facultativa, ao serviço de cobrança oferecido pela CONSIGNANTE, pelo qual a CONSIGNANTE poderá emitir boletos e cobranças Pix, enviar lembretes de vencimento e receber os valores das vendas a prazo que a CONSIGNATÁRIA fizer às suas clientes e indicar expressamente para cobrança.
+Parágrafo único. Somente as vendas indicadas pela CONSIGNATÁRIA, uma a uma, pelo sistema ou por escrito, entram no serviço. As demais vendas continuam sob a responsabilidade exclusiva da CONSIGNATÁRIA.
+
+DA ALTERAÇÃO DA CLÁUSULA 10ª
+Cláusula 2ª. A Cláusula 10ª do contrato passa a vigorar acrescida do seguinte parágrafo: "Parágrafo único. Fica a CONSIGNANTE autorizada a contatar a cliente da CONSIGNATÁRIA exclusivamente para a cobrança das vendas indicadas no serviço de cobrança, pelos meios informados pela CONSIGNATÁRIA, sendo vedado à CONSIGNANTE oferecer produtos, captar ou transferir essa cliente para outra consignatária ou para a loja."
+
+DOS DADOS DAS CLIENTES
+Cláusula 3ª. Ao indicar uma venda para cobrança, a CONSIGNATÁRIA informará nome, CPF, telefone e, quando houver, e-mail da cliente, o valor, as parcelas e os vencimentos, e declara que informou a cliente sobre o compartilhamento desses dados com a CONSIGNANTE para essa finalidade, respondendo pela veracidade das informações.
+Parágrafo único. A CONSIGNANTE usará esses dados somente para a cobrança, na forma da Lei Geral de Proteção de Dados (Lei nº 13.709/2018), e os eliminará quando não forem mais necessários, ressalvadas as obrigações legais de guarda.
+
+DA FORMA DA COBRANÇA
+Cláusula 4ª. A cobrança será amigável: emissão de boleto ou Pix, lembretes antes e depois do vencimento e negociação de nova data dentro dos limites autorizados pela CONSIGNATÁRIA.
+Parágrafo único. Protesto, negativação em órgãos de proteção ao crédito ou cobrança judicial da cliente somente serão feitos com autorização expressa e por escrito da CONSIGNATÁRIA para cada débito, correndo por conta dela as despesas dessas medidas.
+
+DOS VALORES RECEBIDOS
+Cláusula 5ª. Os valores pagos pela cliente serão creditados à CONSIGNATÁRIA no acerto seguinte, abatidos do valor devido por ela à CONSIGNANTE ou repassados por transferência ou Pix, descontada a taxa do serviço vigente, informada por escrito à CONSIGNATÁRIA antes da adesão e a cada alteração.
+Parágrafo único. A CONSIGNANTE prestará contas, pelo sistema, de cada cobrança emitida, paga, vencida ou cancelada.
+
+DO RISCO DO CRÉDITO
+Cláusula 6ª. O serviço de cobrança não transfere à CONSIGNANTE o risco da venda: a inadimplência da cliente não altera as obrigações da CONSIGNATÁRIA previstas no contrato, inclusive as da Cláusula 6ª, e o valor não recebido continua devido pela CONSIGNATÁRIA nos prazos do acerto.
+
+DA VIGÊNCIA E DO CANCELAMENTO
+Cláusula 7ª. Este aditivo vale enquanto vigorar o contrato e pode ser cancelado por qualquer das partes, a qualquer tempo, mediante aviso por escrito. As cobranças já emitidas seguem até o pagamento, o cancelamento pela CONSIGNATÁRIA ou a devolução do débito a ela.
+
+DAS DISPOSIÇÕES FINAIS
+Cláusula 8ª. Permanecem inalteradas e em pleno vigor todas as demais cláusulas do contrato que não conflitarem com este aditivo.
+
+{{empresa_cidade}}, {{data_extenso}}.
+
+CONSIGNANTE: {{empresa_nome}}
+
+CONSIGNATÁRIA: {{nome}}`,
   },
 ];

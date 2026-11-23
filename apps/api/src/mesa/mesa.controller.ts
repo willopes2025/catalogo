@@ -1,4 +1,7 @@
-import { BadRequestException, Body, Controller, ForbiddenException, Get, Inject, NotFoundException, Param, ParseUUIDPipe, Patch, Post, Put, Query } from '@nestjs/common';
+import { existsSync } from 'node:fs';
+import { BadRequestException, Body, Controller, ForbiddenException, Get, Inject, NotFoundException, Param, ParseUUIDPipe, Patch, Post, Put, Query, Res } from '@nestjs/common';
+import type { Response } from 'express';
+import { ArquivosService, TIPOS_MIDIA } from '../arquivos/arquivos.service';
 import { and, asc, desc, eq, inArray, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { DB, type Db } from '../comum/db.module';
@@ -49,6 +52,7 @@ export class MesaController {
   constructor(
     @Inject(DB) private readonly db: Db,
     private readonly auditoria: AuditoriaService,
+    private readonly arquivos: ArquivosService,
   ) {}
 
   private gestao(u: UsuarioLogado) {
@@ -72,7 +76,7 @@ export class MesaController {
     const [t] = (await this.db.execute<{ abertas: number; atrasadas: number }>(sql`
       select count(*)::int as abertas, count(*) filter (where vence_em < ${hoje()}::date)::int as atrasadas from mesa_tarefas where feita_em is null and responsavel_id = ${u.id}`)).rows;
     const mensagens = (await this.db.execute<{ id: string; conversaId: string; de: string; texto: string; criadoEm: string }>(sql`
-      select m.id, m.conversa_id as "conversaId", coalesce(a.nome, 'Alguém') as de, left(m.texto, 140) as texto, m.criado_em as "criadoEm"
+      select m.id, m.conversa_id as "conversaId", coalesce(a.nome, 'Alguém') as de, left(coalesce(nullif(m.texto, ''), '📎 ' || m.anexo_nome), 140) as texto, m.criado_em as "criadoEm"
       from mesa_mensagens m join mesa_participantes p on p.conversa_id = m.conversa_id and p.usuario_id = ${u.id} left join usuarios a on a.id = m.usuario_id
       where m.criado_em > ${d} and m.criado_em > p.lido_ate and m.usuario_id is distinct from ${u.id} order by m.criado_em desc limit 5`)).rows;
     const tarefas = (await this.db.execute<{ id: string; de: string; titulo: string; criadoEm: string }>(sql`
@@ -102,7 +106,7 @@ export class MesaController {
       select c.id, c.direta, c.ultima_em as "ultimaEm",
         case when c.direta then coalesce((select x.nome from mesa_participantes o join usuarios x on x.id = o.usuario_id where o.conversa_id = c.id and o.usuario_id <> ${u.id} limit 1), 'Conversa') else coalesce(c.nome, 'Grupo') end as nome,
         (select coalesce(json_agg(json_build_object('id', x.id, 'nome', x.nome) order by x.nome), '[]'::json) from mesa_participantes o join usuarios x on x.id = o.usuario_id where o.conversa_id = c.id) as participantes,
-        (select left(m.texto, 100) from mesa_mensagens m where m.conversa_id = c.id order by m.criado_em desc limit 1) as ultima,
+        (select left(coalesce(nullif(m.texto, ''), '📎 ' || m.anexo_nome), 100) from mesa_mensagens m where m.conversa_id = c.id order by m.criado_em desc limit 1) as ultima,
         (select count(*)::int from mesa_mensagens m where m.conversa_id = c.id and m.criado_em > p.lido_ate and m.usuario_id is distinct from ${u.id}) as "naoLidas"
       from mesa_conversas c join mesa_participantes p on p.conversa_id = c.id and p.usuario_id = ${u.id}
       order by c.ultima_em desc limit 200`)).rows;
@@ -144,7 +148,7 @@ export class MesaController {
     const f = [eq(mesaMensagens.conversaId, id)];
     if (antes && !Number.isNaN(Date.parse(antes))) f.push(sql`${mesaMensagens.criadoEm} < ${new Date(antes)}`);
     const lista = await this.db
-      .select({ id: mesaMensagens.id, usuarioId: mesaMensagens.usuarioId, de: usuarios.nome, texto: mesaMensagens.texto, criadoEm: mesaMensagens.criadoEm })
+      .select({ id: mesaMensagens.id, usuarioId: mesaMensagens.usuarioId, de: usuarios.nome, texto: mesaMensagens.texto, anexoNome: mesaMensagens.anexoNome, anexoMime: mesaMensagens.anexoMime, anexoTamanho: mesaMensagens.anexoTamanho, criadoEm: mesaMensagens.criadoEm })
       .from(mesaMensagens)
       .leftJoin(usuarios, eq(usuarios.id, mesaMensagens.usuarioId))
       .where(and(...f))
@@ -154,16 +158,51 @@ export class MesaController {
     return { mensagens: lista.reverse(), temMais: lista.length === 80 };
   }
 
+  /** Mensagem com texto, anexo (foto, PDF, planilha, áudio, até 10 MB) ou os dois. */
   @Post('conversas/:id/mensagens')
   @Permissao('inicio', 'ver')
   async enviar(@Usuario() u: UsuarioLogado, @Param('id', ParseUUIDPipe) id: string, @Body() body: unknown) {
-    const d = validar(z.object({ texto: z.string().trim().min(1, 'Escreva a mensagem').max(4000) }), body);
+    const d = validar(
+      z.object({
+        texto: z.string().trim().max(4000).default(''),
+        anexo: z.object({ nome: z.string().trim().min(1).max(150), mime: z.string().max(120), base64: z.string().min(4).max(14_000_000, 'O arquivo pode ter no máximo 10 MB') }).optional(),
+      }),
+      body,
+    );
+    if (!d.texto && !d.anexo) throw new BadRequestException('Escreva a mensagem ou escolha um arquivo.');
     await this.participa(id, u.id);
+    let anexo: { anexo: string; anexoNome: string; anexoMime: string; anexoTamanho: number } | null = null;
+    if (d.anexo) {
+      const mime = d.anexo.mime.split(';')[0].trim().toLowerCase();
+      if (!TIPOS_MIDIA[mime]) throw new BadRequestException('Tipo de arquivo não aceito. Envie foto, PDF, planilha, documento, áudio ou vídeo.');
+      const conteudo = Buffer.from(d.anexo.base64.replace(/^data:[^;]+;base64,/, ''), 'base64');
+      if (!conteudo.length) throw new BadRequestException('O arquivo está vazio.');
+      if (conteudo.length > 10 * 1024 * 1024) throw new BadRequestException('O arquivo pode ter no máximo 10 MB.');
+      anexo = { anexo: await this.arquivos.salvarPrivado(conteudo, mime, 'mesa'), anexoNome: d.anexo.nome.replace(/[\\/\r\n"]/g, '_'), anexoMime: mime, anexoTamanho: conteudo.length };
+    }
     const agora = new Date();
-    const [m] = await this.db.insert(mesaMensagens).values({ conversaId: id, usuarioId: u.id, texto: d.texto, criadoEm: agora }).returning();
+    const [m] = await this.db.insert(mesaMensagens).values({ conversaId: id, usuarioId: u.id, texto: d.texto, ...(anexo ?? {}), criadoEm: agora }).returning();
     await this.db.update(mesaConversas).set({ ultimaEm: agora }).where(eq(mesaConversas.id, id));
     await this.db.update(mesaParticipantes).set({ lidoAte: agora }).where(and(eq(mesaParticipantes.conversaId, id), eq(mesaParticipantes.usuarioId, u.id)));
-    return { id: m.id, usuarioId: u.id, de: u.nome, texto: m.texto, criadoEm: m.criadoEm };
+    return { id: m.id, usuarioId: u.id, de: u.nome, texto: m.texto, anexoNome: m.anexoNome, anexoMime: m.anexoMime, anexoTamanho: m.anexoTamanho, criadoEm: m.criadoEm };
+  }
+
+  /** O anexo de uma mensagem: só para quem participa da conversa. */
+  @Get('anexos/:mensagemId')
+  @Permissao('inicio', 'ver')
+  async anexo(@Usuario() u: UsuarioLogado, @Param('mensagemId', ParseUUIDPipe) mensagemId: string, @Res() res: Response) {
+    const [m] = await this.db.select().from(mesaMensagens).where(eq(mesaMensagens.id, mensagemId));
+    if (!m?.anexo) throw new NotFoundException('Arquivo não encontrado.');
+    await this.participa(m.conversaId, u.id);
+    const caminho = this.arquivos.caminhoPrivado(m.anexo, 'mesa');
+    if (!caminho || !existsSync(caminho)) throw new NotFoundException('Arquivo não encontrado.');
+    const mime = m.anexoMime ?? 'application/octet-stream';
+    const naTela = /^(image\/(jpeg|png|webp|gif)|application\/pdf|audio\/|video\/)/.test(mime);
+    res.setHeader('Content-Disposition', `${naTela ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeURIComponent(m.anexoNome ?? 'arquivo')}`);
+    res.setHeader('Content-Type', naTela ? mime : 'application/octet-stream');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.sendFile(caminho);
   }
 
   // ───────── Tarefas ─────────
@@ -236,8 +275,8 @@ export class MesaController {
   }
 
   /**
-   * Indicadores do setor (grupo) de quem está logado. Sem configuração, entram os dos módulos que a pessoa pode ver.
-   * A gestão recebe também o catálogo e a escolha de cada setor, para configurar.
+   * Indicadores de quem está logado: o painel próprio da pessoa, se a gestão montou um; senão o do setor (grupo);
+   * senão os dos módulos que a pessoa pode ver. A gestão recebe também o catálogo, os setores e as pessoas, para configurar.
    */
   @Get('painel')
   @Permissao('inicio', 'ver')
@@ -245,7 +284,9 @@ export class MesaController {
     const [eu] = await this.db.select({ grupoId: usuarios.grupoId, setor: grupos.nome }).from(usuarios).innerJoin(grupos, eq(grupos.id, usuarios.grupoId)).where(eq(usuarios.id, u.id));
     const paineis = await this.paineis();
     const permitidos = Object.entries(INDICADORES).filter(([, i]) => temPermissao(u.permissoes, i.modulo, 'ver')).map(([k]) => k);
-    const escolhidos = eu && paineis[eu.grupoId] ? paineis[eu.grupoId].filter((k) => permitidos.includes(k)) : permitidos.slice(0, 8);
+    const proprio = paineis[`u:${u.id}`];
+    const doSetor = eu ? paineis[eu.grupoId] : undefined;
+    const escolhidos = (proprio ?? doSetor)?.filter((k) => permitidos.includes(k)) ?? permitidos.slice(0, 8);
     const indicadores = await Promise.all(
       escolhidos.map(async (chave) => {
         const i = INDICADORES[chave];
@@ -256,26 +297,41 @@ export class MesaController {
     const gestao = temPermissao(u.permissoes, 'configuracoes', 'editar');
     return {
       setor: eu?.setor ?? null,
-      personalizado: !!(eu && paineis[eu.grupoId]),
+      personalizado: proprio ? 'pessoa' : doSetor ? 'setor' : null,
       indicadores,
-      ...(gestao ? { catalogo: Object.entries(INDICADORES).map(([chave, i]) => ({ chave, rotulo: i.rotulo, modulo: i.modulo })), setores: (await this.db.select({ id: grupos.id, nome: grupos.nome }).from(grupos).orderBy(asc(grupos.nome))).map((g) => ({ ...g, indicadores: paineis[g.id] ?? null })) } : {}),
+      ...(gestao
+        ? {
+            catalogo: Object.entries(INDICADORES).map(([chave, i]) => ({ chave, rotulo: i.rotulo, modulo: i.modulo })),
+            setores: (await this.db.select({ id: grupos.id, nome: grupos.nome }).from(grupos).orderBy(asc(grupos.nome))).map((g) => ({ ...g, indicadores: paineis[g.id] ?? null })),
+            pessoas: (await this.db.select({ id: usuarios.id, nome: usuarios.nome, setor: grupos.nome }).from(usuarios).innerJoin(grupos, eq(grupos.id, usuarios.grupoId)).where(eq(usuarios.ativo, true)).orderBy(asc(usuarios.nome))).map((p) => ({ ...p, indicadores: paineis[`u:${p.id}`] ?? null })),
+          }
+        : {}),
     };
   }
 
-  /** Define os indicadores do painel de um setor. Lista vazia volta ao padrão. */
+  /** Define os indicadores do painel de um setor ou de uma pessoa. Lista vazia volta ao padrão (a pessoa volta ao do setor). */
   @Put('painel')
   @Permissao('configuracoes', 'editar')
   async salvarPainel(@Usuario() u: UsuarioLogado, @Body() body: unknown) {
-    const d = validar(z.object({ grupoId: uuid, indicadores: z.array(z.string()).max(12, 'No máximo 12 indicadores por setor') }), body);
+    const d = validar(
+      z.object({ grupoId: uuid.optional(), usuarioId: uuid.optional(), indicadores: z.array(z.string()).max(12, 'No máximo 12 indicadores por painel') }).refine((x) => !!x.grupoId !== !!x.usuarioId, 'Escolha um setor ou uma pessoa'),
+      body,
+    );
     const desconhecidos = d.indicadores.filter((k) => !INDICADORES[k]);
     if (desconhecidos.length) throw new BadRequestException(`Indicador desconhecido: ${desconhecidos.join(', ')}`);
-    const [g] = await this.db.select({ id: grupos.id }).from(grupos).where(eq(grupos.id, d.grupoId));
-    if (!g) throw new NotFoundException('Setor não encontrado.');
+    if (d.grupoId) {
+      const [g] = await this.db.select({ id: grupos.id }).from(grupos).where(eq(grupos.id, d.grupoId));
+      if (!g) throw new NotFoundException('Setor não encontrado.');
+    } else {
+      const [p] = await this.db.select({ id: usuarios.id }).from(usuarios).where(eq(usuarios.id, d.usuarioId!));
+      if (!p) throw new NotFoundException('Pessoa não encontrada.');
+    }
+    const chave = d.grupoId ?? `u:${d.usuarioId}`;
     const paineis = await this.paineis();
-    if (d.indicadores.length) paineis[d.grupoId] = [...new Set(d.indicadores)];
-    else delete paineis[d.grupoId];
+    if (d.indicadores.length) paineis[chave] = [...new Set(d.indicadores)];
+    else delete paineis[chave];
     await this.db.insert(configuracoes).values({ chave: 'mesa_paineis', valor: paineis }).onConflictDoUpdate({ target: configuracoes.chave, set: { valor: paineis, atualizadoEm: new Date() } });
-    await this.auditoria.registrar({ usuarioId: u.id, acao: 'configurar', entidade: 'mesa_painel', entidadeId: d.grupoId, dados: { indicadores: d.indicadores } });
+    await this.auditoria.registrar({ usuarioId: u.id, acao: 'configurar', entidade: 'mesa_painel', entidadeId: d.grupoId ?? d.usuarioId, dados: { indicadores: d.indicadores, por: d.grupoId ? 'setor' : 'pessoa' } });
     return { ok: true };
   }
 }

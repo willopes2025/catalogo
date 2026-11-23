@@ -67,7 +67,7 @@ export class ArquivosService {
   }
 
   /** Documentos de RH (contratos, exames, fotos do ponto): pasta separada, só saem pelo sistema com permissão. */
-  async salvarPrivado(conteudo: Buffer, mime: string, pasta: 'rh') {
+  async salvarPrivado(conteudo: Buffer, mime: string, pasta: 'rh' | 'mesa') {
     const ext = TIPOS_MIDIA[mime.split(';')[0].trim().toLowerCase()] ?? 'bin';
     const dir = join(this.dir, pasta);
     await mkdir(dir, { recursive: true });
@@ -78,7 +78,7 @@ export class ArquivosService {
     return nome;
   }
 
-  caminhoPrivado(nome: string, pasta: 'rh') {
+  caminhoPrivado(nome: string, pasta: 'rh' | 'mesa') {
     return NOME_MIDIA.test(nome) ? join(this.dir, pasta, nome) : null;
   }
 

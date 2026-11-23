@@ -3743,7 +3743,7 @@ test('minha mesa: conversa direta e em grupo, não lidas e aviso, tarefas com re
   como(bia.token);
   let p = await ok('GET', '/mesa/painel');
   assert.equal(p.setor, 'Financeiro');
-  assert.equal(p.personalizado, false);
+  assert.equal(p.personalizado, null);
   assert.ok(p.indicadores.some((i) => i.chave === 'receber_vencido') && !p.indicadores.some((i) => i.chave === 'crm_fila'), 'só indicadores dos módulos que ela vê');
   assert.equal(p.catalogo, undefined);
   assert.equal((await chamar('PUT', '/mesa/painel', { grupoId: fin.id, indicadores: ['receber_vencido'] })).status, 403);
@@ -3753,7 +3753,7 @@ test('minha mesa: conversa direta e em grupo, não lidas e aviso, tarefas com re
   assert.ok((await ok('GET', '/mesa/painel')).setores.find((s) => s.id === fin.id).indicadores.includes('pagar_semana'));
   como(bia.token);
   p = await ok('GET', '/mesa/painel');
-  assert.deepEqual([p.personalizado, p.indicadores.map((i) => i.chave)], [true, ['pagar_semana', 'receber_vencido']], 'o do CRM não aparece: ela não tem o módulo');
+  assert.deepEqual([p.personalizado, p.indicadores.map((i) => i.chave)], ['setor', ['pagar_semana', 'receber_vencido']], 'o do CRM não aparece: ela não tem o módulo');
   assert.equal(typeof p.indicadores[1].valor, 'number');
   como(admin);
   await ok('PUT', '/mesa/painel', { grupoId: fin.id, indicadores: [] });
@@ -3848,4 +3848,165 @@ test('aprendizado da IA: memória do cliente, revisão semanal com aprovação, 
   await ok('PUT', '/crm/ia-agente', { ativo: false, canais: [], instrucoes: '', conhecimento: '', maxRespostas: 10, memoriaClientes: true });
   for (const e of ligados) await ok('PATCH', `/crm/ia-agentes/${e.id}`, { ativo: true });
   await ok('DELETE', `/crm/canais/${c.id}`);
+});
+
+test('scorecard: indicadores por todos/setor/pessoa, conta automática, acertos e erros, fechar com bônus, ninguém avalia a si mesmo', async () => {
+  const admin = token;
+  const grupos = await ok('GET', '/grupos');
+  const fin = grupos.find((g) => g.nome === 'Financeiro');
+  const ger = grupos.find((g) => g.nome.startsWith('Gerência'));
+  assert.ok(ger.permissoes.scorecard?.includes('editar'), 'a gerência avalia');
+  const novo = async (nome, email, grupoId) => {
+    token = admin;
+    const u = await ok('POST', '/usuarios', { nome, email, grupoId });
+    token = (await ok('POST', '/auth/login', { email, senha: u.senhaProvisoria })).token;
+    await ok('POST', '/auth/trocar-senha', { atual: u.senhaProvisoria, nova: 'SenhaDoScore2026x' });
+    return { id: u.id, token };
+  };
+  const rita = await novo('Rita Score Teste', 'rita.score@aritana.local', fin.id);
+  const gil = await novo('Gil Gerente Score', 'gil.score@aritana.local', ger.id);
+  const mes = new Date(Date.now() - 3 * 3600_000).toISOString().slice(0, 7);
+  const hoje = new Date(Date.now() - 3 * 3600_000).toISOString().slice(0, 10);
+
+  // Funcionária comum não entra no scorecard.
+  token = rita.token;
+  assert.equal((await chamar('GET', `/scorecard/mes?mes=${mes}`)).status, 403);
+  assert.deepEqual((await ok('GET', '/scorecard/minhas')).avaliacoes, []);
+
+  // A gestão monta as regras e os indicadores.
+  token = admin;
+  const r0 = await ok('GET', '/scorecard/regras');
+  assert.ok(r0.fontes.some((f) => f.chave === 'tarefas_no_prazo') && r0.setores.some((s) => s.id === fin.id));
+  await ok('PUT', '/scorecard/regras', { ...r0.regras, bonusPadrao: 30000, bonusPorSetor: { [fin.id]: 50000 }, faixas: [{ notaMinima: 90, percentual: 100 }, { notaMinima: 70, percentual: 50 }] });
+  assert.equal((await chamar('PUT', '/scorecard/regras', { ...r0.regras, teto: 50 })).status, 400);
+  const geral = await ok('POST', '/scorecard/indicadores', { nome: 'Tarefas no prazo (teste score)', perspectiva: 'processos', fonte: 'tarefas_no_prazo', unidade: 'percentual', meta: 100, sentido: 'maior', peso: 1 });
+  const setor = await ok('POST', '/scorecard/indicadores', { nome: 'Baixas conferidas (teste score)', perspectiva: 'financeira', meta: 200, peso: 3, grupoId: fin.id });
+  const outroSetor = await ok('POST', '/scorecard/indicadores', { nome: 'Indicador da loja (teste score)', meta: 10, peso: 1, grupoId: grupos.find((g) => g.nome === 'Loja').id });
+  const dela = await ok('POST', '/scorecard/indicadores', { nome: 'Erros de lançamento (teste score)', perspectiva: 'aprendizado', meta: 2, sentido: 'menor', peso: 1, usuarioId: rita.id });
+  assert.equal((await chamar('POST', '/scorecard/indicadores', { nome: 'x', meta: 1, peso: 1 })).status, 400);
+  assert.equal((await chamar('POST', '/scorecard/indicadores', { nome: 'Os dois', meta: 1, peso: 1, grupoId: fin.id, usuarioId: rita.id })).status, 400);
+  assert.equal((await chamar('POST', '/scorecard/indicadores', { nome: 'Fonte errada', meta: 1, peso: 1, fonte: 'nao_existe' })).status, 400);
+
+  // Conta automática: 2 tarefas com prazo no mês, 1 feita no prazo → 50%.
+  const t1 = await ok('POST', '/mesa/tarefas', { titulo: 'Tarefa score 1', responsavelId: rita.id, venceEm: hoje });
+  await ok('POST', '/mesa/tarefas', { titulo: 'Tarefa score 2', responsavelId: rita.id, venceEm: hoje });
+  token = rita.token;
+  await ok('PATCH', `/mesa/tarefas/${t1.id}`, { feita: true });
+
+  token = gil.token;
+  let av = await ok('GET', `/scorecard/avaliacao?usuarioId=${rita.id}&mes=${mes}`);
+  assert.deepEqual(av.indicadores.map((i) => i.nome).sort(), ['Baixas conferidas (teste score)', 'Erros de lançamento (teste score)', 'Tarefas no prazo (teste score)'], 'o da loja não vale para ela');
+  const auto = av.indicadores.find((i) => i.indicadorId === geral.id);
+  assert.deepEqual([auto.automatico, auto.resultado, auto.nota], [50, 50, 50]);
+  assert.equal(av.bonusCheio, 50000, 'bônus do setor');
+
+  // Acertos e erros (ninguém registra o próprio).
+  await ok('POST', '/scorecard/ocorrencias', { usuarioId: rita.id, data: hoje, tipo: 'acerto', pontos: 6, descricao: 'Achou um boleto pago em duplicidade.' });
+  const erro = await ok('POST', '/scorecard/ocorrencias', { usuarioId: rita.id, data: hoje, tipo: 'erro', pontos: 2, descricao: 'Baixou um título no cliente errado.' });
+  assert.equal((await chamar('POST', '/scorecard/ocorrencias', { usuarioId: gil.id, data: hoje, tipo: 'acerto', pontos: 5, descricao: 'Eu mesmo me elogiando.' })).status, 403);
+  assert.equal((await chamar('POST', '/scorecard/ocorrencias', { usuarioId: rita.id, data: '2099-01-01', tipo: 'acerto', pontos: 5, descricao: 'No futuro.' })).status, 400);
+
+  // Lança os resultados: baixas 180 de 200 (90, peso 3); erros 1 com meta até 2 (100); tarefas 50 (automático).
+  av = await ok('PUT', '/scorecard/avaliacao', { usuarioId: rita.id, mes, observacao: 'Bom mês.', resultados: [{ indicadorId: setor.id, resultado: 180, comentario: 'Conferido no extrato' }, { indicadorId: dela.id, resultado: 1 }] });
+  // (90×3 + 100×1 + 50×1) / 5 = 84; +6 −2 = 88 → faixa de 70 → 50% de R$ 500
+  assert.deepEqual([av.conta.notaIndicadores, av.conta.ajuste, av.conta.notaFinal, av.conta.percentualBonus, av.conta.bonus], [84, 4, 88, 50, 25000]);
+  assert.equal(av.avaliacao.status, 'aberta');
+  const lista = await ok('GET', `/scorecard/mes?mes=${mes}`);
+  const linha = lista.itens.find((i) => i.usuarioId === rita.id);
+  assert.deepEqual([linha.status, linha.nota, linha.bonus], ['aberta', 88, 25000]);
+  assert.equal((await chamar('PUT', '/scorecard/avaliacao', { usuarioId: gil.id, mes, resultados: [] })).status, 403, 'ninguém avalia a si mesmo');
+  assert.equal((await chamar('POST', '/scorecard/avaliacao/fechar', { usuarioId: gil.id, mes })).status, 403);
+
+  // Fecha: a nota fica gravada; mudar o indicador ou as regras depois não altera a fechada.
+  av = await ok('POST', '/scorecard/avaliacao/fechar', { usuarioId: rita.id, mes });
+  assert.deepEqual([av.avaliacao.status, av.conta.notaFinal, av.conta.bonus], ['fechada', 88, 25000]);
+  token = admin;
+  await ok('PATCH', `/scorecard/indicadores/${setor.id}`, { meta: 1000 });
+  await ok('PUT', '/scorecard/regras', { ...r0.regras, bonusPadrao: 0, bonusPorSetor: {} });
+  token = gil.token;
+  av = await ok('GET', `/scorecard/avaliacao?usuarioId=${rita.id}&mes=${mes}`);
+  assert.deepEqual([av.conta.notaFinal, av.conta.bonus, av.indicadores.find((i) => i.indicadorId === setor.id).meta], [88, 25000, 200]);
+  assert.equal((await chamar('PUT', '/scorecard/avaliacao', { usuarioId: rita.id, mes, resultados: [] })).status, 400, 'fechada não muda');
+  assert.equal((await chamar('DELETE', `/scorecard/ocorrencias/${erro.id}`)).status, 400);
+  assert.equal((await ok('GET', `/scorecard/mes?mes=${mes}`)).totalBonus >= 25000, true);
+
+  // Ela vê a própria avaliação fechada na Minha mesa.
+  token = rita.token;
+  const minhas = await ok('GET', '/scorecard/minhas');
+  assert.equal(minhas.avaliacoes[0].nota, 88);
+  assert.equal(minhas.avaliacoes[0].indicadores.length, 3);
+  assert.equal(minhas.avaliacoes[0].ocorrencias.length, 2);
+  assert.equal(minhas.avaliacoes[0].observacao, 'Bom mês.');
+
+  // Reabrir recalcula com as regras atuais.
+  token = gil.token;
+  av = await ok('POST', '/scorecard/avaliacao/reabrir', { usuarioId: rita.id, mes });
+  assert.equal(av.avaliacao.status, 'aberta');
+  assert.equal(av.conta.bonus, 0, 'sem bônus configurado agora');
+  await ok('DELETE', `/scorecard/ocorrencias/${erro.id}`);
+
+  // Limpeza.
+  token = admin;
+  for (const i of [geral, setor, outroSetor, dela]) await ok('DELETE', `/scorecard/indicadores/${i.id}`);
+  await ok('PUT', '/scorecard/regras', r0.regras);
+});
+
+test('minha mesa: anexos só para quem participa, painel por pessoa; modelo do aditivo de cobrança instalado', async () => {
+  const admin = token;
+  const fin = (await ok('GET', '/grupos')).find((g) => g.nome === 'Financeiro');
+  const u = await ok('POST', '/usuarios', { nome: 'Caio Anexo Teste', email: 'caio.anexo@aritana.local', grupoId: fin.id });
+  token = (await ok('POST', '/auth/login', { email: 'caio.anexo@aritana.local', senha: u.senhaProvisoria })).token;
+  await ok('POST', '/auth/trocar-senha', { atual: u.senhaProvisoria, nova: 'SenhaDoAnexo2026x' });
+  const caio = token;
+  token = admin;
+  const eu = (await ok('GET', '/auth/eu')).id;
+  const c = await ok('POST', '/mesa/conversas', { usuarioIds: [u.id] });
+  const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+  const m = await ok('POST', `/mesa/conversas/${c.id}/mensagens`, { anexo: { nome: 'comprovante.png', mime: 'image/png', base64: `data:image/png;base64,${png}` } });
+  assert.deepEqual([m.texto, m.anexoNome, m.anexoMime, m.anexoTamanho], ['', 'comprovante.png', 'image/png', 70]);
+  assert.equal((await chamar('POST', `/mesa/conversas/${c.id}/mensagens`, {})).status, 400);
+  assert.equal((await chamar('POST', `/mesa/conversas/${c.id}/mensagens`, { anexo: { nome: 'pagina.html', mime: 'text/html', base64: Buffer.from('<script>alert(1)</script>').toString('base64') } })).status, 400, 'html não entra');
+  token = caio;
+  assert.equal((await ok('GET', '/mesa/conversas'))[0].ultima, '📎 comprovante.png');
+  const r = await fetch(`${API}/mesa/anexos/${m.id}`, { headers: { authorization: `Bearer ${caio}` } });
+  assert.equal(r.status, 200);
+  assert.equal(r.headers.get('content-type'), 'image/png');
+  assert.equal(Buffer.from(await r.arrayBuffer()).toString('base64'), png);
+  // Quem não participa não baixa.
+  const outro = await ok('POST', '/mesa/conversas', { usuarioIds: [eu] });
+  assert.ok(outro.id);
+  token = admin;
+  const g = await ok('POST', '/mesa/conversas', { usuarioIds: [u.id], nome: 'Só eu e Caio' });
+  const m2 = await ok('POST', `/mesa/conversas/${g.id}/mensagens`, { texto: 'segue', anexo: { nome: 'lista.csv', mime: 'text/csv', base64: Buffer.from('a;b\n1;2').toString('base64') } });
+  const intruso = await ok('POST', '/usuarios', { nome: 'Intruso Anexo', email: 'intruso.anexo@aritana.local', grupoId: fin.id });
+  const tokIntruso = (await ok('POST', '/auth/login', { email: 'intruso.anexo@aritana.local', senha: intruso.senhaProvisoria })).token;
+  const r2 = await fetch(`${API}/mesa/anexos/${m2.id}`, { headers: { authorization: `Bearer ${tokIntruso}` } });
+  assert.ok([403, 404].includes(r2.status), `intruso recebeu ${r2.status}`);
+  const r3 = await fetch(`${API}/mesa/anexos/${m2.id}`, { headers: { authorization: `Bearer ${caio}` } });
+  assert.equal(r3.headers.get('content-type'), 'application/octet-stream', 'o que não abre na tela vem como download');
+  assert.match(r3.headers.get('content-disposition'), /^attachment; filename\*=UTF-8''lista\.csv/);
+
+  // Painel por pessoa vale mais que o do setor; vazio volta ao do setor.
+  await ok('PUT', '/mesa/painel', { grupoId: fin.id, indicadores: ['receber_vencido'] });
+  await ok('PUT', '/mesa/painel', { usuarioId: u.id, indicadores: ['pagar_semana', 'recebido_mes'] });
+  assert.equal((await chamar('PUT', '/mesa/painel', { grupoId: fin.id, usuarioId: u.id, indicadores: [] })).status, 400);
+  assert.ok((await ok('GET', '/mesa/painel')).pessoas.find((p) => p.id === u.id).indicadores.includes('pagar_semana'));
+  token = caio;
+  let p = await ok('GET', '/mesa/painel');
+  assert.deepEqual([p.personalizado, p.indicadores.map((i) => i.chave)], ['pessoa', ['pagar_semana', 'recebido_mes']]);
+  token = admin;
+  await ok('PUT', '/mesa/painel', { usuarioId: u.id, indicadores: [] });
+  token = caio;
+  p = await ok('GET', '/mesa/painel');
+  assert.deepEqual([p.personalizado, p.indicadores.map((i) => i.chave)], ['setor', ['receber_vencido']]);
+  token = admin;
+  await ok('PUT', '/mesa/painel', { grupoId: fin.id, indicadores: [] });
+
+  // O modelo do aditivo de cobrança veio instalado (provisório) e abre exceção na cláusula 10ª.
+  const modelos = await ok('GET', '/documentos/modelos');
+  const aditivo = (modelos.itens ?? modelos).find((x) => x.tipo === 'aditivo' && x.titulo.startsWith('Aditivo: serviço de cobrança'));
+  assert.ok(aditivo, 'aditivo instalado');
+  assert.match(aditivo.conteudo, /^MODELO PROVISÓRIO/);
+  assert.match(aditivo.conteudo, /A Cláusula 10ª do contrato passa a vigorar acrescida/);
+  assert.match(aditivo.conteudo, /\{\{nome\}\}/);
 });
