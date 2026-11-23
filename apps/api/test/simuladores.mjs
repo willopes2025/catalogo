@@ -398,7 +398,11 @@ http
         return resp([{ type: 'text', text: `Oi! Tenho ${(corpo.tools ?? []).length} ferramentas.` }]);
       }
       let saida;
-      if (corpo.system.includes('recepção do WhatsApp')) {
+      if (corpo.system.includes('ficha de memória de um cliente')) {
+        saida = JSON.stringify({ memoria: `${/FICHA ATUAL:\n\(vazia\)/.test(texto) ? '' : 'Já tinha ficha. '}Perguntou sobre prazo de troca. Prefere falar com atendente.` });
+      } else if (corpo.system.includes('revisa o atendimento de uma IA')) {
+        saida = JSON.stringify({ licoes: /30 dias/.test(texto) ? [{ funcao: null, quando: 'O cliente pergunta qual é o prazo de troca', resposta: 'O prazo de troca é de 30 dias, com a nota.' }, { funcao: null, quando: 'x', resposta: 'curta demais' }] : [] });
+      } else if (corpo.system.includes('recepção do WhatsApp')) {
         const tudo = corpo.messages.filter((m) => m.role === 'user').flatMap(blocos).filter((b) => b.type === 'text').map((b) => b.text).join(' ');
         const r = /atendente/i.test(texto) ? { agente: 'equipe', motivo: 'Pediu atendente' } : /revender|revendedora|trabalhar com voc/i.test(tudo) ? { agente: 'recrutamento', certeza: 0.9, motivo: 'Quer revender' } : /acerto|minha maleta/i.test(tudo) ? { agente: 'revendedora', certeza: 0.9, motivo: 'Fala da maleta' } : /preço|brinco|colar|anel|argola/i.test(tudo) ? { agente: 'vendas', certeza: 0.95, motivo: 'Quer comprar peça' } : corpo.system.includes('Você já perguntou') ? { agente: 'equipe', motivo: 'Assunto não ficou claro' } : { agente: 'perguntar', certeza: 0.2, pergunta: 'Oi! Me conta o que você está procurando? 😊', motivo: 'Só cumprimentou' };
         saida = JSON.stringify(r);

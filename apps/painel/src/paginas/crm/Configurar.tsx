@@ -454,7 +454,7 @@ function Ramais() {
 
 interface Especialista { id: string; funcao: string; nome: string; quando: string; instrucoes: string; conhecimento: string; ativo: boolean; ordem: number }
 interface OpcaoVoz { id: string; nome: string }
-interface ConfigAgente { ativo: boolean; canais: string[]; instrucoes: string; conhecimento: string; maxRespostas: number; nome: string; maxTransferencias: number; ligada: boolean; especialistas: Especialista[]; respostaAudio: 'nunca' | 'espelhar' | 'sempre'; vozProvedor: 'automatica' | 'elevenlabs' | 'openai'; vozElevenlabs: string; vozOpenai: string; audioComTexto: boolean; ferramentas: { segundaVia: boolean; promessa: boolean; promessaMaxDias: number; estoque: boolean; candidatura: boolean }; voz?: { disponivel: 'elevenlabs' | 'openai' | null; elevenlabs: boolean; openai: boolean; opcoes: { elevenlabs: OpcaoVoz[]; openai: OpcaoVoz[] } } }
+interface ConfigAgente { ativo: boolean; canais: string[]; instrucoes: string; conhecimento: string; maxRespostas: number; nome: string; maxTransferencias: number; ligada: boolean; especialistas: Especialista[]; respostaAudio: 'nunca' | 'espelhar' | 'sempre'; vozProvedor: 'automatica' | 'elevenlabs' | 'openai'; vozElevenlabs: string; vozOpenai: string; audioComTexto: boolean; ferramentas: { segundaVia: boolean; promessa: boolean; promessaMaxDias: number; estoque: boolean; candidatura: boolean }; memoriaClientes: boolean; voz?: { disponivel: 'elevenlabs' | 'openai' | null; elevenlabs: boolean; openai: boolean; opcoes: { elevenlabs: OpcaoVoz[]; openai: OpcaoVoz[] } } }
 
 /** O agente que atende no WhatsApp enquanto ninguém da equipe pegou a conversa. */
 function AgenteIa() {
@@ -464,7 +464,7 @@ function AgenteIa() {
   const canais = usarCanais();
   const [f, setF] = useState<ConfigAgente | null>(null);
   useEffect(() => { if (q.data && !f) setF(q.data); }, [q.data, f]);
-  const salvar = useMutation({ mutationFn: () => api<ConfigAgente>('/crm/ia-agente', { metodo: 'PUT', corpo: { ativo: f!.ativo, canais: f!.canais, instrucoes: f!.instrucoes, conhecimento: f!.conhecimento, maxRespostas: f!.maxRespostas, nome: f!.nome, maxTransferencias: f!.maxTransferencias, respostaAudio: f!.respostaAudio, vozProvedor: f!.vozProvedor, vozElevenlabs: f!.vozElevenlabs, vozOpenai: f!.vozOpenai, audioComTexto: f!.audioComTexto, ferramentas: f!.ferramentas } }), onSuccess: (r) => { setF({ ...f!, ...r }); qc.invalidateQueries({ queryKey: ['crm', 'ia-agente'] }); } });
+  const salvar = useMutation({ mutationFn: () => api<ConfigAgente>('/crm/ia-agente', { metodo: 'PUT', corpo: { ativo: f!.ativo, canais: f!.canais, instrucoes: f!.instrucoes, conhecimento: f!.conhecimento, maxRespostas: f!.maxRespostas, nome: f!.nome, maxTransferencias: f!.maxTransferencias, respostaAudio: f!.respostaAudio, vozProvedor: f!.vozProvedor, vozElevenlabs: f!.vozElevenlabs, vozOpenai: f!.vozOpenai, audioComTexto: f!.audioComTexto, ferramentas: f!.ferramentas, memoriaClientes: f!.memoriaClientes ?? true } }), onSuccess: (r) => { setF({ ...f!, ...r }); qc.invalidateQueries({ queryKey: ['crm', 'ia-agente'] }); } });
   if (q.isLoading || !f) return <Carregando />;
   if (q.error) return <Erro erro={q.error} />;
   return (
@@ -504,12 +504,14 @@ function AgenteIa() {
         <Campo rotulo="Promessa: até quantos dias à frente" className="l2" ajuda="Prazo maior que isso ela passa para a equipe.">
           <input type="number" min={1} max={60} disabled={!admin || !f.ferramentas?.promessa} value={f.ferramentas?.promessaMaxDias ?? 10} onChange={(e) => setF({ ...f, ferramentas: { ...f.ferramentas, promessaMaxDias: Math.max(1, Math.min(60, Number(e.target.value) || 1)) } })} />
         </Campo>
+        <label className="check l4"><input type="checkbox" disabled={!admin} checked={f.memoriaClientes ?? true} onChange={(e) => setF({ ...f, memoriaClientes: e.target.checked })} /> Lembrar de cada cliente (um resumo curto das conversas, que a equipe pode ver e apagar no chat)</label>
         <AudioDoAgente f={f} setF={setF} admin={admin} />
         {salvar.error && <div className="l4"><Erro erro={salvar.error} /></div>}
         {salvar.isSuccess && <div className="aviso ok l4">Salvo. {f.ativo ? 'O agente já está atendendo as conversas novas.' : 'O agente está desligado.'}</div>}
         {admin && <div className="l4"><button className="botao" disabled={salvar.isPending} onClick={() => salvar.mutate()}>Salvar</button></div>}
       </div>
       <Especialistas lista={q.data?.especialistas ?? []} admin={admin} />
+      <Licoes especialistas={q.data?.especialistas ?? []} admin={admin} />
       <UsoIa />
       <div className="cartao">
         <b>No chat</b>
@@ -681,6 +683,86 @@ function UsoIa() {
         <tbody>{q.data.map((r) => <tr key={r.recurso}><td>{NOME_RECURSO[r.recurso] ?? r.recurso}</td><td className="num">{r.chamadas.toLocaleString('pt-BR')}</td><td className="num">{r.entrada.toLocaleString('pt-BR')}</td><td className="num">{r.saida.toLocaleString('pt-BR')}</td></tr>)}</tbody>
       </table>
       <p className="muted" style={{ margin: '8px 0 0', fontSize: 13 }}>O valor cobrado aparece no painel da Anthropic (Claude) e da OpenAI; elas cobram pela quantidade de tokens.</p>
+    </div>
+  );
+}
+
+
+interface Licao { id: string; funcao: string | null; quando: string; resposta: string; status: 'ativa' | 'pendente' | 'recusada'; origem: 'correcao' | 'semanal' | 'manual'; criadoEm: string; por: string | null }
+const ORIGEM: Record<Licao['origem'], string> = { correcao: 'Correção no chat', semanal: 'Revisão semanal', manual: 'Escrita à mão' };
+
+/** O que a IA aprendeu: correções da equipe e sugestões da revisão semanal, para a gestão aprovar. */
+function Licoes({ especialistas, admin }: { especialistas: Especialista[]; admin: boolean }) {
+  const qc = useQueryClient();
+  const q = useQuery({ queryKey: ['crm', 'ia-licoes'], queryFn: () => api<Licao[]>('/crm/ia-licoes') });
+  const [editando, setEditando] = useState<Partial<Licao> | null>(null);
+  const [verRecusadas, setVerRecusadas] = useState(false);
+  const atualizar = () => qc.invalidateQueries({ queryKey: ['crm', 'ia-licoes'] });
+  const mudar = useMutation({ mutationFn: ({ id, ...corpo }: { id: string; status: Licao['status'] }) => api(`/crm/ia-licoes/${id}`, { metodo: 'PATCH', corpo }), onSuccess: atualizar });
+  const apagar = useMutation({ mutationFn: (id: string) => api(`/crm/ia-licoes/${id}`, { metodo: 'DELETE' }), onSuccess: atualizar });
+  const revisar = useMutation({ mutationFn: () => api<{ conversas: number; sugestoes: number }>('/crm/ia-licoes/revisar', { corpo: {} }), onSuccess: atualizar });
+  const salvar = useMutation({
+    mutationFn: () => (editando!.id ? api(`/crm/ia-licoes/${editando!.id}`, { metodo: 'PATCH', corpo: { funcao: editando!.funcao || null, quando: editando!.quando, resposta: editando!.resposta } }) : api('/crm/ia-licoes', { corpo: { funcao: editando!.funcao || null, quando: editando!.quando, resposta: editando!.resposta } })),
+    onSuccess: () => { setEditando(null); atualizar(); },
+  });
+  const lista = q.data ?? [];
+  const pendentes = lista.filter((l) => l.status === 'pendente');
+  const ativas = lista.filter((l) => l.status === 'ativa');
+  const recusadas = lista.filter((l) => l.status === 'recusada');
+  const nomeDe = (f: string | null) => (f ? especialistas.find((e) => e.funcao === f)?.nome ?? f : 'Todos');
+  const linha = (l: Licao) => (
+    <div key={l.id} style={{ padding: '10px 0', borderTop: '1px dashed var(--linha)' }}>
+      <div><b>Quando:</b> {l.quando}</div>
+      <div><b>Faça:</b> {l.resposta}</div>
+      <div className="flex entre" style={{ flexWrap: 'wrap', marginTop: 4 }}>
+        <span className="muted" style={{ fontSize: 12.5 }}>{nomeDe(l.funcao)} · {ORIGEM[l.origem]}{l.por ? ` · ${l.por}` : ''}</span>
+        {admin && (
+          <span className="flex" style={{ gap: 6 }}>
+            {l.status !== 'ativa' && <button className="botao pequeno" disabled={mudar.isPending} onClick={() => mudar.mutate({ id: l.id, status: 'ativa' })}>Aprovar</button>}
+            {l.status === 'pendente' && <button className="botao claro pequeno" disabled={mudar.isPending} onClick={() => mudar.mutate({ id: l.id, status: 'recusada' })}>Recusar</button>}
+            {l.status === 'ativa' && <button className="botao claro pequeno" disabled={mudar.isPending} onClick={() => mudar.mutate({ id: l.id, status: 'pendente' })}>Pausar</button>}
+            <button className="botao claro pequeno" onClick={() => setEditando(l)}>Editar</button>
+            <button className="botao claro pequeno" disabled={apagar.isPending} onClick={() => window.confirm('Apagar esta lição?') && apagar.mutate(l.id)}>Apagar</button>
+          </span>
+        )}
+      </div>
+    </div>
+  );
+  return (
+    <div className="cartao">
+      <div className="flex entre" style={{ flexWrap: 'wrap' }}>
+        <b>O que a IA aprendeu</b>
+        {admin && <span className="flex" style={{ gap: 6 }}><button className="botao claro pequeno" disabled={revisar.isPending} title="Relê as conversas que a IA passou para a equipe nos últimos 7 dias e sugere lições" onClick={() => revisar.mutate()}>{revisar.isPending ? 'Revisando…' : 'Revisar a semana agora'}</button><button className="botao pequeno" onClick={() => setEditando({ funcao: null, quando: '', resposta: '' })}>Nova lição</button></span>}
+      </div>
+      <p className="muted" style={{ margin: '6px 0 0' }}>Lições são regras do tipo "quando acontecer isto, responda aquilo". Nascem quando alguém clica em "Corrigir a IA" numa resposta dela no chat, ou da revisão semanal (toda segunda-feira a IA relê as conversas que passou para a equipe e sugere o que poderia ter respondido). Só as aprovadas entram nas instruções dela.</p>
+      {revisar.isSuccess && <div className="aviso ok" style={{ marginTop: 8 }}>{revisar.data.conversas === 0 ? 'Nenhuma conversa passada para a equipe e respondida por uma pessoa nos últimos 7 dias.' : `${revisar.data.conversas} conversa(s) revisada(s), ${revisar.data.sugestoes} sugestão(ões) nova(s).`}</div>}
+      {revisar.error && <Erro erro={revisar.error} />}
+      {mudar.error && <Erro erro={mudar.error} />}
+      {q.isLoading ? <Carregando /> : (
+        <>
+          <div className="secao">Esperando aprovação ({pendentes.length})</div>
+          {pendentes.length ? pendentes.map(linha) : <p className="muted" style={{ margin: 0 }}>Nada esperando.</p>}
+          <div className="secao">Valendo ({ativas.length})</div>
+          {ativas.length ? ativas.map(linha) : <p className="muted" style={{ margin: 0 }}>Nenhuma lição ativa ainda.</p>}
+          {recusadas.length > 0 && <button className="botao claro pequeno" style={{ marginTop: 10 }} onClick={() => setVerRecusadas((v) => !v)}>{verRecusadas ? 'Esconder' : 'Ver'} recusadas ({recusadas.length})</button>}
+          {verRecusadas && recusadas.map(linha)}
+        </>
+      )}
+      {editando && (
+        <div className="modal-fundo" onClick={() => setEditando(null)}>
+          <div className="cartao modal" style={{ maxWidth: 560 }} onClick={(e) => e.stopPropagation()}>
+            <h3 style={{ margin: '0 0 10px' }}>{editando.id ? 'Editar lição' : 'Nova lição'}</h3>
+            <Campo rotulo="Vale para"><select value={editando.funcao ?? ''} onChange={(e) => setEditando({ ...editando, funcao: e.target.value || null })}><option value="">Todos os especialistas</option>{especialistas.map((e) => <option key={e.id} value={e.funcao}>{e.nome}</option>)}</select></Campo>
+            <Campo rotulo="Quando acontecer isto"><textarea rows={2} maxLength={400} value={editando.quando ?? ''} onChange={(e) => setEditando({ ...editando, quando: e.target.value })} /></Campo>
+            <Campo rotulo="A IA deve responder ou fazer isto"><textarea rows={4} maxLength={1200} value={editando.resposta ?? ''} onChange={(e) => setEditando({ ...editando, resposta: e.target.value })} /></Campo>
+            {salvar.error && <Erro erro={salvar.error} />}
+            <div className="flex" style={{ marginTop: 12 }}>
+              <button className="botao" disabled={salvar.isPending || (editando.quando ?? '').trim().length < 8 || (editando.resposta ?? '').trim().length < 8} onClick={() => salvar.mutate()}>Salvar</button>
+              <button className="botao claro" onClick={() => setEditando(null)}>Voltar</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

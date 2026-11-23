@@ -75,6 +75,8 @@ import { CrmService } from './crm/crm.service';
 import { CanaisService } from './crm/canais.service';
 import { TranscricaoService } from './crm/transcricao.service';
 import { FerramentasAgenteService } from './crm/ferramentas-agente.service';
+import { AprendizadoService } from './crm/aprendizado.service';
+import { AprendizadoController } from './crm/aprendizado.controller';
 import { AgenteService } from './crm/agente.service';
 import { IaService } from './ia/ia.service';
 import { IaController } from './ia/ia.controller';
@@ -111,6 +113,7 @@ if (!segredo || (process.env.NODE_ENV === 'production' && segredo.length < 32)) 
     ProdutosController,
     PrecificacaoController,
     MesaController,
+    AprendizadoController,
     EstoqueController,
     MaletasController,
     MaletaPublicaController,
@@ -158,6 +161,7 @@ if (!segredo || (process.env.NODE_ENV === 'production' && segredo.length < 32)) 
     CanaisService,
     TranscricaoService,
     FerramentasAgenteService,
+    AprendizadoService,
     AgenteService,
     IaService,
     AutomacaoService,

@@ -3769,3 +3769,83 @@ test('minha mesa: conversa direta e em grupo, não lidas e aviso, tarefas com re
     await ok('PUT', '/mesa/painel', { grupoId: meuGrupo.id, indicadores: [] });
   }
 });
+
+test('aprendizado da IA: memória do cliente, revisão semanal com aprovação, correção no chat e lições nas instruções', async () => {
+  await ok('PUT', '/integracoes/ia', { valores: { ANTHROPIC_API_KEY: 'chave-claude-teste' } });
+  const c = await ok('POST', '/crm/canais', { nome: 'Aprendizado IA', tipo: 'evolution' });
+  await fetch(`${SIM}/__evo/conectar?i=${encodeURIComponent(c.config.instancia)}`);
+  const hook = (await recebidos()).filter((r) => r.caminho === '/evo/instance/create').pop().corpo.webhook.url.replace('http://localhost:3100', '');
+  let n = 0;
+  const tel = '5527977665501';
+  const chegar = (texto) => fetch(API.replace(/\/api$/, '') + hook, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ event: 'messages.upsert', instance: c.config.instancia, data: { key: { remoteJid: `${tel}@s.whatsapp.net`, fromMe: false, id: `APR${++n}` }, pushName: 'Paula Aprendiz', message: { conversation: texto }, messageTimestamp: Math.floor(Date.now() / 1000) } }) });
+  const espera = (ms = 900) => new Promise((r) => setTimeout(r, ms));
+  const conversa = async () => (await ok('GET', `/crm/conversas?aba=todas&canalId=${c.id}`)).find((x) => x.telefone === tel);
+  const dados = async () => ok('GET', `/crm/conversas/${(await conversa()).id}/mensagens`);
+  const cfg = await ok('GET', '/crm/ia-agente');
+  assert.equal(cfg.memoriaClientes, true);
+  const ligados = cfg.especialistas.filter((e) => e.ativo);
+  for (const e of ligados) await ok('PATCH', `/crm/ia-agentes/${e.id}`, { ativo: false });
+  const base = { ativo: true, canais: [c.id], instrucoes: '', conhecimento: 'Vendemos semijoias.', maxRespostas: 30, nome: '', maxTransferencias: 2 };
+  await ok('PUT', '/crm/ia-agente', base);
+  const antes = (await ok('GET', '/crm/ia-licoes')).length;
+
+  // A IA atende, não sabe o prazo de troca e passa para a equipe; ao passar, guarda a memória da pessoa.
+  await chegar('Oi, boa tarde');
+  await espera();
+  await chegar('Qual o prazo de troca? Quero falar com atendente');
+  await espera(1500);
+  let d = await dados();
+  assert.match(d.mensagens.filter((x) => x.direcao === 'interna').at(-1).texto, /A IA passou esta conversa para a equipe/);
+  assert.equal(d.contato.memoriaIa, 'Perguntou sobre prazo de troca. Prefere falar com atendente.');
+  const memoria = (await recebidos()).filter((r) => r.caminho === '/claude/v1/messages' && String(r.corpo.system).includes('ficha de memória')).pop();
+  assert.equal(memoria.corpo.model, 'claude-haiku-5-5', 'a memória usa o modelo barato');
+  assert.match(memoria.corpo.system, /NÃO guarde: saúde/);
+
+  // Uma pessoa responde. A revisão da semana transforma isso em sugestão, que só vale depois de aprovada.
+  const cv = await conversa();
+  await ok('POST', `/crm/conversas/${cv.id}/mensagens`, { texto: 'Oi Paula! O prazo de troca é de 30 dias, com a nota.' });
+  const rev = await ok('POST', '/crm/ia-licoes/revisar');
+  assert.ok(rev.conversas >= 1);
+  assert.equal(rev.sugestoes, 1, 'a lição curta demais é descartada');
+  assert.equal((await ok('POST', '/crm/ia-licoes/revisar')).sugestoes, 0, 'não repete a mesma sugestão');
+  let licoes = await ok('GET', '/crm/ia-licoes?status=pendente');
+  const sugerida = licoes.find((l) => l.quando === 'O cliente pergunta qual é o prazo de troca');
+  assert.deepEqual([sugerida.origem, sugerida.status], ['semanal', 'pendente']);
+
+  // Correção no chat, por quem é da gestão: já vale. Por quem só atende, fica pendente.
+  const daIa = d.mensagens.find((x) => x.direcao === 'saida' && x.ia);
+  const p = await ok('GET', `/crm/mensagens/${daIa.id}/pergunta`);
+  assert.equal(p.pergunta, 'Oi, boa tarde');
+  const corrigida = await ok('POST', '/crm/ia-licoes', { mensagemId: daIa.id, quando: 'O cliente só cumprimenta', resposta: 'Cumprimente de volta e pergunte se procura uma peça ou quer revender.' });
+  assert.deepEqual([corrigida.status, corrigida.origem], ['ativa', 'correcao']);
+  assert.equal((await chamar('POST', '/crm/ia-licoes', { quando: 'curto', resposta: 'x' })).status, 400);
+
+  // Pendente não entra nas instruções; aprovada entra, junto com a memória da pessoa.
+  await ok('POST', `/crm/conversas/${cv.id}/ia`, { ativa: true });
+  await chegar('Voltei, pode me ajudar?');
+  await espera();
+  const sistema = () => recebidos().then((r) => String(r.filter((x) => x.caminho === '/claude/v1/messages' && String(x.corpo.system).includes('"passar"')).pop().corpo.system));
+  let s1 = await sistema();
+  assert.match(s1, /O QUE A EQUIPE JÁ TE ENSINOU[\s\S]*Quando: O cliente só cumprimenta\n  Faça: Cumprimente de volta/);
+  assert.ok(!s1.includes('prazo de troca é de 30 dias'), 'sugestão pendente ainda não vale');
+  assert.match(s1, /O QUE VOCÊ LEMBRA DESTA PESSOA[^\n]*Perguntou sobre prazo de troca/);
+  await ok('PATCH', `/crm/ia-licoes/${sugerida.id}`, { status: 'ativa', resposta: 'O prazo de troca é de 30 dias, com a nota fiscal.' });
+  // A equipe apaga a memória e desliga o recurso: some das instruções.
+  await ok('PATCH', `/crm/contatos/${cv.contatoId}`, { memoriaIa: null });
+  await ok('PUT', '/crm/ia-agente', { ...base, memoriaClientes: false });
+  await chegar('E a troca, como é?');
+  await espera();
+  s1 = await sistema();
+  assert.match(s1, /Faça: O prazo de troca é de 30 dias, com a nota fiscal\./);
+  assert.ok(!s1.includes('O QUE VOCÊ LEMBRA DESTA PESSOA'));
+  d = await dados();
+  assert.equal(d.contato.memoriaIa, null, 'com a memória desligada, nada é guardado');
+
+  // Limpeza.
+  licoes = await ok('GET', '/crm/ia-licoes');
+  assert.equal(licoes.length, antes + 2);
+  for (const l of [sugerida, corrigida]) await ok('DELETE', `/crm/ia-licoes/${l.id}`);
+  await ok('PUT', '/crm/ia-agente', { ativo: false, canais: [], instrucoes: '', conhecimento: '', maxRespostas: 10, memoriaClientes: true });
+  for (const e of ligados) await ok('PATCH', `/crm/ia-agentes/${e.id}`, { ativo: true });
+  await ok('DELETE', `/crm/canais/${c.id}`);
+});

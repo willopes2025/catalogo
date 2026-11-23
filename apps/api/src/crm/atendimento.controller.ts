@@ -374,7 +374,7 @@ export class AtendimentoController {
   @Patch('crm/contatos/:id')
   @Permissao('crm', 'editar')
   async contato(@Param('id', ParseUUIDPipe) id: string, @Body() body: unknown) {
-    const d = validar(z.object({ nome: z.string().trim().min(1).max(150).optional(), email: z.string().trim().email().nullable().optional(), etiquetas: etiquetas.optional(), descadastrado: z.boolean().optional(), camposExtras: campos.optional() }), body);
+    const d = validar(z.object({ nome: z.string().trim().min(1).max(150).optional(), email: z.string().trim().email().nullable().optional(), etiquetas: etiquetas.optional(), descadastrado: z.boolean().optional(), memoriaIa: z.string().trim().max(700).nullable().optional(), camposExtras: campos.optional() }), body);
     const [c] = await this.db.update(crmContatos).set(d).where(eq(crmContatos.id, id)).returning();
     if (!c) throw new NotFoundException('Contato não encontrado.');
     return c;
@@ -643,6 +643,7 @@ export class AtendimentoController {
         ferramentas: z
           .object({ segundaVia: z.boolean(), promessa: z.boolean(), promessaMaxDias: z.number().int().min(1).max(60), estoque: z.boolean(), candidatura: z.boolean() })
           .default(atual.ferramentas),
+        memoriaClientes: z.boolean().default(atual.memoriaClientes),
       }),
       body,
     );

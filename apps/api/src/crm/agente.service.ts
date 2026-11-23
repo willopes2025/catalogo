@@ -9,6 +9,7 @@ import { CrmService } from './crm.service';
 import { CanaisService } from './canais.service';
 import { TranscricaoService } from './transcricao.service';
 import { PEDIU_SAIR } from './telefone';
+import { AprendizadoService } from './aprendizado.service';
 import { FERRAMENTAS_PADRAO, FerramentasAgenteService, type FerramentasAgente } from './ferramentas-agente.service';
 
 export interface ConfigAgente {
@@ -36,9 +37,11 @@ export interface ConfigAgente {
   audioComTexto: boolean;
   /** O que a IA pode consultar e fazer sozinha (2ª via, promessa, estoque, candidatura). */
   ferramentas: FerramentasAgente;
+  /** Guardar um resumo do que foi conversado com cada cliente, para as próximas conversas. */
+  memoriaClientes: boolean;
 }
 
-const PADRAO: ConfigAgente = { ativo: false, canais: [], instrucoes: '', conhecimento: '', maxRespostas: 10, nome: '', maxTransferencias: 2, respostaAudio: 'nunca', vozProvedor: 'automatica', vozElevenlabs: 'ec54d9BmuMSN4IinPrjv', vozOpenai: 'ash', audioComTexto: false, ferramentas: FERRAMENTAS_PADRAO };
+const PADRAO: ConfigAgente = { ativo: false, canais: [], instrucoes: '', conhecimento: '', maxRespostas: 10, nome: '', maxTransferencias: 2, respostaAudio: 'nunca', vozProvedor: 'automatica', vozElevenlabs: 'ec54d9BmuMSN4IinPrjv', vozOpenai: 'ash', audioComTexto: false, ferramentas: FERRAMENTAS_PADRAO, memoriaClientes: true };
 type Especialista = typeof iaAgentes.$inferSelect;
 type Resposta = { resposta?: string; passar?: boolean; motivo?: string; transferir?: string | null; acao?: Record<string, unknown> | null };
 const CHAVE = 'ia_agente';
@@ -64,6 +67,7 @@ export class AgenteService implements OnModuleInit, OnModuleDestroy {
     private readonly arquivos: ArquivosService,
     private readonly transcricao: TranscricaoService,
     private readonly ferramentas: FerramentasAgenteService,
+    private readonly aprendizado: AprendizadoService,
   ) {}
 
   onModuleInit() {
@@ -118,6 +122,8 @@ export class AgenteService implements OnModuleInit, OnModuleDestroy {
       cfg.nome.trim() ? `Seu nome é ${cfg.nome.trim()}. Se precisar se apresentar, use só esse nome; não diga que é um robô especialista nem que trocou de atendente.` : '',
       nome ? `Você está falando com ${nome}.` : 'Você ainda não sabe o nome da pessoa; pergunte com naturalidade se fizer sentido.',
       await this.quemE(contato),
+      cfg.memoriaClientes && contato.memoriaIa ? `O QUE VOCÊ LEMBRA DESTA PESSOA (de conversas anteriores; use com naturalidade, sem dizer que tem uma ficha): ${contato.memoriaIa}` : '',
+      await this.aprendizado.licoesPara(agente?.funcao ?? null),
       agente ? `SUA ESPECIALIDADE NESTA CONVERSA: ${agente.nome} (${agente.quando}).${agente.instrucoes.trim() ? `\nCOMO ATENDER ESTE ASSUNTO:\n${agente.instrucoes.trim()}` : ''}${agente.conhecimento.trim() ? `\nO QUE VOCÊ SABE SOBRE ESTE ASSUNTO (use só isto como fato):\n${agente.conhecimento.trim()}` : ''}` : '',
       cfg.instrucoes.trim() ? `COMO ATENDER (definido pela empresa):\n${cfg.instrucoes.trim()}` : 'COMO ATENDER: seja cordial e objetiva, como uma atendente brasileira experiente. Descubra o que a pessoa precisa e ajude.',
       cfg.conhecimento.trim() ? `O QUE VOCÊ SABE SOBRE A EMPRESA (use só isto como fato):\n${cfg.conhecimento.trim()}` : 'Você não recebeu informações da empresa (endereço, horário, preços). Não invente nenhuma.',
@@ -327,6 +333,7 @@ export class AgenteService implements OnModuleInit, OnModuleDestroy {
         if (texto) {
           await this.enviarResposta(conversaId, texto, cfg, falado);
           await this.db.update(crmConversas).set({ iaRespostas: sql`${crmConversas.iaRespostas} + 1` }).where(eq(crmConversas.id, conversaId));
+          if (cfg.memoriaClientes && (c.cv.iaRespostas + 1) % 4 === 0) void this.aprendizado.atualizarMemoria(conversaId).catch(() => undefined);
         }
         if (r.passar || !texto) await this.passar(conversaId, String(r.motivo ?? '').trim().slice(0, 300) || 'A IA achou melhor uma pessoa continuar.');
         return;
@@ -362,6 +369,7 @@ export class AgenteService implements OnModuleInit, OnModuleDestroy {
     await this.db.update(crmConversas).set({ iaAtiva: false }).where(eq(crmConversas.id, conversaId));
     await this.db.execute(sql`update crm_conversas set status = 'fila', atendente_id = null, fila_desde = coalesce(fila_desde, now()) where id = ${conversaId} and status = 'resolvida'`);
     await this.db.insert(crmMensagens).values({ conversaId, direcao: 'interna', tipo: 'texto', texto: `🤖 A IA passou esta conversa para a equipe. ${motivo}`, status: 'interna', ia: true });
+    if ((await this.config()).memoriaClientes) void this.aprendizado.atualizarMemoria(conversaId).catch(() => undefined);
   }
 
   /** Liga ou desliga a IA nesta conversa (botão "Acionar IA"). Ligando, ela já responde se o cliente está esperando. */

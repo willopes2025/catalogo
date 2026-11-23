@@ -1065,6 +1065,9 @@ export const crmContatos = pgTable(
     /** Pediu para não receber disparos (respondeu SAIR ou foi marcado). */
     descadastrado: boolean('descadastrado').notNull().default(false),
     camposExtras: jsonb('campos_extras').$type<Record<string, string>>().notNull().default({}),
+    /** O que a IA guardou sobre esta pessoa de conversas anteriores (resumo curto, editável pela equipe). */
+    memoriaIa: text('memoria_ia'),
+    memoriaIaEm: timestamp('memoria_ia_em', { withTimezone: true }),
     criadoEm: criadoEm(),
   },
   (t) => ({ porTelefone: uniqueIndex('crm_contatos_telefone_idx').on(t.telefone), porPessoa: index('crm_contatos_pessoa_idx').on(t.pessoaId) }),
@@ -2183,4 +2186,30 @@ export const mesaTarefas = pgTable(
     criadoEm: criadoEm(),
   },
   (t) => ({ abertas: index('mesa_tarefas_abertas_idx').on(t.responsavelId, t.feitaEm) }),
+);
+
+/**
+ * O que a IA do WhatsApp aprendeu com a equipe: "quando acontecer X, responda/faça Y".
+ * Vem de uma correção feita por alguém numa resposta da IA, ou da revisão semanal das conversas que ela passou para a equipe.
+ * Só as lições ativas entram nas instruções da IA; as pendentes esperam a gestão aprovar.
+ */
+export const iaLicoes = pgTable(
+  'ia_licoes',
+  {
+    id: id(),
+    /** Chave do especialista a que se aplica; vazio = todos. */
+    funcao: text('funcao'),
+    quando: text('quando').notNull(),
+    resposta: text('resposta').notNull(),
+    /** ativa | pendente | recusada */
+    status: text('status').notNull().default('pendente'),
+    /** correcao | semanal | manual */
+    origem: text('origem').notNull().default('manual'),
+    /** Conversa em que a correção foi feita (sem chave estrangeira: a lição fica mesmo se as conversas de teste forem apagadas). */
+    conversaId: uuid('conversa_id'),
+    criadoPor: uuid('criado_por').references(() => usuarios.id, { onDelete: 'set null' }),
+    criadoEm: criadoEm(),
+    atualizadoEm: timestamp('atualizado_em', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({ porStatus: index('ia_licoes_status_idx').on(t.status, t.criadoEm) }),
 );

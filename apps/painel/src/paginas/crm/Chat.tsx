@@ -1,13 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, pode } from '../../api';
-import { Erro } from '../../componentes/ui';
+import { Campo, Carregando, Erro } from '../../componentes/ui';
 import { ha, ligar, meuId, telefoneBonito, useMidia, useRelogio, usarAtendentes, usarFunis, type Template } from './comum';
 
 interface Mensagem { id: string; direcao: 'entrada' | 'saida' | 'interna'; tipo: string; texto: string | null; midia: string | null; midiaNome: string | null; templateNome: string | null; status: string; erro: string | null; autor: string | null; automatica: boolean; criadoEm: string; ia: boolean; transcricao: string | null; transcricaoStatus: 'pendente' | 'feita' | 'falhou' | null; transcricaoErro: string | null; reacoes: { de: 'contato' | 'equipe'; emoji: string }[]; apagada: boolean; noWhatsApp: boolean; citada: { id: string; direcao: string; tipo: string; texto: string | null } | null }
 interface Dados {
   conversa: { id: string; status: 'fila' | 'atendimento' | 'resolvida'; atendenteId: string | null; canalId: string; canal: string; canalTipo: 'oficial' | 'qrcode' | 'evolution'; dentroDaJanela: boolean; filaDesde: string | null; contatoId: string; fixada: boolean };
-  contato: { id: string; nome: string; telefone: string; descadastrado: boolean };
+  contato: { id: string; nome: string; telefone: string; descadastrado: boolean; memoriaIa?: string | null; memoriaIaEm?: string | null };
   mensagens: Mensagem[];
   recursos: { reagir: boolean; apagar: boolean; ia: boolean; transcrever: boolean };
   iaAtendendo: boolean;
@@ -183,6 +183,8 @@ export function Chat({ conversaId, leadId, aoMudar, abas, aoSair }: { conversaId
   const [gravando, setGravando] = useState<{ desde: number } | null>(null);
   const [erroLocal, setErroLocal] = useState<string | null>(null);
   const [nomeNovo, setNomeNovo] = useState<string | null>(null);
+  const [corrigir, setCorrigir] = useState<string | null>(null);
+  const [verMemoria, setVerMemoria] = useState(false);
   const gravador = useRef<{ rec: MediaRecorder; cancelado: boolean } | null>(null);
   const campoTexto = useRef<HTMLTextAreaElement>(null);
   const fim = useRef<HTMLDivElement>(null);
@@ -365,6 +367,7 @@ export function Chat({ conversaId, leadId, aoMudar, abas, aoSair }: { conversaId
                 {editar && q.data!.recursos.ia && <button role="menuitem" onClick={() => acao.mutate({ rota: 'ia', corpo: { ativa: !q.data!.iaAtendendo } })}>{q.data!.iaAtendendo ? 'Pausar a IA nesta conversa' : '🤖 Acionar IA nesta conversa'}</button>}
                 {editar && <button role="menuitem" onClick={() => acao.mutate({ rota: 'fixar', corpo: { fixada: !c.fixada } })}>{c.fixada ? 'Desafixar do topo' : '📌 Fixar no topo'}</button>}
                 {editar && <button role="menuitem" onClick={() => acao.mutate({ rota: 'nao-lida' })}>Marcar como não lida</button>}
+                {q.data!.recursos.ia && <button role="menuitem" onClick={() => setVerMemoria(true)}>🧠 O que a IA lembra desta pessoa</button>}
                 <button role="menuitem" onClick={() => void navigator.clipboard?.writeText(contato.telefone)}>Copiar o telefone</button>
                 <button role="menuitem" onClick={() => exportar(contato, mensagens)}>Exportar a conversa (.txt)</button>
                 {gestor && <button role="menuitem" onClick={() => setUnificando(true)}>Unificar com outro contato</button>}
@@ -473,6 +476,7 @@ export function Chat({ conversaId, leadId, aoMudar, abas, aoSair }: { conversaId
                 )}
                 <div className="rodape-msg">
                   {m.direcao === 'saida' && (m.ia ? '🤖 IA' : m.automatica ? 'automática' : m.autor ?? 'celular')}
+                  {m.direcao === 'saida' && m.ia && editar && <button type="button" className="corrigir-ia" title="A resposta da IA não foi boa? Ensine o certo." onClick={() => setCorrigir(m.id)}>Corrigir a IA</button>}
                   <span>{new Date(m.criadoEm).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</span>
                   {m.direcao === 'saida' && <span style={{ color: m.status === 'lida' ? '#2a7fd4' : undefined }} title={m.erro ?? m.status}>{TICKS[m.status] ?? ''}</span>}
                 </div>
@@ -505,6 +509,8 @@ export function Chat({ conversaId, leadId, aoMudar, abas, aoSair }: { conversaId
             </div>
           )}
           {(enviar.error || anexar.error || reagir.error || apagar.error || renomear.error || sugerir.error) && <Erro erro={enviar.error ?? anexar.error ?? reagir.error ?? apagar.error ?? renomear.error ?? sugerir.error} />}
+          {corrigir && <CorrigirIa mensagemId={corrigir} fechar={() => setCorrigir(null)} />}
+          {verMemoria && <MemoriaIa contato={contato} fechar={() => setVerMemoria(false)} aoSalvar={atualizar} />}
           {erroLocal && <div className="aviso erro" role="alert" style={{ margin: 0, padding: '6px 10px', fontSize: 13 }}>{erroLocal}</div>}
           {painel === 'emoji' && (
             <div className="emojis" role="group" aria-label="Emojis">
@@ -588,6 +594,61 @@ export function Chat({ conversaId, leadId, aoMudar, abas, aoSair }: { conversaId
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+
+/** Ensina a IA a partir de uma resposta dela: "quando o cliente disser isto, responda aquilo". */
+function CorrigirIa({ mensagemId, fechar }: { mensagemId: string; fechar: () => void }) {
+  const q = useQuery({ queryKey: ['crm', 'pergunta', mensagemId], queryFn: () => api<{ pergunta: string; respostaDaIa: string; funcao: string | null }>(`/crm/mensagens/${mensagemId}/pergunta`) });
+  const [f, setF] = useState<{ quando: string; resposta: string } | null>(null);
+  useEffect(() => { if (q.data && !f) setF({ quando: q.data.pergunta ? `O cliente diz ou pergunta: "${q.data.pergunta}"`.slice(0, 400) : '', resposta: '' }); }, [q.data, f]);
+  const salvar = useMutation({ mutationFn: () => api<{ status: string }>('/crm/ia-licoes', { corpo: { mensagemId, funcao: q.data?.funcao ?? null, quando: f!.quando, resposta: f!.resposta } }) });
+  return (
+    <div className="modal-fundo" onClick={fechar}>
+      <div className="cartao modal" style={{ maxWidth: 560 }} onClick={(e) => e.stopPropagation()}>
+        <h3 style={{ margin: '0 0 6px' }}>Corrigir a IA</h3>
+        {salvar.isSuccess ? (
+          <>
+            <div className="aviso ok">{salvar.data.status === 'ativa' ? 'Lição gravada: já vale para as próximas respostas.' : 'Correção enviada. Ela passa a valer quando a gestão aprovar em CRM › Configurar › Agente de IA.'}</div>
+            <div className="flex" style={{ marginTop: 12 }}><button className="botao claro" onClick={fechar}>Fechar</button></div>
+          </>
+        ) : !f ? <Carregando /> : (
+          <>
+            {q.data?.respostaDaIa && <p className="muted" style={{ marginTop: 0 }}>A IA respondeu: "{q.data.respostaDaIa.slice(0, 300)}"</p>}
+            <Campo rotulo="Quando acontecer isto" ajuda="Descreva a situação de forma geral, sem o nome do cliente."><textarea rows={2} maxLength={400} value={f.quando} onChange={(e) => setF({ ...f, quando: e.target.value })} /></Campo>
+            <Campo rotulo="A IA deve responder ou fazer isto" ajuda="A informação certa ou o jeito certo de agir. Ex.: 'O prazo de troca é de 30 dias com a nota.' ou 'Passe para a equipe.'"><textarea rows={4} maxLength={1200} autoFocus value={f.resposta} onChange={(e) => setF({ ...f, resposta: e.target.value })} /></Campo>
+            {salvar.error && <Erro erro={salvar.error} />}
+            <div className="flex" style={{ marginTop: 12 }}>
+              <button className="botao" disabled={salvar.isPending || f.quando.trim().length < 8 || f.resposta.trim().length < 8} onClick={() => salvar.mutate()}>{salvar.isPending ? 'Gravando…' : 'Ensinar'}</button>
+              <button className="botao claro" onClick={fechar}>Voltar</button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** O resumo que a IA guardou sobre a pessoa. A equipe pode corrigir ou apagar. */
+function MemoriaIa({ contato, fechar, aoSalvar }: { contato: Dados['contato']; fechar: () => void; aoSalvar: () => void }) {
+  const [texto, setTexto] = useState(contato.memoriaIa ?? '');
+  const salvar = useMutation({ mutationFn: (v: string | null) => api(`/crm/contatos/${contato.id}`, { metodo: 'PATCH', corpo: { memoriaIa: v } }), onSuccess: () => { aoSalvar(); fechar(); } });
+  const editar = pode('crm', 'editar');
+  return (
+    <div className="modal-fundo" onClick={fechar}>
+      <div className="cartao modal" style={{ maxWidth: 520 }} onClick={(e) => e.stopPropagation()}>
+        <h3 style={{ margin: '0 0 6px' }}>O que a IA lembra de {contato.nome}</h3>
+        <p className="muted" style={{ marginTop: 0 }}>Um resumo curto das conversas anteriores, para ela não perguntar tudo de novo. Ela não guarda saúde, documentos, endereço completo, pagamento nem valor de dívida. {contato.memoriaIaEm ? `Atualizado em ${new Date(contato.memoriaIaEm).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' })}.` : ''}</p>
+        <textarea rows={6} maxLength={700} disabled={!editar} value={texto} placeholder="A IA ainda não guardou nada sobre esta pessoa." onChange={(e) => setTexto(e.target.value)} />
+        {salvar.error && <Erro erro={salvar.error} />}
+        <div className="flex" style={{ marginTop: 12 }}>
+          {editar && <button className="botao" disabled={salvar.isPending} onClick={() => salvar.mutate(texto.trim() || null)}>Salvar</button>}
+          {editar && contato.memoriaIa && <button className="botao claro" disabled={salvar.isPending} onClick={() => salvar.mutate(null)}>Apagar a memória</button>}
+          <button className="botao claro" onClick={fechar}>Fechar</button>
+        </div>
+      </div>
     </div>
   );
 }
