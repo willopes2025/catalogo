@@ -454,7 +454,7 @@ function Ramais() {
 
 interface Especialista { id: string; funcao: string; nome: string; quando: string; instrucoes: string; conhecimento: string; ativo: boolean; ordem: number }
 interface OpcaoVoz { id: string; nome: string }
-interface ConfigAgente { ativo: boolean; canais: string[]; instrucoes: string; conhecimento: string; maxRespostas: number; nome: string; maxTransferencias: number; ligada: boolean; especialistas: Especialista[]; respostaAudio: 'nunca' | 'espelhar' | 'sempre'; vozProvedor: 'automatica' | 'elevenlabs' | 'openai'; vozElevenlabs: string; vozOpenai: string; audioComTexto: boolean; voz?: { disponivel: 'elevenlabs' | 'openai' | null; elevenlabs: boolean; openai: boolean; opcoes: { elevenlabs: OpcaoVoz[]; openai: OpcaoVoz[] } } }
+interface ConfigAgente { ativo: boolean; canais: string[]; instrucoes: string; conhecimento: string; maxRespostas: number; nome: string; maxTransferencias: number; ligada: boolean; especialistas: Especialista[]; respostaAudio: 'nunca' | 'espelhar' | 'sempre'; vozProvedor: 'automatica' | 'elevenlabs' | 'openai'; vozElevenlabs: string; vozOpenai: string; audioComTexto: boolean; ferramentas: { segundaVia: boolean; promessa: boolean; promessaMaxDias: number; estoque: boolean; candidatura: boolean }; voz?: { disponivel: 'elevenlabs' | 'openai' | null; elevenlabs: boolean; openai: boolean; opcoes: { elevenlabs: OpcaoVoz[]; openai: OpcaoVoz[] } } }
 
 /** O agente que atende no WhatsApp enquanto ninguém da equipe pegou a conversa. */
 function AgenteIa() {
@@ -464,7 +464,7 @@ function AgenteIa() {
   const canais = usarCanais();
   const [f, setF] = useState<ConfigAgente | null>(null);
   useEffect(() => { if (q.data && !f) setF(q.data); }, [q.data, f]);
-  const salvar = useMutation({ mutationFn: () => api<ConfigAgente>('/crm/ia-agente', { metodo: 'PUT', corpo: { ativo: f!.ativo, canais: f!.canais, instrucoes: f!.instrucoes, conhecimento: f!.conhecimento, maxRespostas: f!.maxRespostas, nome: f!.nome, maxTransferencias: f!.maxTransferencias, respostaAudio: f!.respostaAudio, vozProvedor: f!.vozProvedor, vozElevenlabs: f!.vozElevenlabs, vozOpenai: f!.vozOpenai, audioComTexto: f!.audioComTexto } }), onSuccess: (r) => { setF({ ...f!, ...r }); qc.invalidateQueries({ queryKey: ['crm', 'ia-agente'] }); } });
+  const salvar = useMutation({ mutationFn: () => api<ConfigAgente>('/crm/ia-agente', { metodo: 'PUT', corpo: { ativo: f!.ativo, canais: f!.canais, instrucoes: f!.instrucoes, conhecimento: f!.conhecimento, maxRespostas: f!.maxRespostas, nome: f!.nome, maxTransferencias: f!.maxTransferencias, respostaAudio: f!.respostaAudio, vozProvedor: f!.vozProvedor, vozElevenlabs: f!.vozElevenlabs, vozOpenai: f!.vozOpenai, audioComTexto: f!.audioComTexto, ferramentas: f!.ferramentas } }), onSuccess: (r) => { setF({ ...f!, ...r }); qc.invalidateQueries({ queryKey: ['crm', 'ia-agente'] }); } });
   if (q.isLoading || !f) return <Carregando />;
   if (q.error) return <Erro erro={q.error} />;
   return (
@@ -495,6 +495,14 @@ function AgenteIa() {
         </Campo>
         <Campo rotulo="Respostas seguidas antes de passar para a equipe" className="l2" ajuda="Evita conversa em círculo. Chegando ao limite, a conversa fica na fila com um recado.">
           <input type="number" min={1} max={50} disabled={!admin} value={f.maxRespostas} onChange={(e) => setF({ ...f, maxRespostas: Math.max(1, Math.min(50, Number(e.target.value) || 1)) })} />
+        </Campo>
+        <div className="secao" style={{ gridColumn: '1 / -1' }}>O que ela pode fazer sozinha</div>
+        <p className="muted l4" style={{ margin: 0 }}>Vale só para quem está escrevendo: as parcelas são as do cadastro ligado àquele número. Ela não dá desconto, não muda valor nem vencimento e não fecha venda. Tudo que ela faz fica anotado na conversa.</p>
+        {([['segundaVia', 'Dizer as parcelas em aberto e mandar a 2ª via (Pix ou boleto)'], ['promessa', 'Anotar a promessa de pagamento na Cobrança'], ['estoque', 'Consultar peça, preço e se há em estoque'], ['candidatura', 'Registrar quem quer ser revendedora no recrutamento']] as const).map(([k, rotulo]) => (
+          <label key={k} className="check l4"><input type="checkbox" disabled={!admin} checked={f.ferramentas?.[k] ?? true} onChange={(e) => setF({ ...f, ferramentas: { ...f.ferramentas, [k]: e.target.checked } })} /> {rotulo}</label>
+        ))}
+        <Campo rotulo="Promessa: até quantos dias à frente" className="l2" ajuda="Prazo maior que isso ela passa para a equipe.">
+          <input type="number" min={1} max={60} disabled={!admin || !f.ferramentas?.promessa} value={f.ferramentas?.promessaMaxDias ?? 10} onChange={(e) => setF({ ...f, ferramentas: { ...f.ferramentas, promessaMaxDias: Math.max(1, Math.min(60, Number(e.target.value) || 1)) } })} />
         </Campo>
         <AudioDoAgente f={f} setF={setF} admin={admin} />
         {salvar.error && <div className="l4"><Erro erro={salvar.error} /></div>}

@@ -640,6 +640,9 @@ export class AtendimentoController {
         vozElevenlabs: z.string().trim().regex(/^[A-Za-z0-9]{10,40}$/, 'Id de voz da ElevenLabs inválido').default(atual.vozElevenlabs),
         vozOpenai: z.enum(VOZES_OPENAI.map((v) => v.id) as [string, ...string[]]).default(atual.vozOpenai),
         audioComTexto: z.boolean().default(atual.audioComTexto),
+        ferramentas: z
+          .object({ segundaVia: z.boolean(), promessa: z.boolean(), promessaMaxDias: z.number().int().min(1).max(60), estoque: z.boolean(), candidatura: z.boolean() })
+          .default(atual.ferramentas),
       }),
       body,
     );

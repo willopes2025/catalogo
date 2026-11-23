@@ -402,6 +402,23 @@ http
         const tudo = corpo.messages.filter((m) => m.role === 'user').flatMap(blocos).filter((b) => b.type === 'text').map((b) => b.text).join(' ');
         const r = /atendente/i.test(texto) ? { agente: 'equipe', motivo: 'Pediu atendente' } : /revender|revendedora|trabalhar com voc/i.test(tudo) ? { agente: 'recrutamento', certeza: 0.9, motivo: 'Quer revender' } : /acerto|minha maleta/i.test(tudo) ? { agente: 'revendedora', certeza: 0.9, motivo: 'Fala da maleta' } : /preço|brinco|colar|anel|argola/i.test(tudo) ? { agente: 'vendas', certeza: 0.95, motivo: 'Quer comprar peça' } : corpo.system.includes('Você já perguntou') ? { agente: 'equipe', motivo: 'Assunto não ficou claro' } : { agente: 'perguntar', certeza: 0.2, pergunta: 'Oi! Me conta o que você está procurando? 😊', motivo: 'Só cumprimentou' };
         saida = JSON.stringify(r);
+      } else if (corpo.system.includes('FERRAMENTAS:') && texto.startsWith('[RESULTADO DA FERRAMENTA')) {
+        // Depois da ferramenta, responde ao cliente com o que ela devolveu (ou encadeia a 2ª via depois de consultar).
+        const pediu = corpo.messages.filter((m) => m.role === 'user').flatMap(blocos).filter((b) => b.type === 'text').map((b) => b.text).filter((t) => !t.startsWith('[RESULTADO')).pop() ?? '';
+        if (/ferramenta infinita/i.test(pediu)) saida = JSON.stringify({ resposta: '', passar: false, acao: { ferramenta: 'consultar_estoque', busca: 'argola' } });
+        else if (texto.startsWith('[RESULTADO DA FERRAMENTA consultar_parcelas') && /segunda via/i.test(pediu) && texto.includes('1. ')) saida = JSON.stringify({ resposta: '', passar: false, acao: { ferramenta: 'segunda_via', parcela: 1, forma: /boleto/i.test(pediu) ? 'boleto' : 'pix' } });
+        else saida = JSON.stringify({ resposta: texto.split('\n').slice(1).join(' ').replace(/Agora responda ao cliente.*$/, '').trim().slice(0, 900), passar: /passe para a equipe|passe a conversa/i.test(texto) });
+      } else if (corpo.system.includes('FERRAMENTAS:') && /segunda via|quanto eu devo/i.test(texto)) {
+        saida = JSON.stringify({ resposta: '', passar: false, acao: { ferramenta: 'consultar_parcelas' } });
+      } else if (corpo.system.includes('FERRAMENTAS:') && /pago (no )?dia (\d{4}-\d{2}-\d{2})/i.test(texto)) {
+        saida = JSON.stringify({ resposta: '', passar: false, acao: { ferramenta: 'registrar_promessa', data: /(\d{4}-\d{2}-\d{2})/.exec(texto)[1], valor: null } });
+      } else if (corpo.system.includes('FERRAMENTAS:') && /tem (.+) em estoque/i.test(texto)) {
+        saida = JSON.stringify({ resposta: '', passar: false, acao: { ferramenta: 'consultar_estoque', busca: /tem (.+) em estoque/i.exec(texto)[1] } });
+      } else if (corpo.system.includes('FERRAMENTAS:') && /me candidatar/i.test(texto)) {
+        const mm = /meu nome é (.+?), moro em (.+?)\/(\w{2})/i.exec(texto);
+        saida = JSON.stringify({ resposta: '', passar: false, acao: { ferramenta: 'registrar_candidatura', nome: mm?.[1] ?? '', cidade: mm?.[2] ?? '', uf: mm?.[3] ?? '', modelo: 'consignado', experiencia: 'Já vendeu cosméticos' } });
+      } else if (corpo.system.includes('FERRAMENTAS:') && /ferramenta infinita/i.test(texto)) {
+        saida = JSON.stringify({ resposta: '', passar: false, acao: { ferramenta: 'consultar_estoque', busca: 'argola' } });
       } else if (corpo.system.includes('SUA ESPECIALIDADE NESTA CONVERSA: Vendas') && /revender/i.test(texto)) {
         saida = '{"resposta": "", "passar": false, "transferir": "recrutamento", "motivo": "Agora quer revender"}';
       } else if (corpo.system.includes('SUA ESPECIALIDADE NESTA CONVERSA: Vendas') && /maleta/i.test(texto)) {

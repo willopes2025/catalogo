@@ -3561,3 +3561,107 @@ test('precificação: fórmula da planilha (peso × coeficiente + bruto, markup 
   const p3 = await ok('GET', `/produtos/${prata.id}`);
   assert.deepEqual([p3.custos.banhoOuro, p3.custos.banhoPrata, p3.custo], [3300, undefined, 4200]);
 });
+
+test('ferramentas do agente de IA: reconhece o número, parcelas, 2ª via, promessa, estoque e candidatura; limites e desligar', async () => {
+  const c = await ok('POST', '/crm/canais', { nome: 'Ferramentas IA', tipo: 'evolution' });
+  await fetch(`${SIM}/__evo/conectar?i=${encodeURIComponent(c.config.instancia)}`);
+  const hook = (await recebidos()).filter((r) => r.caminho === '/evo/instance/create').pop().corpo.webhook.url.replace('http://localhost:3100', '');
+  let n = 0;
+  const chegarDe = (tel) => (texto) => fetch(API.replace(/\/api$/, '') + hook, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ event: 'messages.upsert', instance: c.config.instancia, data: { key: { remoteJid: `${tel}@s.whatsapp.net`, fromMe: false, id: `FER${tel}${++n}` }, pushName: 'Contato', message: { conversation: texto }, messageTimestamp: Math.floor(Date.now() / 1000) } }) });
+  const espera = (ms = 900) => new Promise((r) => setTimeout(r, ms));
+  const conversa = async (tel) => (await ok('GET', `/crm/conversas?aba=todas&canalId=${c.id}`)).find((x) => x.telefone === tel);
+  const msgs = async (tel) => (await ok('GET', `/crm/conversas/${(await conversa(tel)).id}/mensagens`)).mensagens;
+  const dia = (d) => new Date(Date.now() - 3 * 3600_000 + d * 86400_000).toISOString().slice(0, 10);
+  const emp = (await ok('GET', '/empresas'))[0];
+
+  // Cliente cadastrada com duas parcelas em aberto; o número dela é o do cadastro.
+  const dev = await ok('POST', '/pessoas', { tipo: 'cliente', nome: 'Fernanda Ferramenta Teste', documento: '11144477735', telefone1: '(27) 98877-6601', email: 'fernanda.ferramenta@exemplo.com', cep: '29101010', logradouro: 'Avenida Champagnat', numero: '100', bairro: 'Centro', cidade: 'Vila Velha', uf: 'ES' });
+  await ok('POST', '/financeiro/titulos', { empresaId: emp.id, tipo: 'receber', pessoaId: dev.id, descricao: 'Parcela vencida Fernanda', valor: 12000, vencimento: dia(-8) });
+  await ok('POST', '/financeiro/titulos', { empresaId: emp.id, tipo: 'receber', pessoaId: dev.id, descricao: 'Parcela futura Fernanda', valor: 8000, vencimento: dia(20) });
+  await ok('PUT', '/integracoes/ia', { valores: { ANTHROPIC_API_KEY: 'chave-claude-teste' } });
+  const cfg = await ok('GET', '/crm/ia-agente');
+  assert.deepEqual(cfg.ferramentas, { segundaVia: true, promessa: true, promessaMaxDias: 10, estoque: true, candidatura: true });
+  const base = { ativo: true, canais: [c.id], instrucoes: '', conhecimento: 'Vendemos semijoias.', maxRespostas: 30, nome: '', maxTransferencias: 2 };
+  // Sem especialistas neste teste: o agente geral atende direto.
+  const ligados = cfg.especialistas.filter((e) => e.ativo);
+  for (const e of ligados) await ok('PATCH', `/crm/ia-agentes/${e.id}`, { ativo: false });
+  await ok('PUT', '/crm/ia-agente', base);
+
+  // 1) "Quanto eu devo": reconhece o número pelo cadastro e lista as parcelas dela.
+  const tel = '5527988776601';
+  const chegar = chegarDe(tel);
+  await chegar('Oi, quanto eu devo?');
+  await espera();
+  let m = await msgs(tel);
+  assert.match(m.at(-1).texto, /Parcelas em aberto \(2, total R\$\s200,00\)/);
+  assert.match(m.at(-1).texto, /1\. Parcela vencida Fernanda .*\(VENCIDA\) · R\$\s120,00/);
+  const sistema = (await recebidos()).filter((r) => r.caminho === '/claude/v1/messages' && String(r.corpo.system).includes('FERRAMENTAS:')).pop().corpo.system;
+  assert.match(sistema, /Este número é de Fernanda Ferramenta Teste, cliente cadastrada/);
+  assert.match(sistema, /contestação de dívida, pedido de desconto ou de parcelamento/);
+
+  // 2) 2ª via: consulta, gera a cobrança no Asaas e manda o link; a equipe vê o recado.
+  await chegar('Me manda a segunda via por favor');
+  await espera(1300);
+  m = await msgs(tel);
+  assert.match(m.at(-1).texto, /Link de pagamento da parcela 1 \(Parcela vencida Fernanda.*https:\/\/sandbox\.asaas\.com\/i\/pay_\d+/);
+  assert.ok(m.some((x) => x.direcao === 'interna' && x.texto.startsWith('🤖 A IA enviou a 2ª via de "Parcela vencida Fernanda"')));
+  const cobrou = (await recebidos()).filter((r) => r.caminho === '/asaas/payments' && r.corpo?.description === 'Parcela vencida Fernanda').pop();
+  assert.deepEqual([cobrou.corpo.billingType, cobrou.corpo.value], ['PIX', 120], 'a cobrança saiu no Asaas, pelo valor do título');
+
+  // 3) Promessa dentro do prazo entra na Cobrança; fora do prazo é recusada e vai para a equipe.
+  await chegar(`Eu pago dia ${dia(5)}`);
+  await espera();
+  m = await msgs(tel);
+  assert.match(m.at(-1).texto, /Promessa anotada: R\$\s120,00 até/);
+  assert.ok(m.some((x) => x.direcao === 'interna' && x.texto.startsWith('🤖 A IA registrou promessa de pagamento: R$')));
+  const ficha = await ok('GET', `/cobranca/devedores/${dev.id}`).catch(() => null);
+  if (ficha) assert.ok(JSON.stringify(ficha).includes('Promessa registrada pela IA no WhatsApp'));
+  await chegar(`Na verdade eu pago dia ${dia(40)}`);
+  await espera();
+  m = await msgs(tel);
+  assert.match(m.filter((x) => x.direcao === 'saida').at(-1).texto, /A promessa pode ser no máximo até/);
+  assert.match(m.filter((x) => x.direcao === 'interna').at(-1).texto, /A IA passou esta conversa para a equipe/);
+
+  // 4) Número sem cadastro: estoque e candidatura funcionam; pagamento não é oferecido.
+  const tel2 = '5527988776602';
+  const chegar2 = chegarDe(tel2);
+  const prod = await ok('POST', '/produtos', { referencia: 'FER-ARG', descricao: 'Argola ferramenta dourada', preco: 8990, cor: 'Dourado' });
+  await chegar2('Vocês tem argola ferramenta em estoque?');
+  await espera();
+  m = await msgs(tel2);
+  assert.match(m.at(-1).texto, /Argola ferramenta dourada \(Dourado\), ref\. FER-ARG: R\$\s89,90 · sem estoque no momento/);
+  const sistema2 = (await recebidos()).filter((r) => r.caminho === '/claude/v1/messages' && String(r.corpo.system).includes('FERRAMENTAS:')).pop().corpo.system;
+  assert.ok(!sistema2.includes('"segunda_via"') && sistema2.includes('não está ligado a um cadastro: assuntos de pagamento'), 'sem cadastro, não há ferramenta de pagamento');
+  await chegar2('Quero me candidatar: meu nome é Carla Candidata Teste, moro em Serra/ES');
+  await espera(1200);
+  m = await msgs(tel2);
+  assert.match(m.at(-1).texto, /Candidatura nº \d+ registrada/);
+  const cands = await ok('GET', '/crm/candidaturas');
+  const cand = (cands.itens ?? cands).find((x) => x.nome === 'Carla Candidata Teste');
+  assert.deepEqual([cand.cidade, cand.uf, cand.telefone, cand.modeloInteresse], ['Serra', 'ES', '27988776602', 'consignado']);
+  // De novo: atualiza a mesma, não duplica.
+  await chegar2('Quero me candidatar: meu nome é Carla Candidata Teste, moro em Vitória/ES');
+  await espera(1200);
+  const cands2 = await ok('GET', '/crm/candidaturas');
+  assert.equal((cands2.itens ?? cands2).filter((x) => x.nome === 'Carla Candidata Teste').length, 1);
+
+  // 5) Ferramenta em laço: no máximo 3 usos por resposta, depois vai para a equipe.
+  const tel3 = '5527988776603';
+  await chegarDe(tel3)('teste de ferramenta infinita');
+  await espera(1300);
+  m = await msgs(tel3);
+  assert.match(m.filter((x) => x.direcao === 'interna').at(-1).texto, /A IA usou ferramentas demais/);
+
+  // 6) Desligadas: a IA nem fica sabendo que existem.
+  await ok('PUT', '/crm/ia-agente', { ...base, ferramentas: { segundaVia: false, promessa: false, promessaMaxDias: 10, estoque: false, candidatura: false } });
+  await chegarDe('5527988776604')('Oi, quanto eu devo?');
+  await espera();
+  const ultimo = (await recebidos()).filter((r) => r.caminho === '/claude/v1/messages').pop().corpo.system;
+  assert.ok(!String(ultimo).includes('FERRAMENTAS:'));
+  assert.equal((await chamar('PUT', '/crm/ia-agente', { ...base, ferramentas: { segundaVia: true, promessa: true, promessaMaxDias: 400, estoque: true, candidatura: true } })).status, 400);
+
+  await ok('PUT', '/crm/ia-agente', { ativo: false, canais: [], instrucoes: '', conhecimento: '', maxRespostas: 10, ferramentas: cfg.ferramentas });
+  for (const e of ligados) await ok('PATCH', `/crm/ia-agentes/${e.id}`, { ativo: true });
+  await ok('DELETE', `/produtos/${prod.id}`).catch(() => undefined);
+  await ok('DELETE', `/crm/canais/${c.id}`);
+});

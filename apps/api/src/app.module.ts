@@ -73,6 +73,7 @@ import { AtendimentoController } from './crm/atendimento.controller';
 import { CrmService } from './crm/crm.service';
 import { CanaisService } from './crm/canais.service';
 import { TranscricaoService } from './crm/transcricao.service';
+import { FerramentasAgenteService } from './crm/ferramentas-agente.service';
 import { AgenteService } from './crm/agente.service';
 import { IaService } from './ia/ia.service';
 import { IaController } from './ia/ia.controller';
@@ -154,6 +155,7 @@ if (!segredo || (process.env.NODE_ENV === 'production' && segredo.length < 32)) 
     MetaService,
     CanaisService,
     TranscricaoService,
+    FerramentasAgenteService,
     AgenteService,
     IaService,
     AutomacaoService,
