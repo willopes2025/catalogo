@@ -42,6 +42,10 @@ export const empresas = pgTable('empresas', {
   tipo: tipoEmpresa('tipo').notNull().default('matriz'),
   cidade: text('cidade'),
   uf: text('uf'),
+  /** Endereço completo da sede, como sai no contrato (rua, número, bairro, cidade/UF, CEP). */
+  endereco: text('endereco'),
+  telefone: text('telefone'),
+  email: text('email'),
   ativo: boolean('ativo').notNull().default(true),
   criadoEm: criadoEm(),
 });

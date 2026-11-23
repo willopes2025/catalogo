@@ -288,7 +288,7 @@ export function Empresas() {
   const [edit, setEdit] = useState<Record<string, any>>({});
   const cnpj = useConsulta('cnpj');
   const salvar = useMutation({
-    mutationFn: (e: any) => api(`/empresas/${e.id}`, { metodo: 'PATCH', corpo: { nome: e.nome, razaoSocial: e.razaoSocial, cnpj: e.cnpj, inscricaoEstadual: e.inscricaoEstadual, cidade: e.cidade, uf: e.uf } }),
+    mutationFn: (e: any) => api(`/empresas/${e.id}`, { metodo: 'PATCH', corpo: { nome: e.nome, razaoSocial: e.razaoSocial, cnpj: e.cnpj, inscricaoEstadual: e.inscricaoEstadual, cidade: e.cidade, uf: e.uf, endereco: e.endereco, telefone: e.telefone, email: e.email } }),
     onSuccess: () => { setEdit({}); qc.invalidateQueries({ queryKey: ['empresas'] }); },
   });
   if (q.isLoading) return <Carregando />;
@@ -314,6 +314,9 @@ export function Empresas() {
             <Campo rotulo="Inscrição estadual"><input value={e.inscricaoEstadual ?? ''} onChange={set('inscricaoEstadual')} disabled={!editavel} /></Campo>
             <Campo rotulo="Cidade"><input value={e.cidade ?? ''} onChange={set('cidade')} disabled={!editavel} /></Campo>
             <Campo rotulo="UF"><input value={e.uf ?? ''} maxLength={2} onChange={set('uf')} disabled={!editavel} /></Campo>
+            <Campo rotulo="Endereço da sede" className="l4" ajuda="Como sai no contrato: rua, número, sala, bairro, cidade/UF e CEP."><input value={e.endereco ?? ''} onChange={set('endereco')} disabled={!editavel} /></Campo>
+            <Campo rotulo="Telefone" className="l2"><input value={e.telefone ?? ''} onChange={set('telefone')} disabled={!editavel} /></Campo>
+            <Campo rotulo="E-mail" className="l2"><input value={e.email ?? ''} onChange={set('email')} disabled={!editavel} /></Campo>
             {editavel && <div className="l4"><button className="botao" disabled={!edit[e0.id] || salvar.isPending} onClick={() => salvar.mutate(e)}>Salvar</button></div>}
           </div>
         );

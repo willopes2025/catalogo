@@ -16,6 +16,9 @@ const empresaSchema = z
     inscricaoEstadual: opcional(30),
     cidade: opcional(80),
     uf: opcional(2),
+    endereco: opcional(300),
+    telefone: opcional(30),
+    email: opcional(150),
     ativo: z.boolean().optional(),
   })
   .superRefine((e, ctx) => {

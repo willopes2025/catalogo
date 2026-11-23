@@ -202,7 +202,8 @@ test('promissória da maleta traz valor por extenso e dados da representante', a
 
 test('contrato: geração, código por e-mail e assinatura com evidências', async () => {
   const doc = await ok('POST', '/documentos', { pessoaId: ctx.rep.id, tipo: 'contrato' });
-  assert.match(doc.conteudo, /30%/, 'comissão à vista das regras entra no texto');
+  assert.match(doc.conteudo, /^CONTRATO ESTIMATÓRIO PARA VENDAS EM CONSIGNAÇÃO/, 'o contrato instalado é o da Aritana');
+  assert.match(doc.conteudo, /Cláusula 20ª/);
   assert.ok(!doc.conteudo.includes('{{'), 'nenhuma variável sobrando');
   const salvo = token;
   token = '';
