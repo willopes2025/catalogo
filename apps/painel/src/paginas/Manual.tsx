@@ -203,6 +203,17 @@ const SECOES: Secao[] = [
     ],
   },
   {
+    id: 'mesa',
+    titulo: 'Minha mesa: conversa interna, tarefas e painel do setor',
+    passos: [
+      { t: 'O que é', d: 'Minha mesa fica no alto do menu, para todo mundo que usa o painel. Reúne três coisas: o painel com os indicadores do seu setor, as suas tarefas e a conversa interna com a equipe.' },
+      { t: 'Conversa interna', d: 'Clique no nome de uma pessoa da equipe para abrir a conversa com ela (a bolinha verde mostra quem está usando o sistema agora). "Novo grupo" cria uma conversa com várias pessoas; dá para marcar um setor inteiro de uma vez. Só quem participa da conversa lê as mensagens. Enter envia; Shift+Enter pula linha.' },
+      { t: 'Aviso na tela', d: 'Quando chega uma mensagem ou alguém passa uma tarefa para você, aparece um aviso no canto de baixo da tela, em qualquer página, e o número ao lado de "Minha mesa" no menu mostra as mensagens não lidas e as tarefas atrasadas. Clicar no aviso abre a conversa. O aviso pode levar até 15 segundos para aparecer.' },
+      { t: 'Tarefas', d: '"Nova tarefa" cria uma tarefa para você ou para outra pessoa, com prazo e prioridade. As suas tarefas aparecem também no Início. Quem recebeu marca como feita; mudar o texto, o prazo ou o responsável é com quem passou a tarefa ou com a gestão. "Que eu passei" mostra o que você delegou e ainda não foi feito; a gestão tem também "Da equipe toda".' },
+      { t: 'Painel do setor', d: 'Cada pessoa vê os indicadores do setor dela (o setor é o grupo de usuários). Quem pode editar Configurações usa o botão "Painel do setor" para escolher até 12 indicadores por setor: vendas, maletas, acertos atrasados, a receber vencido, a pagar, promessas de pagamento, fila do CRM, candidatas, estoque mínimo, garantias e tarefas atrasadas. Sem escolha, aparecem os dos módulos a que a pessoa tem acesso. Indicador de um módulo que a pessoa não pode ver não aparece para ela.' },
+    ],
+  },
+  {
     id: 'ia',
     titulo: 'Inteligência artificial',
     passos: [

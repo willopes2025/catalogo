@@ -1,0 +1,58 @@
+/* Minha mesa */
+.mesa-painel { margin-bottom: 14px; }
+.mesa-indicadores { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+.mesa-ind { display: flex; flex-direction: column; gap: 2px; padding: 12px 14px; color: inherit; text-decoration: none; transition: transform 0.15s, box-shadow 0.15s; }
+.mesa-ind:hover { transform: translateY(-1px); box-shadow: 0 6px 16px rgba(43, 35, 29, 0.1); }
+.mesa-ind .rotulo { font-size: 12.5px; color: var(--suave); }
+.mesa-ind .valor { font-size: 22px; font-weight: 700; }
+.mesa-ind.alerta { border-color: #d9a441; background: #fdf6e3; }
+.mesa-ind.alerta .valor { color: #9a5b00; }
+.mesa-grade { display: grid; grid-template-columns: minmax(300px, 1fr) minmax(420px, 1.5fr); gap: 14px; align-items: start; }
+.mesa-catalogo { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 14px; margin-top: 10px; max-height: 300px; overflow-y: auto; }
+.mesa-tarefas { display: flex; flex-direction: column; }
+.mesa-tarefa { display: flex; gap: 10px; align-items: flex-start; padding: 9px 4px; border-top: 1px dashed var(--linha); cursor: pointer; }
+.mesa-tarefa:first-child { border-top: 0; }
+.mesa-tarefa input { margin-top: 3px; width: auto; flex: none; }
+.mesa-tarefa .etiqueta { align-self: flex-start; margin: 0 !important; }
+.mesa-tarefa > span { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.mesa-tarefa .descricao { font-size: 13.5px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.mesa-tarefa .muted { font-size: 12.5px; }
+.mesa-tarefa.atrasada .muted { color: #a23a2a; }
+.mesa-tarefa.feita b { text-decoration: line-through; color: var(--suave); }
+.mesa-chat { display: grid; grid-template-columns: 220px 1fr; gap: 0; padding: 0; min-height: 520px; height: calc(100vh - 330px); overflow: hidden; }
+.mesa-lista { padding: 12px; border-right: 1px solid var(--linha); overflow-y: auto; }
+.mesa-conversa { display: flex; flex-direction: column; gap: 1px; width: 100%; text-align: left; font: inherit; padding: 7px 8px; border: 0; border-radius: 8px; background: none; cursor: pointer; color: inherit; }
+.mesa-conversa:hover { background: var(--creme-2); }
+.mesa-conversa.ativa { background: #efe4d1; }
+.mesa-conversa .nome { font-weight: 600; display: flex; align-items: center; }
+.mesa-conversa .muted { font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mesa-ponto { width: 8px; height: 8px; border-radius: 50%; background: #c9bfae; margin-right: 6px; flex-shrink: 0; }
+.mesa-ponto.on { background: #3f9b5b; }
+.mesa-vazio { display: flex; align-items: center; justify-content: center; padding: 24px; text-align: center; }
+.mesa-conversa-aberta { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.mesa-cabecalho { padding: 10px 14px; border-bottom: 1px solid var(--linha); display: flex; gap: 8px; align-items: center; }
+.mesa-voltar { display: none; }
+.mesa-mensagens { flex: 1; overflow-y: auto; padding: 14px; display: flex; flex-direction: column; gap: 8px; min-height: 0; }
+.mesa-msg { align-self: flex-start; max-width: 78%; background: var(--creme-2); border-radius: 12px 12px 12px 3px; padding: 7px 11px; display: flex; flex-direction: column; }
+.mesa-msg.minha { align-self: flex-end; background: #e9dcc4; border-radius: 12px 12px 3px 12px; }
+.mesa-msg .de { font-size: 12px; font-weight: 700; color: var(--marrom); }
+.mesa-msg .texto { white-space: pre-wrap; overflow-wrap: anywhere; }
+.mesa-msg .hora { font-size: 10.5px; color: var(--suave); align-self: flex-end; }
+.mesa-escrever { display: flex; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--linha); }
+.mesa-escrever textarea { flex: 1; resize: none; min-height: 40px; max-height: 120px; }
+/* Aviso na tela (mensagem ou tarefa nova), em qualquer página */
+.mesa-avisos { position: fixed; right: 18px; bottom: 18px; z-index: 60; display: flex; flex-direction: column; gap: 8px; width: min(340px, calc(100vw - 36px)); }
+.mesa-aviso { display: flex; align-items: flex-start; background: #3d3027; color: #faf6ef; border-radius: 10px; box-shadow: 0 10px 28px rgba(0, 0, 0, 0.28); animation: mesa-entrar 0.25s ease; }
+.mesa-aviso a { flex: 1; min-width: 0; padding: 11px 6px 11px 14px; color: inherit; text-decoration: none; display: flex; flex-direction: column; gap: 2px; }
+.mesa-aviso a span { font-size: 13.5px; opacity: 0.9; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.mesa-aviso button { background: none; border: 0; color: inherit; font-size: 18px; padding: 8px 12px; cursor: pointer; opacity: 0.7; }
+@keyframes mesa-entrar { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+@media (max-width: 1100px) { .mesa-grade { grid-template-columns: 1fr; } }
+@media (max-width: 700px) {
+  .mesa-chat { grid-template-columns: 1fr; height: auto; }
+  .mesa-chat:has(.mesa-conversa-aberta) .mesa-lista { display: none; }
+  .mesa-chat:not(:has(.mesa-conversa-aberta)) .mesa-vazio { display: none; }
+  .mesa-conversa-aberta { height: 70vh; }
+  .mesa-voltar { display: inline-block; }
+  .mesa-catalogo { grid-template-columns: 1fr; }
+}

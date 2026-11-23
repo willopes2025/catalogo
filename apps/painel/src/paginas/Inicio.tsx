@@ -1,3 +1,4 @@
+import { Tarefas } from './Mesa';
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link, useNavigate } from 'react-router-dom';
@@ -175,6 +176,7 @@ export function Inicio() {
             </div>
           )}
           {d.tarefas.length > 0 && <MinhasTarefas tarefas={d.tarefas} />}
+          <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px dashed var(--linha)' }}><Tarefas resumida /></div>
         </div>
       </div>
 

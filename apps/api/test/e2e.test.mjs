@@ -3665,3 +3665,107 @@ test('ferramentas do agente de IA: reconhece o número, parcelas, 2ª via, prome
   await ok('DELETE', `/produtos/${prod.id}`).catch(() => undefined);
   await ok('DELETE', `/crm/canais/${c.id}`);
 });
+
+test('minha mesa: conversa direta e em grupo, não lidas e aviso, tarefas com responsável, painel do setor', async () => {
+  const admin = token;
+  const grupos = await ok('GET', '/grupos');
+  const fin = grupos.find((g) => g.nome === 'Financeiro');
+  const novo = async (nome, email) => {
+    token = admin;
+    const u = await ok('POST', '/usuarios', { nome, email, grupoId: fin.id });
+    token = (await ok('POST', '/auth/login', { email, senha: u.senhaProvisoria })).token;
+    await ok('POST', '/auth/trocar-senha', { atual: u.senhaProvisoria, nova: 'SenhaDaMesa2026x' });
+    return { id: u.id, token };
+  };
+  const ana = await novo('Ana Mesa Teste', 'ana.mesa@aritana.local');
+  const bia = await novo('Bia Mesa Teste', 'bia.mesa@aritana.local');
+  const eu = (await (token = admin, ok('GET', '/auth/eu'))).id;
+  const como = (t) => { token = t; };
+  const antes = new Date(Date.now() - 1000).toISOString();
+
+  // Conversa direta: a mesma, de qualquer um dos dois lados.
+  como(ana.token);
+  assert.ok((await ok('GET', '/mesa/equipe')).some((p) => p.id === bia.id && p.setor === 'Financeiro'));
+  const c = await ok('POST', '/mesa/conversas', { usuarioIds: [bia.id] });
+  await ok('POST', `/mesa/conversas/${c.id}/mensagens`, { texto: 'Bia, o boleto da Maria já caiu?' });
+  como(bia.token);
+  assert.equal((await ok('POST', '/mesa/conversas', { usuarioIds: [ana.id] })).id, c.id, 'não abre uma segunda conversa com a mesma pessoa');
+  let r = await ok('GET', `/mesa/resumo?desde=${encodeURIComponent(antes)}`);
+  assert.equal(r.naoLidas, 1);
+  assert.deepEqual([r.novas.mensagens[0].de, r.novas.mensagens[0].texto, r.novas.mensagens[0].conversaId], ['Ana Mesa Teste', 'Bia, o boleto da Maria já caiu?', c.id]);
+  const lista = await ok('GET', '/mesa/conversas');
+  assert.deepEqual([lista[0].nome, lista[0].naoLidas, lista[0].direta], ['Ana Mesa Teste', 1, true]);
+  // Abrir marca como lida; a resposta chega para a Ana.
+  assert.equal((await ok('GET', `/mesa/conversas/${c.id}/mensagens`)).mensagens.length, 1);
+  assert.equal((await ok('GET', '/mesa/resumo')).naoLidas, 0);
+  await ok('POST', `/mesa/conversas/${c.id}/mensagens`, { texto: 'Caiu hoje cedo.' });
+  como(ana.token);
+  assert.equal((await ok('GET', '/mesa/resumo')).naoLidas, 1);
+  // Quem não participa não lê nem escreve.
+  como(admin);
+  assert.equal((await chamar('GET', `/mesa/conversas/${c.id}/mensagens`)).status, 404);
+  assert.equal((await chamar('POST', `/mesa/conversas/${c.id}/mensagens`, { texto: 'intruso' })).status, 404);
+  assert.ok(!(await ok('GET', '/mesa/conversas')).some((x) => x.id === c.id));
+  // Grupo precisa de nome; todos os participantes recebem.
+  assert.equal((await chamar('POST', '/mesa/conversas', { usuarioIds: [ana.id, bia.id] })).status, 400);
+  const g = await ok('POST', '/mesa/conversas', { usuarioIds: [ana.id, bia.id], nome: 'Financeiro' });
+  await ok('POST', `/mesa/conversas/${g.id}/mensagens`, { texto: 'Fechamento do mês é sexta.' });
+  como(bia.token);
+  const grupo = (await ok('GET', '/mesa/conversas')).find((x) => x.id === g.id);
+  assert.deepEqual([grupo.nome, grupo.direta, grupo.naoLidas, grupo.participantes.length], ['Financeiro', false, 1, 3]);
+  assert.equal((await chamar('POST', `/mesa/conversas/${g.id}/mensagens`, { texto: '   ' })).status, 400);
+
+  // Tarefas: a gestão passa uma tarefa; a responsável é avisada, conclui, mas não muda o prazo.
+  como(admin);
+  const ontem = new Date(Date.now() - 3 * 3600_000 - 86400_000).toISOString().slice(0, 10);
+  const t = await ok('POST', '/mesa/tarefas', { titulo: 'Conferir extrato do Asaas', responsavelId: bia.id, venceEm: ontem, prioridade: 'alta' });
+  const minha = await ok('POST', '/mesa/tarefas', { titulo: 'Ligar para o contador' });
+  assert.equal(minha.responsavelId, eu);
+  assert.equal((await chamar('POST', '/mesa/tarefas', { titulo: 'x' })).status, 400);
+  como(bia.token);
+  r = await ok('GET', `/mesa/resumo?desde=${encodeURIComponent(antes)}`);
+  assert.deepEqual([r.tarefasAbertas, r.tarefasAtrasadas, r.novas.tarefas[0].titulo], [1, 1, 'Conferir extrato do Asaas']);
+  const dela = await ok('GET', '/mesa/tarefas');
+  assert.deepEqual([dela.length, dela[0].atrasada, dela[0].prioridade, dela[0].criadoPorId], [1, true, 'alta', eu]);
+  assert.equal((await chamar('PATCH', `/mesa/tarefas/${t.id}`, { venceEm: '2030-01-01' })).status, 403, 'quem recebeu a tarefa não muda o prazo');
+  assert.equal((await chamar('PATCH', `/mesa/tarefas/${minha.id}`, { feita: true })).status, 403, 'tarefa de outra pessoa');
+  assert.equal((await chamar('GET', '/mesa/tarefas?filtro=equipe')).status, 403);
+  await ok('PATCH', `/mesa/tarefas/${t.id}`, { feita: true });
+  assert.equal((await ok('GET', '/mesa/tarefas')).length, 0);
+  assert.equal((await ok('GET', '/mesa/tarefas?feitas=1')).length, 1);
+  como(admin);
+  assert.ok((await ok('GET', '/mesa/tarefas?filtro=equipe')).some((x) => x.id === minha.id));
+  assert.equal((await ok('GET', '/mesa/tarefas?filtro=criadas')).length, 0, 'a que passei já foi feita');
+  await ok('PATCH', `/mesa/tarefas/${t.id}`, { feita: false, venceEm: '2030-01-01', responsavelId: ana.id });
+  assert.equal((await ok('GET', '/mesa/tarefas?filtro=criadas'))[0].responsavel, 'Ana Mesa Teste');
+
+  // Painel do setor: padrão pelos módulos da pessoa; a gestão escolhe o do setor.
+  como(bia.token);
+  let p = await ok('GET', '/mesa/painel');
+  assert.equal(p.setor, 'Financeiro');
+  assert.equal(p.personalizado, false);
+  assert.ok(p.indicadores.some((i) => i.chave === 'receber_vencido') && !p.indicadores.some((i) => i.chave === 'crm_fila'), 'só indicadores dos módulos que ela vê');
+  assert.equal(p.catalogo, undefined);
+  assert.equal((await chamar('PUT', '/mesa/painel', { grupoId: fin.id, indicadores: ['receber_vencido'] })).status, 403);
+  como(admin);
+  assert.equal((await chamar('PUT', '/mesa/painel', { grupoId: fin.id, indicadores: ['nao_existe'] })).status, 400);
+  await ok('PUT', '/mesa/painel', { grupoId: fin.id, indicadores: ['pagar_semana', 'receber_vencido', 'crm_fila'] });
+  assert.ok((await ok('GET', '/mesa/painel')).setores.find((s) => s.id === fin.id).indicadores.includes('pagar_semana'));
+  como(bia.token);
+  p = await ok('GET', '/mesa/painel');
+  assert.deepEqual([p.personalizado, p.indicadores.map((i) => i.chave)], [true, ['pagar_semana', 'receber_vencido']], 'o do CRM não aparece: ela não tem o módulo');
+  assert.equal(typeof p.indicadores[1].valor, 'number');
+  como(admin);
+  await ok('PUT', '/mesa/painel', { grupoId: fin.id, indicadores: [] });
+  // Todos os indicadores do catálogo rodam sem erro para quem tem acesso total.
+  const todos = (await ok('GET', '/mesa/painel')).catalogo.map((x) => x.chave);
+  const nomeDoMeuGrupo = (await ok('GET', '/auth/eu')).grupo;
+  const meuGrupo = (await ok('GET', '/mesa/painel')).setores.find((s) => s.nome === nomeDoMeuGrupo) ?? null;
+  if (meuGrupo) {
+    for (let i = 0; i < todos.length; i += 12) {
+      await ok('PUT', '/mesa/painel', { grupoId: meuGrupo.id, indicadores: todos.slice(i, i + 12) });
+      assert.equal((await ok('GET', '/mesa/painel')).indicadores.length, todos.slice(i, i + 12).length);
+    }
+    await ok('PUT', '/mesa/painel', { grupoId: meuGrupo.id, indicadores: [] });
+  }
+});

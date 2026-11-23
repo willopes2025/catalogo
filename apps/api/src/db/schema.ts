@@ -2127,3 +2127,60 @@ export const assistenteAnexos = pgTable('assistente_anexos', {
   extrato: text('extrato'),
   criadoEm: criadoEm(),
 });
+
+// ───────────────────────── Minha mesa: chat interno e tarefas da equipe ─────────────────────────
+
+/** Conversa interna entre pessoas da equipe: direta (duas pessoas) ou em grupo. */
+export const mesaConversas = pgTable('mesa_conversas', {
+  id: id(),
+  /** Nome do grupo; vazio na conversa direta (a tela mostra o nome da outra pessoa). */
+  nome: text('nome'),
+  direta: boolean('direta').notNull().default(false),
+  /** Conversa direta: os dois ids em ordem, para não abrir duas com a mesma pessoa. */
+  chave: text('chave').unique(),
+  criadoPor: uuid('criado_por').references(() => usuarios.id, { onDelete: 'set null' }),
+  ultimaEm: timestamp('ultima_em', { withTimezone: true }).notNull().defaultNow(),
+  criadoEm: criadoEm(),
+});
+
+export const mesaParticipantes = pgTable(
+  'mesa_participantes',
+  {
+    conversaId: uuid('conversa_id').notNull().references(() => mesaConversas.id, { onDelete: 'cascade' }),
+    usuarioId: uuid('usuario_id').notNull().references(() => usuarios.id, { onDelete: 'cascade' }),
+    /** Até quando a pessoa leu. */
+    lidoAte: timestamp('lido_ate', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({ pk: primaryKey({ columns: [t.conversaId, t.usuarioId] }), porUsuario: index('mesa_participantes_usuario_idx').on(t.usuarioId) }),
+);
+
+export const mesaMensagens = pgTable(
+  'mesa_mensagens',
+  {
+    id: id(),
+    conversaId: uuid('conversa_id').notNull().references(() => mesaConversas.id, { onDelete: 'cascade' }),
+    usuarioId: uuid('usuario_id').references(() => usuarios.id, { onDelete: 'set null' }),
+    texto: text('texto').notNull(),
+    criadoEm: criadoEm(),
+  },
+  (t) => ({ porConversa: index('mesa_mensagens_conversa_idx').on(t.conversaId, t.criadoEm) }),
+);
+
+/** Tarefa da equipe (não ligada a um card do CRM): alguém cria, alguém é responsável. */
+export const mesaTarefas = pgTable(
+  'mesa_tarefas',
+  {
+    id: id(),
+    titulo: text('titulo').notNull(),
+    descricao: text('descricao'),
+    responsavelId: uuid('responsavel_id').notNull().references(() => usuarios.id, { onDelete: 'cascade' }),
+    criadoPor: uuid('criado_por').references(() => usuarios.id, { onDelete: 'set null' }),
+    venceEm: date('vence_em'),
+    /** baixa | normal | alta */
+    prioridade: text('prioridade').notNull().default('normal'),
+    feitaEm: timestamp('feita_em', { withTimezone: true }),
+    feitaPor: uuid('feita_por').references(() => usuarios.id, { onDelete: 'set null' }),
+    criadoEm: criadoEm(),
+  },
+  (t) => ({ abertas: index('mesa_tarefas_abertas_idx').on(t.responsavelId, t.feitaEm) }),
+);

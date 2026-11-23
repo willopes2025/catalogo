@@ -4,13 +4,14 @@ import { MODULOS } from '@aritana/regras';
 import { useQuery } from '@tanstack/react-query';
 import { api, atualizarUsuario, lerSessao, pode, salvarSessao } from '../api';
 import { Softphone } from './Softphone';
+import { AvisosDaMesa, usarAvisosDaMesa } from '../paginas/Mesa';
 
 /** Rotas já construídas nesta etapa; as demais abrem a página "em construção". */
 const ROTAS: Record<string, string> = { inicio: '/', assistente: '/assistente', rede: '/rede', cadastros: '/cadastros', produtos: '/produtos', estoque: '/estoque', maletas: '/maletas', vendas: '/vendas', lojas: '/lojas', financeiro: '/financeiro', cobranca: '/cobranca', fiscal: '/fiscal', relatorios: '/relatorios', configuracoes: '/configuracoes', suporte: '/suporte', garantia: '/garantia', comissoes: '/comissoes', crm: '/crm', pontos: '/pontos', formularios: '/formularios', marketing: '/marketing', rh: '/rh' };
 
 /** Menu separado por assunto. Módulo novo que não estiver aqui aparece em "Outros". */
 const GRUPOS: { titulo: string; chaves: string[] }[] = [
-  { titulo: '', chaves: ['inicio', 'assistente'] },
+  { titulo: '', chaves: ['inicio', 'mesa', 'assistente'] },
   { titulo: 'Atendimento', chaves: ['crm', 'agenda', 'marketing', 'formularios'] },
   { titulo: 'Revendedoras', chaves: ['rede', 'maletas', 'pontos', 'comissoes'] },
   { titulo: 'Vendas', chaves: ['vendas', 'lojas', 'garantia'] },
@@ -54,6 +55,9 @@ export function Layout() {
   const avisoPonto = (ponto.data?.espelhosParaConfirmar?.length ?? 0) + (ponto.data?.documentosNovos ?? 0);
   // O que esta pessoa pode ver, separado por assunto e filtrado pela busca.
   const visiveis: { chave: string; nome: string; versao: number }[] = MODULOS.filter((m) => m.chave === 'suporte' || pode(m.chave, 'ver')).map((m) => ({ chave: m.chave, nome: m.nome, versao: m.versao as number }));
+  // Minha mesa (conversa interna, tarefas e painel do setor) é de todo mundo que usa o painel.
+  const mesa = usarAvisosDaMesa();
+  if (pode('inicio', 'ver')) visiveis.push({ chave: 'mesa', nome: 'Minha mesa', versao: 1 });
   if (ponto.data?.eFuncionario) visiveis.push({ chave: 'meu-ponto', nome: 'Meu ponto', versao: 1 });
   const agrupadas = new Set(GRUPOS.flatMap((g) => g.chaves));
   const termo = semAcento(busca.trim());
@@ -95,6 +99,7 @@ export function Layout() {
                 ) : (
                   <NavLink key={m.chave} to={m.chave === 'meu-ponto' ? '/meu-ponto' : (ROTAS[m.chave] ?? `/${m.chave}`)} end={m.chave === 'inicio'} onClick={() => setBusca('')} className={({ isActive }) => (isActive ? 'ativo' : '')}>
                     {m.nome}
+                    {m.chave === 'mesa' && mesa.total > 0 && <span className="bolha-menu" title="Mensagens não lidas e tarefas atrasadas">{mesa.total}</span>}
                     {m.chave === 'crm' && avisoCrm > 0 && <span className="bolha-menu" title="Na fila e não lidas">{avisoCrm}</span>}
                     {m.chave === 'meu-ponto' && avisoPonto > 0 && <span className="bolha-menu" title="Espelho para confirmar e documentos novos">{avisoPonto}</span>}
                   </NavLink>
@@ -124,6 +129,7 @@ export function Layout() {
         <Outlet />
       </main>
       <Softphone />
+      <AvisosDaMesa avisos={mesa.avisos} fechar={mesa.fechar} />
     </div>
   );
 }

@@ -267,6 +267,13 @@
       "when": 1795445408739,
       "tag": "0037_contrato_aritana",
       "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1795446999860,
+      "tag": "0038_minha_mesa",
+      "breakpoints": true
     }
   ]
 }
