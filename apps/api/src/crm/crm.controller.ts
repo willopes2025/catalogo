@@ -1,3 +1,4 @@
+import { IndicacoesService } from '../indicacoes/indicacoes.service';
 import { BadRequestException, Body, Controller, Get, Inject, NotFoundException, Param, ParseUUIDPipe, Patch, Post, Query, Req } from '@nestjs/common';
 import type { Request } from 'express';
 import { and, asc, desc, eq, or, sql, type SQL } from 'drizzle-orm';
@@ -47,6 +48,7 @@ export class CrmController {
     private readonly email: EmailService,
     private readonly segredos: SegredosService,
     private readonly crmSvc: CrmService,
+    private readonly indicacoesSvc: IndicacoesService,
   ) {}
 
   /** Toda candidatura vira (ou atualiza) um card no funil de recrutamento. */
@@ -91,10 +93,15 @@ export class CrmController {
       const preenchidos = Object.fromEntries(Object.entries(dados).filter(([, v]) => v !== null && v !== undefined && v !== ''));
       await this.db.update(candidaturas).set({ ...preenchidos, atualizadoEm: new Date() }).where(eq(candidaturas.id, aberta.id));
       await this.db.insert(candidaturaNotas).values({ candidaturaId: aberta.id, texto: 'Preencheu o formulário de novo.' });
+      // Vale a primeira indicação: só registra se ainda não tinha.
+      await this.indicacoesSvc.registrar(aberta.id, origem?.ref).catch(() => null);
       return { ok: true };
     }
-    const [c] = await this.db.insert(candidaturas).values({ ...dados, origem: { ...(origem ?? {}) } }).returning();
-    await this.auditoria.registrar({ acao: 'candidatura', entidade: 'candidatura', entidadeId: c.id, dados: { origem: origem?.utm_source ?? null } });
+    const [nova] = await this.db.insert(candidaturas).values({ ...dados, origem: { ...(origem ?? {}) } }).returning();
+    await this.auditoria.registrar({ acao: 'candidatura', entidade: 'candidatura', entidadeId: nova.id, dados: { origem: origem?.utm_source ?? null } });
+    // Veio pelo link de indicação de alguém: registra a indicação (e o card mostra quem indicou).
+    const indicada = await this.indicacoesSvc.registrar(nova.id, origem?.ref).catch(() => null);
+    const [c] = indicada ? await this.db.select().from(candidaturas).where(eq(candidaturas.id, nova.id)) : [nova];
     await this.cardDaCandidatura(c);
     const equipe = (await this.config.ler('avisos')).emailsEquipe;
     for (const para of equipe) {
@@ -163,9 +170,11 @@ export class CrmController {
   @Post('crm/candidaturas')
   @Permissao('crm', 'criar')
   async criar(@Usuario() u: UsuarioLogado, @Body() body: unknown) {
-    const d = validar(publicoSchema.omit({ consentimentoLgpd: true, site: true }).extend({ consentimentoLgpd: z.boolean().default(false) }), body);
-    const [c] = await this.db.insert(candidaturas).values({ ...d, origem: { utm_source: 'equipe', ...(d.origem ?? {}) }, responsavelId: u.id, etapa: 'contato' }).returning();
-    await this.auditoria.registrar({ usuarioId: u.id, acao: 'criar', entidade: 'candidatura', entidadeId: c.id });
+    const { codigoIndicacao, ...d } = validar(publicoSchema.omit({ consentimentoLgpd: true, site: true }).extend({ consentimentoLgpd: z.boolean().default(false), codigoIndicacao: z.string().trim().max(12).optional() }), body);
+    const [nova] = await this.db.insert(candidaturas).values({ ...d, origem: { utm_source: 'equipe', ...(d.origem ?? {}) }, responsavelId: u.id, etapa: 'contato' }).returning();
+    await this.auditoria.registrar({ usuarioId: u.id, acao: 'criar', entidade: 'candidatura', entidadeId: nova.id });
+    const indicada = codigoIndicacao ? await this.indicacoesSvc.registrar(nova.id, codigoIndicacao, u.id).catch(() => null) : null;
+    const [c] = indicada ? await this.db.select().from(candidaturas).where(eq(candidaturas.id, nova.id)) : [nova];
     await this.cardDaCandidatura(c, u.id);
     return c;
   }
@@ -191,6 +200,7 @@ export class CrmController {
     const { nota, ...campos } = d;
     const mudancas = Object.fromEntries(Object.entries(campos).filter(([, v]) => v !== undefined));
     if (Object.keys(mudancas).length) await this.db.update(candidaturas).set({ ...mudancas, atualizadoEm: new Date() }).where(eq(candidaturas.id, id));
+    if (d.etapa && d.etapa !== atual.etapa) await this.indicacoesSvc.aoMudarEtapa(id, d.etapa);
     const textos = [d.etapa && d.etapa !== atual.etapa ? `Mudou para "${d.etapa}"${d.motivoRecusa ? `: ${d.motivoRecusa}` : ''}.` : null, nota || null].filter(Boolean) as string[];
     for (const texto of textos) await this.db.insert(candidaturaNotas).values({ candidaturaId: id, usuarioId: u.id, texto });
     if (d.etapa && d.etapa !== atual.etapa) {
@@ -250,6 +260,8 @@ export class CrmController {
         })
         .returning();
       await tx.update(candidaturas).set({ etapa: 'aprovada', pessoaId: p.id, atualizadoEm: new Date() }).where(eq(candidaturas.id, id));
+      // Veio por indicação: passa a esperar o primeiro pedido pago para liberar o prêmio.
+      await this.indicacoesSvc.aoAprovar(id, p.id, tx);
       await tx.insert(candidaturaNotas).values({ candidaturaId: id, usuarioId: u.id, texto: `Aprovada no modelo ${d.modeloTrabalho}. Representante criada.` });
       await this.auditoria.registrar({ usuarioId: u.id, acao: 'aprovar', entidade: 'candidatura', entidadeId: id, dados: { pessoaId: p.id } }, tx);
       // Card do recrutamento vai para "Aprovada" e passa a apontar para a revendedora.

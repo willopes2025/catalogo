@@ -3275,9 +3275,9 @@ test('financeiro gerencial: plano de contas, lançamentos classificados, contas 
   assert.equal((await chamar('POST', '/financeiro/plano-contas', { nome: 'Dentro do CMV', paiId: daChave('cmv').id })).status, 400);
   // Mover de grupo leva as subcontas junto (grupo e código).
   const movida = await ok('PATCH', `/financeiro/plano-contas/${aluguel.id}`, { paiId: raiz('despesas_vendas').id });
-  assert.deepEqual([movida.grupo, movida.codigo], ['despesas_vendas', '4.08']);
+  assert.deepEqual([movida.grupo, movida.codigo], ['despesas_vendas', '4.09']);
   plano = await ok('GET', '/financeiro/plano-contas');
-  assert.deepEqual([plano.contas.find((c) => c.id === sub.id).grupo, plano.contas.find((c) => c.id === sub.id).codigo], ['despesas_vendas', '4.08.01']);
+  assert.deepEqual([plano.contas.find((c) => c.id === sub.id).grupo, plano.contas.find((c) => c.id === sub.id).codigo], ['despesas_vendas', '4.09.01']);
   assert.equal((await chamar('PATCH', `/financeiro/plano-contas/${aluguel.id}`, { paiId: sub.id })).status, 400, 'não entra dentro da própria subconta');
   await ok('PATCH', `/financeiro/plano-contas/${aluguel.id}`, { paiId: raiz('despesas_administrativas').id, nome: 'Aluguel loja centro' });
   assert.equal((await chamar('DELETE', `/financeiro/plano-contas/${daChave('comissoes').id}`)).status, 400, 'conta do sistema não é excluída');
@@ -4009,4 +4009,119 @@ test('minha mesa: anexos só para quem participa, painel por pessoa; modelo do a
   assert.match(aditivo.conteudo, /^MODELO PROVISÓRIO/);
   assert.match(aditivo.conteudo, /A Cláusula 10ª do contrato passa a vigorar acrescida/);
   assert.match(aditivo.conteudo, /\{\{nome\}\}/);
+});
+
+test('indique e ganhe: link de cada um (equipe e consultora), convite, aprovação, prêmio no 1º pagamento, equipe com outro valor, cancelar e ligar à mão', async () => {
+  const admin = token;
+  const cpfDe = (base) => { const d = String(base).padStart(9, '0').slice(0, 9).split('').map(Number); for (const n of [9, 10]) { let s = 0; for (let i = 0; i < n; i++) s += d[i] * (n + 1 - i); const r = (s * 10) % 11; d.push(r === 10 ? 0 : r); } return d.join(''); };
+  let ip = 0;
+  const candidatar = async (corpo) => {
+    const r = await fetch(`${API}/publico/candidaturas`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-forwarded-for': `10.77.0.${++ip}` }, body: JSON.stringify({ cidade: 'Serra', uf: 'ES', modeloInteresse: 'consignado', consentimentoLgpd: true, ...corpo }) });
+    assert.equal(r.status, 201, JSON.stringify(await r.clone().json().catch(() => ({}))));
+  };
+  const candidataPor = async (nome) => { const c = (await ok('GET', '/crm/candidaturas')).find((x) => x.nome === nome); return ok('GET', `/crm/candidaturas/${c.id}`); };
+  const regras0 = await ok('GET', '/indicacoes/regras');
+  assert.deepEqual([regras0.ativo, regras0.valor, regras0.valorEquipe], [true, 5000, null]);
+
+  // Equipe: link na Minha mesa, sempre o mesmo código.
+  const meu = await ok('GET', '/indicacoes/meu');
+  assert.match(meu.link, new RegExp(`/i/${meu.codigo}$`));
+  assert.equal((await ok('GET', '/indicacoes/meu')).codigo, meu.codigo);
+  assert.equal(meu.premio, 5000);
+
+  // Consultora: link no portal.
+  const rosa = await ok('POST', '/pessoas', { tipo: 'representante', nome: 'Rosa Indicadora Teste', documento: cpfDe(771000099), telefone1: '27997710099', email: 'rosa.indicadora@exemplo.com', cidade: 'Serra', uf: 'ES', modeloTrabalho: 'consignado', limiteCredito: 100000 });
+  const acesso = await ok('POST', `/portal/gerar-link/${rosa.id}`, {});
+  token = '';
+  const portal = (await ok('POST', `/portal/link/${acesso.token}`, {})).token;
+  token = portal;
+  const daRep = await ok('GET', '/portal/indicacoes');
+  assert.notEqual(daRep.codigo, meu.codigo);
+  assert.equal((await chamar('GET', '/indicacoes/meu')).status, 401, 'token do portal não abre a área da equipe');
+
+  // Convite público mostra só o primeiro nome.
+  token = '';
+  assert.deepEqual(await ok('GET', `/publico/indicacao/${daRep.codigo.toLowerCase()}`), { nome: 'Rosa' });
+  assert.equal((await chamar('GET', '/publico/indicacao/NAOEXISTE')).status, 404);
+
+  // Candidata pelo link da consultora; a própria consultora tentando se indicar não conta.
+  await candidatar({ nome: 'Ivone Indicada Teste', telefone: '(27) 99771-0001', cpf: cpfDe(771000011), origem: { ref: daRep.codigo, utm_source: 'indicacao' } });
+  await candidatar({ nome: 'Ela Mesma Teste', telefone: '(27) 99771-0099', origem: { ref: daRep.codigo } });
+  token = admin;
+  let lista = await ok('GET', '/indicacoes');
+  const iv = lista.itens.find((i) => i.indicada === 'Ivone Indicada Teste');
+  assert.deepEqual([iv.status, iv.indicador, iv.indicadorTipo], ['candidata', 'Rosa Indicadora Teste', 'consultora']);
+  assert.ok(!lista.itens.some((i) => i.indicada === 'Ela Mesma Teste'), 'ninguém indica a si mesmo');
+  const cand = await candidataPor('Ivone Indicada Teste');
+  assert.match(cand.indicadaPor, /Rosa Indicadora Teste \(link de indicação\)/);
+  // Mandou o formulário de novo por outro link: continua a primeira indicação.
+  token = '';
+  await candidatar({ nome: 'Ivone Indicada Teste', telefone: '(27) 99771-0001', cpf: cpfDe(771000011), origem: { ref: meu.codigo } });
+  token = admin;
+  assert.equal((await ok('GET', '/indicacoes')).itens.filter((i) => i.indicada === 'Ivone Indicada Teste').length, 1);
+
+  // Aprovada: espera o 1º pedido pago. Nada pago ainda, nada liberado.
+  const { pessoaId: ivone } = await ok('POST', `/crm/candidaturas/${cand.id}/aprovar`, { modeloTrabalho: 'revenda' });
+  assert.equal((await ok('GET', '/indicacoes?status=aprovada')).itens.find((i) => i.indicada === 'Ivone Indicada Teste').indicadaPessoaId, ivone);
+  assert.equal((await ok('POST', '/indicacoes/verificar')).liberadas, 0);
+  // Primeiro pagamento dela: o prêmio é liberado e vira conta a pagar para a consultora que indicou.
+  const emp = (await ok('GET', '/empresas'))[0];
+  const [t] = await ok('POST', '/financeiro/titulos', { empresaId: emp.id, tipo: 'receber', pessoaId: ivone, descricao: 'Primeira compra Ivone', valor: 30000, vencimento: new Date(Date.now() - 3 * 3600_000).toISOString().slice(0, 10) });
+  await ok('POST', `/financeiro/titulos/${t.id}/baixar`, {});
+  assert.equal((await ok('POST', '/indicacoes/verificar')).liberadas, 1);
+  assert.equal((await ok('POST', '/indicacoes/verificar')).liberadas, 0, 'não libera duas vezes');
+  lista = await ok('GET', '/indicacoes');
+  const liberada = lista.itens.find((i) => i.indicada === 'Ivone Indicada Teste');
+  assert.deepEqual([liberada.status, liberada.valor], ['liberada', 5000]);
+  assert.match(liberada.motivoLiberacao, /Primeira compra Ivone/);
+  const premios = await ok('GET', `/financeiro/titulos?tipo=pagar&pessoaId=${rosa.id}`);
+  const premio = (premios.itens ?? premios).find((x) => x.id === liberada.tituloId);
+  assert.deepEqual([premio.valor, premio.status, premio.descricao], [5000, 'aberto', 'Prêmio por indicação · Rosa Indicadora Teste indicou Ivone Indicada Teste']);
+  // A consultora vê no portal: só o primeiro nome e a cidade.
+  token = portal;
+  const vis = await ok('GET', '/portal/indicacoes');
+  assert.deepEqual([vis.itens[0].nome, vis.itens[0].cidade, vis.itens[0].status, vis.totais.aReceber], ['Ivone', 'Serra/ES', 'liberada', 5000]);
+  assert.ok(!JSON.stringify(vis).includes('Indicada Teste'), 'sem o nome completo da indicada');
+  // Pago o prêmio, aparece como pago.
+  token = admin;
+  await ok('POST', `/financeiro/titulos/${premio.id}/baixar`, {});
+  token = portal;
+  assert.equal((await ok('GET', '/portal/indicacoes')).totais.recebido, 5000);
+
+  // Equipe com outro valor (afiliada: vale o primeiro pedido pelo link faturado, ou um pagamento).
+  token = admin;
+  await ok('PUT', '/indicacoes/regras', { ...regras0, valorEquipe: 3000 });
+  assert.equal((await chamar('PUT', '/indicacoes/regras', { ...regras0, validadeDias: 1 })).status, 400);
+  token = '';
+  await candidatar({ nome: 'Joana Da Equipe Teste', telefone: '(27) 99771-0002', cpf: cpfDe(771000022), origem: { ref: meu.codigo } });
+  token = admin;
+  const c2 = await candidataPor('Joana Da Equipe Teste');
+  const { pessoaId: joana } = await ok('POST', `/crm/candidaturas/${c2.id}/aprovar`, { modeloTrabalho: 'consignado' });
+  const [t2] = await ok('POST', '/financeiro/titulos', { empresaId: emp.id, tipo: 'receber', pessoaId: joana, descricao: 'Acerto Joana', valor: 10000, vencimento: new Date(Date.now() - 3 * 3600_000).toISOString().slice(0, 10) });
+  await ok('POST', `/financeiro/titulos/${t2.id}/baixar`, {});
+  await ok('POST', '/indicacoes/verificar');
+  const daEquipe = (await ok('GET', '/indicacoes')).itens.find((i) => i.indicada === 'Joana Da Equipe Teste');
+  assert.deepEqual([daEquipe.status, daEquipe.valor, daEquipe.indicadorTipo], ['liberada', 3000, 'equipe']);
+  assert.equal((await ok('GET', '/indicacoes/meu')).totais.aReceber, 3000);
+
+  // Cancelar: o prêmio em aberto é cancelado no Financeiro.
+  await ok('POST', `/indicacoes/${daEquipe.id}/cancelar`, { motivo: 'Cadastro duplicado de teste' });
+  const todos = await ok('GET', `/financeiro/titulos?tipo=pagar&aba=todos&busca=${encodeURIComponent('Prêmio por indicação')}`);
+  assert.equal((todos.itens ?? todos).find((x) => x.id === daEquipe.tituloId).status, 'cancelado');
+  assert.equal((await chamar('POST', `/indicacoes/${liberada.id}/cancelar`, { motivo: 'Tentando cancelar pago' })).status, 400, 'prêmio já pago não cancela');
+
+  // Ligar à mão (indicação feita de boca) e recusa.
+  const solta = await ok('POST', '/crm/candidaturas', { nome: 'Kátia Sem Link Teste', telefone: '(27) 99771-0003', cidade: 'Vitória', uf: 'ES', modeloInteresse: 'afiliado' });
+  await ok('POST', '/indicacoes/ligar', { candidaturaId: solta.id, codigo: daRep.codigo });
+  assert.equal((await chamar('POST', '/indicacoes/ligar', { candidaturaId: solta.id, codigo: meu.codigo })).status, 400);
+  await ok('PATCH', `/crm/candidaturas/${solta.id}`, { etapa: 'recusada', motivoRecusa: 'Sem perfil' });
+  assert.equal((await ok('GET', '/indicacoes')).itens.find((i) => i.indicada === 'Kátia Sem Link Teste').status, 'recusada');
+  // Desligado: o link para de registrar.
+  await ok('PUT', '/indicacoes/regras', { ...regras0, ativo: false });
+  token = '';
+  assert.equal((await chamar('GET', `/publico/indicacao/${meu.codigo}`)).status, 404);
+  await candidatar({ nome: 'Luana Desligado Teste', telefone: '(27) 99771-0004', origem: { ref: meu.codigo } });
+  token = admin;
+  assert.ok(!(await ok('GET', '/indicacoes')).itens.some((i) => i.indicada === 'Luana Desligado Teste'));
+  await ok('PUT', '/indicacoes/regras', regras0);
 });

@@ -2300,3 +2300,40 @@ export const bscOcorrencias = pgTable(
   },
   (t) => ({ porPessoa: index('bsc_ocorrencias_pessoa_idx').on(t.usuarioId, t.data) }),
 );
+
+// ───────────────────────── Indique e ganhe: link de indicação de novas consultoras ─────────────────────────
+
+/** Código de indicação de quem usa o sistema: uma consultora (pessoa) ou alguém da equipe (usuário). */
+export const indicadores = pgTable('indicadores', {
+  id: id(),
+  codigo: text('codigo').notNull().unique(),
+  pessoaId: uuid('pessoa_id').unique().references(() => pessoas.id, { onDelete: 'cascade' }),
+  usuarioId: uuid('usuario_id').unique().references(() => usuarios.id, { onDelete: 'cascade' }),
+  criadoEm: criadoEm(),
+});
+
+/**
+ * Uma candidata que chegou pelo link de alguém.
+ * candidata → aprovada (virou consultora) → liberada (pagou o primeiro pedido: o prêmio vira conta a pagar)
+ * ou recusada / expirada / cancelada.
+ */
+export const indicacoes = pgTable(
+  'indicacoes',
+  {
+    id: id(),
+    indicadorId: uuid('indicador_id').notNull().references(() => indicadores.id, { onDelete: 'cascade' }),
+    candidaturaId: uuid('candidatura_id').notNull().unique().references(() => candidaturas.id, { onDelete: 'cascade' }),
+    indicadaPessoaId: uuid('indicada_pessoa_id').references(() => pessoas.id, { onDelete: 'set null' }),
+    status: text('status').notNull().default('candidata'),
+    aprovadaEm: timestamp('aprovada_em', { withTimezone: true }),
+    /** Valor do prêmio (centavos), gravado quando o prêmio é liberado. */
+    valor: integer('valor'),
+    liberadaEm: timestamp('liberada_em', { withTimezone: true }),
+    /** O que liberou: o título pago ou o pedido pelo link faturado. */
+    motivoLiberacao: text('motivo_liberacao'),
+    tituloId: uuid('titulo_id').references(() => titulos.id, { onDelete: 'set null' }),
+    motivoCancelamento: text('motivo_cancelamento'),
+    criadoEm: criadoEm(),
+  },
+  (t) => ({ porIndicador: index('indicacoes_indicador_idx').on(t.indicadorId, t.status) }),
+);

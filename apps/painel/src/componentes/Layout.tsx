@@ -13,7 +13,7 @@ const ROTAS: Record<string, string> = { inicio: '/', assistente: '/assistente', 
 const GRUPOS: { titulo: string; chaves: string[] }[] = [
   { titulo: '', chaves: ['inicio', 'mesa', 'assistente'] },
   { titulo: 'Atendimento', chaves: ['crm', 'agenda', 'marketing', 'formularios'] },
-  { titulo: 'Revendedoras', chaves: ['rede', 'maletas', 'pontos', 'comissoes'] },
+  { titulo: 'Revendedoras', chaves: ['rede', 'indicacoes', 'maletas', 'pontos', 'comissoes'] },
   { titulo: 'Vendas', chaves: ['vendas', 'lojas', 'garantia'] },
   { titulo: 'Produtos', chaves: ['produtos', 'estoque'] },
   { titulo: 'Financeiro', chaves: ['financeiro', 'cobranca', 'fiscal', 'relatorios'] },
@@ -58,6 +58,7 @@ export function Layout() {
   // Minha mesa (conversa interna, tarefas e painel do setor) é de todo mundo que usa o painel.
   const mesa = usarAvisosDaMesa();
   if (pode('inicio', 'ver')) visiveis.push({ chave: 'mesa', nome: 'Minha mesa', versao: 1 });
+  if (pode('rede', 'ver')) visiveis.push({ chave: 'indicacoes', nome: 'Indique e ganhe', versao: 1 });
   if (ponto.data?.eFuncionario) visiveis.push({ chave: 'meu-ponto', nome: 'Meu ponto', versao: 1 });
   const agrupadas = new Set(GRUPOS.flatMap((g) => g.chaves));
   const termo = semAcento(busca.trim());

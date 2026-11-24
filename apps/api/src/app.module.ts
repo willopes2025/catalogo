@@ -41,6 +41,8 @@ import { ProdutosController } from './produtos/produtos.controller';
 import { PrecificacaoController } from './precificacao/precificacao.controller';
 import { MesaController } from './mesa/mesa.controller';
 import { ScorecardController } from './scorecard/scorecard.controller';
+import { IndicacoesController } from './indicacoes/indicacoes.controller';
+import { IndicacoesService } from './indicacoes/indicacoes.service';
 import { EstoqueController } from './estoque/estoque.controller';
 import { EstoqueService } from './estoque/estoque.service';
 import { MaletaPublicaController, MaletasController } from './maletas/maletas.controller';
@@ -115,6 +117,7 @@ if (!segredo || (process.env.NODE_ENV === 'production' && segredo.length < 32)) 
     PrecificacaoController,
     MesaController,
     ScorecardController,
+    IndicacoesController,
     AprendizadoController,
     EstoqueController,
     MaletasController,
@@ -164,6 +167,7 @@ if (!segredo || (process.env.NODE_ENV === 'production' && segredo.length < 32)) 
     TranscricaoService,
     FerramentasAgenteService,
     AprendizadoService,
+    IndicacoesService,
     AgenteService,
     IaService,
     AutomacaoService,

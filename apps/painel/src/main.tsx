@@ -20,6 +20,7 @@ import { Produtos, FichaProduto } from './paginas/Produtos';
 import { Precificacao } from './paginas/Precificacao';
 import { Mesa } from './paginas/Mesa';
 import { Scorecard } from './paginas/Scorecard';
+import { Indicacoes, LinkIndicacao } from './paginas/Indicacoes';
 import { Estoque } from './paginas/Estoque';
 import { Maletas } from './paginas/Maletas';
 import { NovaMaleta } from './paginas/NovaMaleta';
@@ -77,6 +78,7 @@ ReactDOM.createRoot(document.getElementById('raiz')!).render(
           <Route path="/privacidade" element={<Privacidade />} />
           <Route path="/portal/*" element={<Portal />} />
           <Route path="/cadastro" element={<Cadastro />} />
+          <Route path="/i/:codigo" element={<LinkIndicacao />} />
           <Route path="/f/:slug" element={<FormularioPublico />} />
           <Route path="/imprimir/maleta/:id" element={<Protegido><ImprimirMaleta /></Protegido>} />
           <Route path="/imprimir/documento/:id" element={<Protegido><ImprimirDocumento /></Protegido>} />
@@ -105,6 +107,7 @@ ReactDOM.createRoot(document.getElementById('raiz')!).render(
             <Route path="rede/:id" element={<FichaRepresentante />} />
             <Route path="mesa" element={<Mesa />} />
             <Route path="scorecard" element={<Scorecard />} />
+            <Route path="indicacoes" element={<Indicacoes />} />
             <Route path="produtos" element={<Produtos />} />
             <Route path="produtos/precificacao" element={<Precificacao />} />
             <Route path="produtos/novo" element={<FichaProduto />} />

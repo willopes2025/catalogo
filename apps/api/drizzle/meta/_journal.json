@@ -288,6 +288,13 @@
       "when": 1795460244244,
       "tag": "0040_scorecard_e_anexos",
       "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "7",
+      "when": 1795560693985,
+      "tag": "0041_indicacoes",
+      "breakpoints": true
     }
   ]
 }

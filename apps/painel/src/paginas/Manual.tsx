@@ -214,6 +214,18 @@ const SECOES: Secao[] = [
     ],
   },
   {
+    id: 'indicacoes',
+    titulo: 'Indique e ganhe: link de indicação de consultoras',
+    passos: [
+      { t: 'Todo mundo tem um link', d: 'Cada consultora (no portal e no app, card "Indique e ganhe") e cada pessoa da equipe (na Minha mesa, inclusive funcionários) tem um link próprio, sempre o mesmo, no formato aritana.wideic.com/i/CÓDIGO. Os botões copiam o link com a mensagem de convite ou abrem o WhatsApp já com o texto.' },
+      { t: 'O que acontece quando alguém se cadastra pelo link', d: 'A pessoa vê "Você foi convidada por Fulana" e preenche o cadastro de consultora. A candidatura entra no CRM com "Indicada por" preenchido. Vale a primeira indicação: se ela mandar o formulário de novo por outro link, continua com quem indicou primeiro. Ninguém indica a si mesmo (o sistema compara CPF, e-mail e telefone) e quem já é consultora não conta como indicação nova.' },
+      { t: 'Quando o prêmio é liberado', d: 'Depois que a candidata é aprovada, o sistema confere a cada 30 minutos se ela já pagou o primeiro pedido (o primeiro título dela pago depois da aprovação, ou, para afiliada, o primeiro pedido pelo link faturado). Pagou: o prêmio é liberado e vira uma conta a pagar no Financeiro (plano de contas 4.08 Prêmios por indicação), com vencimento no prazo configurado. Se ela não pagar nada dentro da validade (120 dias, por padrão), a indicação expira.' },
+      { t: 'Prêmio e regras', d: 'Em Revendedoras › Indique e ganhe › Prêmio e regras, a gestão define: se o programa está ligado, o valor do prêmio (ex.: R$ 50,00), um valor diferente para a equipe (ou o mesmo), a validade, se lança no Financeiro e em quantos dias paga, e a mensagem do convite. Mudar o valor vale para os prêmios liberados daí em diante.' },
+      { t: 'Acompanhar e corrigir', d: 'A aba Indicações mostra todas, com quem indicou, a situação e o valor. "Conferir pagamentos agora" roda a verificação na hora. "Cancelar" (fraude, cadastro duplicado) cancela também o prêmio ainda não pago; prêmio já pago não cancela. Indicação feita de boca: use o quadro "Indicação feita de boca", no fim da aba Indicações, e ligue a candidatura ao código de quem indicou.' },
+    ],
+    dicas: ['A consultora vê só o primeiro nome e a cidade de quem ela indicou, e quanto tem a receber e já recebeu.', 'Para pagar os prêmios, use Financeiro › Contas a pagar, filtrando por "Prêmio por indicação".'],
+  },
+  {
     id: 'mesa',
     titulo: 'Minha mesa: conversa interna, tarefas e painel do setor',
     passos: [

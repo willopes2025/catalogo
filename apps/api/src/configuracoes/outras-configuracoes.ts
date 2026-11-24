@@ -37,6 +37,22 @@ export const CONFIGS = {
       diasAntesTitulo: z.number().int().min(0).max(15),
     }),
   },
+  /** Indique e ganhe: prêmio para quem traz uma nova consultora pelo próprio link. */
+  indicacao: {
+    padrao: { ativo: true, valor: 5000, valorEquipe: null as number | null, validadeDias: 120, lancarNoFinanceiro: true, prazoPagamentoDias: 10, mensagemConvite: 'Quer ganhar uma renda extra vendendo semijoias? Faça seu cadastro para ser consultora Aritana pelo meu link:' },
+    schema: z.object({
+      ativo: z.boolean(),
+      /** Prêmio por consultora indicada (centavos), pago quando ela paga o primeiro pedido. */
+      valor: z.number().int().min(0).max(10_000_000),
+      /** Prêmio quando quem indicou é da equipe (null = o mesmo valor). */
+      valorEquipe: z.number().int().min(0).max(10_000_000).nullable(),
+      /** A nova consultora tem estes dias, depois de aprovada, para pagar o primeiro pedido; depois disso a indicação expira. */
+      validadeDias: z.number().int().min(7).max(730),
+      lancarNoFinanceiro: z.boolean(),
+      prazoPagamentoDias: z.number().int().min(0).max(90),
+      mensagemConvite: z.string().trim().max(300),
+    }),
+  },
   precificacao: {
     padrao: { ...REGRAS_PRECIFICACAO_PADRAO },
     schema: z.object({ ouro: regraMetal, prata: regraMetal, insumos: z.number().int().min(0).max(1_000_000), terminacao: z.number().int().min(0).max(99).nullable() }),

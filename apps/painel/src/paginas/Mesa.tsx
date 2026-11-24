@@ -4,6 +4,7 @@ import { Link, useSearchParams } from 'react-router-dom';
 import { api, lerSessao, pode } from '../api';
 import { data as dataBR, dataHora, reais } from '../formato';
 import { PERSPECTIVAS, nomeMes, nota as notaTexto, valorDe } from './Scorecard';
+import { MeuLinkIndicacao } from './Indicacoes';
 import { Campo, Carregando, Erro, Topo } from '../componentes/ui';
 import './financeiro/financeiro.css';
 import './mesa.css';
@@ -24,6 +25,7 @@ export function Mesa() {
     <>
       <Topo eb="Equipe" titulo="Minha mesa" sub="O seu painel, as suas tarefas e a conversa interna com a equipe" />
       <AtivarAvisos />
+      <MeuLinkIndicacao />
       <PainelDoSetor />
       <MeuScorecard />
       <div className="mesa-grade">

@@ -163,7 +163,7 @@ function Inicio() {
   const compartilhar = async () => {
     if (!urlCatalogo) return;
     try {
-      if (navigator.share) await navigator.share({ title: 'Meu catálogo Aritana', text: 'Veja as peças que estão comigo:', url: urlCatalogo });
+      if (navigator.share) await navigator.share({ title: 'Meu catálogo Aritana', text: e.maletas.length ? 'Veja as peças que estão comigo:' : 'Veja as semijoias Aritana no meu catálogo:', url: urlCatalogo });
       else { await navigator.clipboard.writeText(urlCatalogo); setCopiado(true); }
     } catch { /* cancelado */ }
   };
@@ -205,6 +205,7 @@ function Inicio() {
           <button className="p-botao" onClick={() => void compartilhar()}>{copiado ? 'Link copiado!' : 'Compartilhar catálogo'}</button>
         </div>
       )}
+      <IndiqueGanhe />
       <Instalar />
       <button className="p-link p-centro" onClick={async () => { await desligarNotificacoes(); salvarSessaoPortal(null); window.location.href = '/portal/entrar'; }}>Sair</button>
     </>
@@ -570,6 +571,38 @@ function PedidosCatalogo() {
         </div>
       ))}
     </section>
+  );
+}
+
+const STATUS_IND: Record<string, string> = { candidata: 'Cadastrou-se', aprovada: 'Aprovada: falta o 1º pedido pago', liberada: 'Prêmio liberado', paga: 'Prêmio pago', recusada: 'Não aprovada', expirada: 'Expirou', cancelada: 'Cancelada' };
+
+/** Indique e ganhe: o link da consultora para convidar novas consultoras, com o prêmio e as indicações dela. */
+function IndiqueGanhe() {
+  const q = useQuery({ queryKey: ['portal', 'indicacoes'], queryFn: () => apiPortal<{ ativo: boolean; link: string; mensagem: string; premio: number; validadeDias: number; itens: { id: string; nome: string; cidade: string; status: string; valor: number | null }[]; totais: { indicadas: number; aReceber: number; recebido: number } }>('/indicacoes'), retry: false });
+  const [copiado, setCopiado] = useState(false);
+  const [ver, setVer] = useState(false);
+  const d = q.data;
+  if (!d || !d.ativo) return null;
+  const convidar = async () => {
+    try {
+      if (navigator.share) await navigator.share({ title: 'Seja consultora Aritana', text: d.mensagem, url: d.link });
+      else { await navigator.clipboard.writeText(`${d.mensagem} ${d.link}`.trim()); setCopiado(true); }
+    } catch { /* cancelado */ }
+  };
+  return (
+    <div className="p-cartao p-col">
+      <div className="p-rotulo">Indique e ganhe</div>
+      <div className="p-grande">{reais(d.premio)} por consultora</div>
+      <p className="p-suave">Convide amigas para serem consultoras Aritana. Quando a sua indicada for aprovada e pagar o primeiro pedido (em até {d.validadeDias} dias), você ganha o prêmio.</p>
+      <button className="p-botao" onClick={() => void convidar()}>{copiado ? 'Convite copiado!' : 'Convidar pelo meu link'}</button>
+      <a className="p-link p-centro" href={`https://wa.me/?text=${encodeURIComponent(`${d.mensagem} ${d.link}`.trim())}`} target="_blank" rel="noreferrer">Mandar no WhatsApp</a>
+      {d.totais.indicadas > 0 && (
+        <>
+          <button className="p-link" onClick={() => setVer(!ver)}>{d.totais.indicadas} indicada(s){d.totais.aReceber ? ` · ${reais(d.totais.aReceber)} a receber` : ''}{d.totais.recebido ? ` · ${reais(d.totais.recebido)} recebido` : ''} {ver ? '▲' : '▼'}</button>
+          {ver && d.itens.map((i) => <div key={i.id} className="p-linha"><span>{i.nome}{i.cidade ? ` · ${i.cidade}` : ''}<br /><span className="p-suave">{STATUS_IND[i.status] ?? i.status}</span></span><b>{i.valor ? reais(i.valor) : ''}</b></div>)}
+        </>
+      )}
+    </div>
   );
 }
 

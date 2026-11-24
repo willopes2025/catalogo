@@ -1,5 +1,5 @@
 import { useMemo, useState, type FormEvent } from 'react';
-import { useMutation } from '@tanstack/react-query';
+import { useMutation, useQuery } from '@tanstack/react-query';
 import { api, ErroApi } from '../api';
 import '../portal/portal.css';
 
@@ -15,6 +15,8 @@ export function Cadastro() {
     return o;
   }, []);
   const [f, setF] = useState({ nome: '', telefone: '', email: '', cpf: '', cidade: '', uf: 'ES', instagram: '', modeloInteresse: 'nao_sei', experiencia: '', comoConheceu: '', indicadaPor: '', consentimentoLgpd: false, site: '' });
+  // Veio pelo link de indicação de alguém: mostra quem convidou.
+  const convite = useQuery({ queryKey: ['convite', origem.ref], queryFn: () => api<{ nome: string }>(`/publico/indicacao/${encodeURIComponent(origem.ref)}`), enabled: !!origem.ref && /^[A-Za-z0-9]{5,12}$/.test(origem.ref), retry: false });
   const m = useMutation({ mutationFn: () => api('/publico/candidaturas', { corpo: { ...f, email: f.email || null, cpf: f.cpf || null, origem } }) });
   const set = (k: keyof typeof f) => (e: { target: { value: string } }) => setF({ ...f, [k]: e.target.value });
   const campos = m.error instanceof ErroApi ? m.error.dados.campos ?? {} : {};
@@ -33,6 +35,7 @@ export function Cadastro() {
       <form className="p-entrar" onSubmit={(e: FormEvent) => { e.preventDefault(); m.mutate(); }}>
         <img src="/logo-marrom.png" alt="Aritana Semijoias" />
         <h1>Seja uma revendedora Aritana</h1>
+        {convite.data && <div className="p-aviso ok">💌 Você foi convidada por <b>{convite.data.nome}</b>.</div>}
         <p className="p-suave">Semijoias com garantia, maleta consignada sem investimento inicial e comissão sobre o que vender. Preencha e a gente te chama no WhatsApp.</p>
         <div className="p-cartao p-col">
           <label>Nome completo<input autoComplete="name" value={f.nome} onChange={set('nome')} />{erro('nome')}</label>

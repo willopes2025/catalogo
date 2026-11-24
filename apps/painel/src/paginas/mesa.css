@@ -59,3 +59,6 @@
 .mesa-foto { max-width: 240px; max-height: 240px; border-radius: 8px; margin: 2px 0 4px; cursor: zoom-in; display: block; }
 .mesa-arquivo { font: inherit; font-size: 13.5px; text-align: left; background: rgba(255, 255, 255, 0.55); border: 1px solid var(--linha); border-radius: 8px; padding: 6px 9px; margin: 2px 0 4px; cursor: pointer; color: inherit; overflow-wrap: anywhere; }
 .mesa-anexo-pronto { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 6px 12px; border-top: 1px solid var(--linha); background: var(--creme-2); font-size: 13.5px; }
+.ind-meu { margin-bottom: 14px; border-color: #d9b779; background: linear-gradient(180deg, #fdf8ee, var(--papel)); }
+.ind-link { font-size: 12.5px; background: var(--creme-2); border-radius: 6px; padding: 5px 8px; align-self: center; overflow-wrap: anywhere; }
+.ind-resumo { font: inherit; font-size: 13.5px; background: none; border: 0; padding: 0; color: var(--marrom); cursor: pointer; text-decoration: underline dotted; }

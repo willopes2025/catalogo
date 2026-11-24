@@ -18,7 +18,7 @@ export const GRUPOS_DRE = [
 export type GrupoDre = (typeof GRUPOS_DRE)[number]['chave'];
 
 /** Contas que o sistema usa para lançar sozinho. */
-export type ChavePlano = 'recebimentos' | 'consertos' | 'comissoes' | 'taxas_cartao' | 'devolucoes_caixa' | 'transferencias' | 'compras';
+export type ChavePlano = 'recebimentos' | 'consertos' | 'comissoes' | 'indicacoes' | 'taxas_cartao' | 'devolucoes_caixa' | 'transferencias' | 'compras';
 
 export type ContaPlano = typeof planoContas.$inferSelect;
 
