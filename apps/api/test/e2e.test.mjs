@@ -2256,6 +2256,7 @@ test('agenda: marca, avisa conflito, gera Meet pelo Google, lembra no WhatsApp e
 
     // Conecta o Google pelo OAuth (o navegador volta do Google com code e state).
     await ok('PUT', '/integracoes/google', { valores: { GOOGLE_CLIENT_ID: 'cliente.apps.googleusercontent.com', GOOGLE_CLIENT_SECRET: 'segredo-google-teste-123' } });
+    assert.match((await ok('POST', '/integracoes/google/testar')).mensagem, /Conectar conta Google/, 'testar antes de conectar explica o próximo passo');
     const { url } = await ok('GET', '/agenda/google/conectar');
     const u = new URL(url);
     assert.equal(u.searchParams.get('client_id'), 'cliente.apps.googleusercontent.com');
@@ -2270,6 +2271,7 @@ test('agenda: marca, avisa conflito, gera Meet pelo Google, lembra no WhatsApp e
     t = await ok('GET', '/agenda/tipos');
     assert.equal(t.google.conectado, true);
     assert.equal(t.google.conta, 'agenda@aritana.com.br');
+    assert.match((await ok('POST', '/integracoes/google/testar')).mensagem, /Conectado ao Google Agenda como agenda@aritana\.com\.br/);
     assert.ok(!JSON.stringify(await ok('GET', '/integracoes/status')).includes('refresh-google-1'), 'o token do Google nunca volta para a tela');
 
     // Online com Google: evento na agenda com Meet.

@@ -93,6 +93,15 @@ export class GoogleService {
     return j;
   }
 
+  /** Botão "Testar conexão" de Configurações › Integrações. */
+  async testar() {
+    if (!this.configurado) throw new BadRequestException('Preencha o Client ID e o Client secret.');
+    if (!this.conectado) return { ok: true, mensagem: 'Credenciais salvas. Agora vá em Agenda e clique em "Conectar conta Google" para autorizar a conta da Aritana.' };
+    this.acesso = null;
+    await this.token();
+    return { ok: true, mensagem: `Conectado ao Google Agenda${this.conta ? ` como ${this.conta}` : ''}. Os compromissos online já saem com link do Meet.` };
+  }
+
   private async token() {
     if (this.acesso && this.acesso.ate > Date.now()) return this.acesso.token;
     const rt = this.segredos.v('GOOGLE_REFRESH_TOKEN');

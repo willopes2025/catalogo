@@ -13,6 +13,7 @@ import { AssertivaService } from './assertiva.service';
 import { EmailService } from './email.service';
 import { JueriService } from '../jueri/jueri.service';
 import { ErroIa, IaService } from '../ia/ia.service';
+import { GoogleService } from '../agenda/google.service';
 
 @Controller('integracoes')
 export class IntegracoesController {
@@ -25,6 +26,7 @@ export class IntegracoesController {
     private readonly fiscal: FiscalService,
     private readonly jueri: JueriService,
     private readonly ia: IaService,
+    private readonly google: GoogleService,
   ) {}
 
   private ligada(chave: string) {
@@ -106,6 +108,7 @@ export class IntegracoesController {
     if (chave === 'fiscal') return this.fiscal.testar();
     if (chave === 'assertiva') return this.assertiva.testar();
     if (chave === 'jueri') return this.jueri.testar();
+    if (chave === 'google') return this.google.testar();
     if (chave === 'ia') {
       if (!this.ia.texto) return { ok: true, mensagem: 'Só a chave da OpenAI está preenchida: as fotos de catálogo ficam ligadas. Para testar o Claude, cole a chave dele.' };
       try {
@@ -124,6 +127,7 @@ export class IntegracoesController {
       if (!res.ok) throw new BadRequestException(`O Meta recusou: ${j.error?.message ?? res.status}`);
       return { ok: true, mensagem: `Conectado à conta de anúncios "${j.name}" (${j.currency}).` };
     }
+    if (INTEGRACOES.some((i) => i.chave === chave)) return { ok: true, mensagem: 'Credenciais salvas. Esta integração é conferida na primeira vez que for usada.' };
     throw new NotFoundException('Integração desconhecida.');
   }
 
