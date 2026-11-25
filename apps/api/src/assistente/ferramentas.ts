@@ -680,6 +680,12 @@ export class FerramentasAssistente {
     return c;
   }
 
+  /** Números por onde a pessoa pode enviar (para o cartão de confirmação deixar escolher). */
+  async numerosDe(u: UsuarioLogado) {
+    const lista = (await this.canais.canaisDoUsuario(u.id, temPermissao(u.permissoes, 'crm', 'excluir'))).filter((c) => !c.excluidoEm);
+    return lista.map((c) => ({ id: c.id, nome: c.nome, tipo: c.tipo, numero: c.numero }));
+  }
+
   private async templateDoCanal(canal: typeof crmCanais.$inferSelect, templateId?: string) {
     if (!templateId) return null;
     const [t] = await this.db.select().from(crmTemplates).where(eq(crmTemplates.id, templateId));
@@ -693,7 +699,7 @@ export class FerramentasAssistente {
       telefone: z.string().max(30).optional().describe('Só se não for pessoa cadastrada'),
       nome: z.string().max(120).optional(),
       texto: z.string().trim().min(1).max(4000).describe('Mensagem, como a pessoa vai receber'),
-      canalId: uuid.optional().describe('Número de envio (padrão: o primeiro por QR code)'),
+      canalId: uuid.optional().describe('Número de envio (padrão: o primeiro por QR code; a pessoa pode trocar no cartão antes de confirmar)'),
       templateId: uuid.optional().describe('Template aprovado, obrigatório no número oficial fora da janela de 24h'),
     });
     const resolver = async (e: z.infer<typeof schema>, ctx: Contexto) => {
@@ -719,6 +725,8 @@ export class FerramentasAssistente {
       preparar: async (e: z.infer<typeof schema>, ctx) => {
         try {
           const r = await resolver(e, ctx);
+          // Guarda o número escolhido na ação: o cartão mostra e deixa trocar antes de confirmar.
+          e.canalId = r.canal.id;
           return { resumo: `Enviar WhatsApp para ${r.nome ?? r.telefone} (${r.telefone}) pelo número "${r.canal.nome}"${r.tpl ? ` com o template "${r.tpl.nome}"` : ''}.`, previa: [{ nome: r.nome, telefone: r.telefone, texto: r.tpl ? r.tpl.texto : e.texto }] };
         } catch (err) {
           return { resumo: '', impedimento: (err as Error).message };
@@ -807,6 +815,7 @@ export class FerramentasAssistente {
       preparar: async (e, ctx) => {
         try {
           const l = await this.montarLote(e, ctx);
+          e.canalId = l.canal.id;
           const validos = l.itens.filter((i) => !i.problema).length;
           if (!validos) return { resumo: '', impedimento: 'Nenhuma das pessoas tem telefone válido (ou estão fora da carteira de quem pediu).' };
           const intervalo = this.intervaloLote();

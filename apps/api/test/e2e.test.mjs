@@ -2984,6 +2984,20 @@ test('Assistente: consulta inadimplentes, prepara envio em lote, confirma por vo
   assert.equal(lote.previa.length, 1);
   assert.match(lote.previa[0].texto, /^Oi, Zuleica! Sua parcela de R\$\s?1\d\d,\d\d está 12 dias em atraso\.$/);
   assert.equal(v.mensagens.at(-1).texto, 'Preparei o envio. Confirma?');
+  // No cartão, a pessoa escolhe por qual número sai (a prévia é refeita com o número novo).
+  const original = lote.entrada.canalId;
+  assert.ok(original, 'o número que a Ária escolheu fica gravado na ação');
+  const nums = await ok('GET', '/assistente/numeros');
+  assert.ok(nums.some((n) => n.id === original));
+  const outroNum = nums.find((n) => n.id !== original && n.tipo !== 'oficial');
+  if (outroNum) {
+    const trocada = await ok('POST', `/assistente/acoes/${lote.id}/numero`, { canalId: outroNum.id });
+    assert.ok(trocada.resumo.includes(`"${outroNum.nome}"`), trocada.resumo);
+    assert.equal(trocada.entrada.canalId, outroNum.id);
+    await ok('POST', `/assistente/acoes/${lote.id}/numero`, { canalId: original });
+  }
+  const oficialNum = nums.find((n) => n.tipo === 'oficial');
+  if (oficialNum) assert.equal((await chamar('POST', `/assistente/acoes/${lote.id}/numero`, { canalId: oficialNum.id })).status, 400, 'oficial sem template não serve para texto livre');
   const antes = (await sim()).filter((r) => r.caminho.includes('/send-text')).length;
   // "pode mandar" por voz vale como o botão.
   await ok('POST', `/assistente/sessoes/${s.id}/mensagens`, { texto: 'pode mandar', origem: 'voz' });

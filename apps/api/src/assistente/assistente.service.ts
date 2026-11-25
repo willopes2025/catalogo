@@ -2,7 +2,7 @@ import { BadRequestException, ConflictException, Inject, Injectable, Logger, Not
 import { and, asc, desc, eq, inArray, lte, sql } from 'drizzle-orm';
 import { DB, type Db } from '../comum/db.module';
 import { temPermissao, type UsuarioLogado } from '../comum/auth';
-import { assistenteAcoes, assistenteAnexos, assistenteMensagens, assistenteRotinas, assistenteSessoes, configuracoes, empresas, grupos, usuarios } from '../db/schema';
+import { assistenteAcoes, assistenteAnexos, assistenteMensagens, assistenteRotinas, assistenteSessoes, configuracoes, empresas, grupos, usuarios, crmTemplates } from '../db/schema';
 import { ErroIa, IaService, TAGS_VOZ, semTagsDeVoz, type BlocoFerramenta, type MensagemFerramentas } from '../ia/ia.service';
 import { FerramentasAssistente, type Contexto } from './ferramentas';
 import { descreverAgenda, proximaDaRotina } from './rotinas';
@@ -527,6 +527,34 @@ export class AssistenteService implements OnModuleInit, OnModuleDestroy {
   }
 
   /** A pessoa confirmou: executa (em segundo plano, se for demorada) e o assistente comenta o resultado. */
+  /** Números por onde a pessoa envia (lista do cartão de confirmação). */
+  numeros(u: UsuarioLogado) {
+    return this.ferramentas.numerosDe(u);
+  }
+
+  /** Troca o número de envio de um WhatsApp que ainda espera confirmação: refaz a prévia com o número novo. */
+  async trocarNumero(u: UsuarioLogado, acaoId: string, canalId: string) {
+    const a = await this.acaoMinha(u, acaoId);
+    if (a.status !== 'aguardando') throw new ConflictException('Esta ação não está mais esperando confirmação.');
+    if (!['enviar_whatsapp', 'enviar_whatsapp_em_lote'].includes(a.ferramenta)) throw new BadRequestException('Esta ação não envia WhatsApp.');
+    const f = this.ferramentas.obter(a.ferramenta);
+    if (!f?.preparar || !f.permitido(u)) throw new BadRequestException('Você não tem permissão para esta ação.');
+    const anterior = a.entrada as Record<string, unknown>;
+    // Template da Meta é de um número só: trocando de número, o envio vai como texto (ou a prévia avisa).
+    const entrada = { ...anterior, canalId, templateId: undefined as string | undefined };
+    if (anterior.templateId) {
+      const [t] = await this.db.select({ canalId: crmTemplates.canalId }).from(crmTemplates).where(eq(crmTemplates.id, String(anterior.templateId)));
+      if (t && (!t.canalId || t.canalId === canalId)) entrada.templateId = String(anterior.templateId);
+    }
+    const p = f.schema.safeParse(entrada);
+    if (!p.success) throw new BadRequestException('Não deu para trocar o número.');
+    const prep = await f.preparar(p.data, { usuario: u, sessaoId: a.sessaoId, podeAutomatico: false });
+    if (prep.impedimento) throw new BadRequestException(prep.impedimento);
+    const [nova] = await this.db.update(assistenteAcoes).set({ entrada: p.data as object, resumo: prep.resumo, previa: (prep.previa ?? null) as object | null }).where(and(eq(assistenteAcoes.id, a.id), eq(assistenteAcoes.status, 'aguardando'))).returning();
+    if (!nova) throw new ConflictException('Esta ação não está mais esperando confirmação.');
+    return nova;
+  }
+
   async confirmar(u: UsuarioLogado, acaoId: string, porVoz = false) {
     const a = await this.acaoMinha(u, acaoId);
     // Só passa para "executando" quem ainda estava esperando (dois cliques não executam duas vezes).

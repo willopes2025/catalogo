@@ -43,7 +43,7 @@ function AnexoNaMensagem({ a }: { a: AnexoInfo }) {
   if (imagem) return url ? <img className="assistente-miniatura" src={url} alt={a.nome} title={a.nome} onClick={() => window.open(url, '_blank')} /> : <span className="assistente-chip">{icone(a.mime)} {a.nome}</span>;
   return <button className="assistente-chip" title="Abrir" onClick={abrir}>{icone(a.mime)} {a.nome}</button>;
 }
-interface Acao { id: string; ferramenta: string; risco: string; status: string; resumo: string | null; previa: any; resultado: any; erro: string | null; progresso: { feitos: number; total: number; falhas: number } | null; criadoEm: string }
+interface Acao { id: string; ferramenta: string; risco: string; status: string; resumo: string | null; previa: any; entrada?: { canalId?: string } | null; resultado: any; erro: string | null; progresso: { feitos: number; total: number; falhas: number } | null; criadoEm: string }
 interface Sessao { id: string; titulo: string; ocupada: boolean; aprovacao: 'perguntar' | 'automatico'; mensagens: Mensagem[]; acoes: Acao[] }
 interface Estado { ligado: boolean; voz: boolean; vozResposta: 'elevenlabs' | 'openai' | 'navegador'; nome: string; ferramentas: { nome: string; risco: string }[]; podeConfigurar: boolean; podeAutomatico: boolean }
 
@@ -504,6 +504,7 @@ function CartaoAcao({ a, decidir, ocupado }: { a: Acao; decidir: (confirmar: boo
       )}
       {a.status === 'concluida' && a.resultado?.link && <p><a href={a.resultado.link} target="_blank" rel="noreferrer">Abrir boleto/Pix</a></p>}
       {a.erro && <p className="erro-texto">{a.erro}</p>}
+      {a.status === 'aguardando' && ['enviar_whatsapp', 'enviar_whatsapp_em_lote'].includes(a.ferramenta) && <EscolherNumero a={a} />}
       {a.status === 'aguardando' && (
         <div className="acoes-linha">
           <button className="botao" disabled={ocupado} onClick={() => decidir(true)}>Confirmar</button>
@@ -511,6 +512,25 @@ function CartaoAcao({ a, decidir, ocupado }: { a: Acao; decidir: (confirmar: boo
           <small className="muted">ou fale “pode” / “cancela”</small>
         </div>
       )}
+    </div>
+  );
+}
+
+/** No cartão de um WhatsApp esperando confirmação: escolher por qual número sai. */
+function EscolherNumero({ a }: { a: Acao }) {
+  const qc = useQueryClient();
+  const numeros = useQuery({ queryKey: ['assistente', 'numeros'], queryFn: () => api<{ id: string; nome: string; tipo: string; numero: string | null }[]>('/assistente/numeros'), staleTime: 60_000 });
+  const trocar = useMutation({ mutationFn: (canalId: string) => api(`/assistente/acoes/${a.id}/numero`, { corpo: { canalId } }), onSuccess: () => qc.invalidateQueries({ queryKey: ['assistente', 'sessao'] }) });
+  if (!numeros.data?.length) return null;
+  return (
+    <div className="acoes-linha" style={{ alignItems: 'center' }}>
+      <label htmlFor={`numero-${a.id}`} style={{ fontSize: 13 }}><b>Sai pelo número</b></label>
+      <select id={`numero-${a.id}`} value={a.entrada?.canalId ?? ''} disabled={trocar.isPending} onChange={(e) => e.target.value && trocar.mutate(e.target.value)} style={{ padding: 6, borderRadius: 8, border: '1px solid var(--linha)', font: 'inherit' }}>
+        {!a.entrada?.canalId && <option value="">Escolha…</option>}
+        {numeros.data.map((c) => <option key={c.id} value={c.id}>{c.nome}{c.numero ? ` · ${c.numero}` : ''}{c.tipo === 'oficial' ? ' (oficial)' : ''}</option>)}
+      </select>
+      {trocar.isPending && <small className="muted">Atualizando a prévia…</small>}
+      {trocar.error && <span className="erro-texto">{(trocar.error as Error).message}</span>}
     </div>
   );
 }

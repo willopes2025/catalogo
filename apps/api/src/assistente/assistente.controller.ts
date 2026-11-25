@@ -149,6 +149,21 @@ export class AssistenteController {
     res.send(audio);
   }
 
+  /** Números de WhatsApp por onde a pessoa pode enviar. */
+  @Get('numeros')
+  @Permissao('assistente', 'ver')
+  numeros(@Usuario() u: UsuarioLogado) {
+    return this.assistente.numeros(u);
+  }
+
+  /** Escolhe o número de envio de um WhatsApp que espera confirmação. */
+  @Post('acoes/:id/numero')
+  @Permissao('assistente', 'ver')
+  trocarNumero(@Usuario() u: UsuarioLogado, @Param('id', ParseUUIDPipe) id: string, @Body() body: unknown) {
+    const { canalId } = validar(z.object({ canalId: z.string().uuid() }), body);
+    return this.assistente.trocarNumero(u, id, canalId);
+  }
+
   @Post('acoes/:id/confirmar')
   @Permissao('assistente', 'ver')
   confirmar(@Usuario() u: UsuarioLogado, @Param('id', ParseUUIDPipe) id: string) {
