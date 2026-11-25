@@ -45,7 +45,7 @@ services:
   # WhatsApp por QR code (Evolution API, código aberto). Sem porta aberta: só a API do sistema fala com ele.
   # A sessão de cada celular fica no volume aritana_whatsapp e no banco "evolution" (o mesmo Postgres, base separada).
   whatsapp:
-    image: ${EVOLUTION_IMAGE:-evoapicloud/evolution-api:v2.3.7}
+    image: ${EVOLUTION_IMAGE:-evoapicloud/evolution-api:v2.3.8}
     container_name: aritana-whatsapp
     restart: unless-stopped
     environment:
