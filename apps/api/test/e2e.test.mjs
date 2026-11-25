@@ -183,6 +183,51 @@ test('acerto completo recusa peça sem destino', async () => {
   assert.equal(c.status, 'cancelada');
 });
 
+test('alterar a maleta: trocar a consignatária (crédito e promissória) e mudar a data do acerto (gerência direto, os outros pedem autorização)', async () => {
+  const cpf = (base) => { const d = String(base).padStart(9, '0').slice(0, 9).split('').map(Number); for (const n of [9, 10]) { let s = 0; for (let i = 0; i < n; i++) s += d[i] * (n + 1 - i); const r = (s * 10) % 11; d.push(r === 10 ? 0 : r); } return d.join(''); };
+  const nova = await ok('POST', '/pessoas', { tipo: 'representante', nome: 'Nova Consignataria Teste', documento: cpf(772000011), telefone1: '27997720011', cidade: 'Serra', uf: 'ES', modeloTrabalho: 'consignado', limiteCredito: 100000 });
+  const pouca = await ok('POST', '/pessoas', { tipo: 'representante', nome: 'Pouco Credito Teste', documento: cpf(772000022), telefone1: '27997720022', cidade: 'Serra', uf: 'ES', modeloTrabalho: 'consignado', limiteCredito: 100 });
+  const m = await ok('POST', '/maletas', { representanteId: ctx.rep.id, origemId: ctx.deposito.id, itens: [{ codigoBarras: ctx.prods[0].codigoBarras, quantidade: 1 }] });
+  const antes = await ok('GET', `/maletas/${m.id}`);
+  // Troca de consignatária: sem motivo não vai; sem crédito não vai; para a mesma não vai.
+  assert.equal((await chamar('POST', `/maletas/${m.id}/consignataria`, { representanteId: nova.id, motivo: '' })).status, 400);
+  const semCredito = await chamar('POST', `/maletas/${m.id}/consignataria`, { representanteId: pouca.id, motivo: 'teste de crédito' });
+  assert.equal(semCredito.status, 400);
+  assert.match(semCredito.dados.mensagem, /não pode ficar com esta maleta/);
+  assert.equal((await chamar('POST', `/maletas/${m.id}/consignataria`, { representanteId: ctx.rep.id, motivo: 'mesma' })).status, 400);
+  await ok('POST', `/maletas/${m.id}/consignataria`, { representanteId: nova.id, motivo: 'A consultora viajou' });
+  const depois = await ok('GET', `/maletas/${m.id}`);
+  assert.equal(depois.representanteId, nova.id);
+  assert.equal(depois.representante, 'Nova Consignataria Teste');
+  assert.notEqual(depois.linkToken, antes.linkToken, 'a anterior perde o link do pedido');
+  assert.match(depois.observacaoInterna, /Consignatária trocada de Representante Teste E2E para Nova Consignataria Teste/);
+  assert.ok(depois.documentos.every((d) => d.status !== 'cancelado'), 'documentos da anterior saem da tela');
+  // Data do acerto pela gerência (admin): muda na hora.
+  const novaData = new Date(Date.parse(depois.dataLimite) + 5 * 86400_000).toISOString().slice(0, 10);
+  assert.equal((await ok('POST', `/maletas/${m.id}/data-acerto`, { dataLimite: novaData, motivo: 'combinado' })).aplicada, true);
+  assert.equal((await ok('GET', `/maletas/${m.id}`)).dataLimite, novaData);
+  // Pessoa comum (Maletas sem "excluir"): vira pedido; a gerência autoriza.
+  const g = await ok('POST', '/grupos', { nome: 'Atendimento maletas teste', permissoes: { maletas: ['ver', 'criar', 'editar'] } });
+  const u = await ok('POST', '/usuarios', { nome: 'Atendente Maletas Teste', email: 'atend.maletas@aritana.local', grupoId: g.id });
+  const admin = token;
+  token = (await ok('POST', '/auth/login', { email: 'atend.maletas@aritana.local', senha: u.senhaProvisoria })).token;
+  await ok('POST', '/auth/trocar-senha', { atual: u.senhaProvisoria, nova: 'AtendMaletas2026x' });
+  const outraData = new Date(Date.parse(novaData) + 3 * 86400_000).toISOString().slice(0, 10);
+  const pedido = await ok('POST', `/maletas/${m.id}/data-acerto`, { dataLimite: outraData, motivo: 'consultora pediu mais prazo' });
+  assert.equal(pedido.aplicada, false);
+  assert.equal((await ok('GET', `/maletas/${m.id}`)).dataLimite, novaData, 'sem autorização, a data não muda');
+  assert.equal((await chamar('POST', `/maletas/solicitacoes/${pedido.solicitacaoId}/decidir`, { aprovar: true })).status, 403, 'quem pediu não autoriza');
+  token = admin;
+  const pend = await ok('GET', '/maletas/solicitacoes');
+  const s = pend.find((x) => x.id === pedido.solicitacaoId);
+  assert.deepEqual([s.dados.para, s.pedidoPor, s.motivo], [outraData, 'Atendente Maletas Teste', 'consultora pediu mais prazo']);
+  await ok('POST', `/maletas/solicitacoes/${s.id}/decidir`, { aprovar: true });
+  assert.equal((await ok('GET', `/maletas/${m.id}`)).dataLimite, outraData);
+  assert.equal((await chamar('POST', `/maletas/solicitacoes/${s.id}/decidir`, { aprovar: true })).status, 400, 'não decide duas vezes');
+  assert.ok(!(await ok('GET', '/maletas/solicitacoes')).some((x) => x.id === s.id));
+  await ok('POST', `/maletas/${m.id}/cancelar`, { motivo: 'fim do teste' });
+});
+
 test('painel Início responde com os indicadores', async () => {
   const d = await ok('GET', '/painel/inicio');
   assert.ok(typeof d.maletas.abertas === 'number');
@@ -1042,6 +1087,15 @@ test('Jueri pela API: testa a conexão, simula sem gravar, importa tudo e repeti
   await ok('POST', '/jueri/importar', { simular: false, etapas: todas, localId: local.id, comissaoRepresentantePb: 1000 });
   ex = await esperar();
   assert.equal(ex.situacao, 'concluida', ex.erro);
+  // Numeração: a maleta aberta que veio do Jueri fica com o número do pedido de lá (se estiver livre),
+  // e as maletas novas continuam depois do maior pedido do Jueri.
+  const abertasJ = await ok('GET', '/maletas?aba=abertas');
+  assert.equal(abertasJ.find((x) => x.representante === 'Revendedora API Jueri')?.numero, 45, 'mesmo número do pedido no Jueri');
+  const maiorAntes = Math.max(...abertasJ.map((x) => x.numero), 46);
+  const mNova = await ok('POST', '/maletas', { representanteId: ctx.rep.id, origemId: ctx.deposito.id, itens: [{ codigoBarras: ctx.prods[0].codigoBarras, quantidade: 1 }], liberarExcecao: true });
+  assert.ok(mNova.numero > 46, `maleta nova (${mNova.numero}) continua depois do maior pedido do Jueri (46)`);
+  assert.ok(mNova.numero > maiorAntes || mNova.numero > 46);
+  await ok('POST', `/maletas/${mNova.id}/cancelar`, { motivo: 'teste de numeração' });
   const p = await ok('GET', '/produtos/codigo/7899990090010');
   assert.equal(p.preco, 5990);
   assert.equal(p.precoAtacado, 3990);

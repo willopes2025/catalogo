@@ -2382,3 +2382,28 @@ export const crmImportacoes = pgTable(
   },
   (t) => ({ porCanal: index('crm_importacoes_canal_idx').on(t.canalId, t.status) }),
 );
+
+/**
+ * Pedido de autorização para mudar algo na maleta (hoje: a data do acerto) feito por quem não é da gerência.
+ * A gerência (Maletas › excluir) aprova ou recusa; aprovado, a mudança é aplicada.
+ */
+export const maletaSolicitacoes = pgTable(
+  'maleta_solicitacoes',
+  {
+    id: id(),
+    maletaId: uuid('maleta_id').notNull().references(() => maletas.id, { onDelete: 'cascade' }),
+    /** data_acerto */
+    tipo: text('tipo').notNull(),
+    /** { de, para } */
+    dados: jsonb('dados').$type<Record<string, unknown>>().notNull(),
+    motivo: text('motivo').notNull(),
+    /** pendente | aprovada | recusada | cancelada */
+    status: text('status').notNull().default('pendente'),
+    pedidoPor: uuid('pedido_por').references(() => usuarios.id, { onDelete: 'set null' }),
+    decididoPor: uuid('decidido_por').references(() => usuarios.id, { onDelete: 'set null' }),
+    decididoEm: timestamp('decidido_em', { withTimezone: true }),
+    observacaoDecisao: text('observacao_decisao'),
+    criadoEm: criadoEm(),
+  },
+  (t) => ({ pendentes: index('maleta_solicitacoes_idx').on(t.status, t.maletaId) }),
+);

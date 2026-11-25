@@ -9,7 +9,7 @@ import { Leitor, type ItemLido } from '../componentes/Leitor';
 export function DetalheMaleta() {
   const { id } = useParams();
   const qc = useQueryClient();
-  const [modo, setModo] = useState<'ver' | 'incluir' | 'retirar'>('ver');
+  const [modo, setModo] = useState<'ver' | 'incluir' | 'retirar' | 'consignataria' | 'data'>('ver');
   const [itens, setItens] = useState<ItemLido[]>([]);
   const [copiado, setCopiado] = useState(false);
   const q = useQuery({ queryKey: ['maleta', id], queryFn: () => api<any>(`/maletas/${id}`) });
@@ -50,6 +50,8 @@ export function DetalheMaleta() {
             {aberta && <a className="botao claro" href={`/imprimir/maleta/${id}?via=separacao`} target="_blank" rel="noreferrer">Separação</a>}
             {aberta && pode('maletas', 'editar') && <button className="botao claro" onClick={() => { setModo(modo === 'incluir' ? 'ver' : 'incluir'); setItens([]); }}>Incluir peças</button>}
             {aberta && pode('maletas', 'editar') && <button className="botao claro" onClick={() => { setModo(modo === 'retirar' ? 'ver' : 'retirar'); setItens([]); }}>Retirar peças</button>}
+            {aberta && pode('maletas', 'editar') && <button className="botao claro" onClick={() => setModo(modo === 'consignataria' ? 'ver' : 'consignataria')}>Trocar consignatária</button>}
+            {aberta && pode('maletas', 'editar') && <button className="botao claro" onClick={() => setModo(modo === 'data' ? 'ver' : 'data')}>Mudar data do acerto</button>}
             {aberta && pode('maletas', 'editar') && <Link className="botao" to={`/maletas/${id}/acerto`}>Fazer acerto</Link>}
           </>
         )}
@@ -88,7 +90,11 @@ export function DetalheMaleta() {
         </div>
       ))}
 
-      {modo !== 'ver' && (
+      <AutorizacoesDaMaleta maletaId={id!} />
+      {modo === 'consignataria' && <TrocarConsignataria maletaId={id!} atual={m.representanteId} valor={m.totais.valor} fechar={() => setModo('ver')} />}
+      {modo === 'data' && <MudarDataAcerto maletaId={id!} atual={m.dataLimite} retirada={m.dataRetirada} fechar={() => setModo('ver')} />}
+
+      {(modo === 'incluir' || modo === 'retirar') && (
         <div className="cartao coluna" style={{ marginBottom: 14 }}>
           <h3>{modo === 'incluir' ? 'Incluir peças (troca no meio do ciclo)' : 'Retirar peças que voltam para a matriz'}</h3>
           <Leitor itens={itens} mudar={setItens} />
@@ -158,5 +164,116 @@ export function DetalheMaleta() {
         </div>
       )}
     </>
+  );
+}
+
+/** Passa a maleta para outra consignatária: confere o crédito dela e gera a promissória nova para assinar. */
+function TrocarConsignataria({ maletaId, atual, valor, fechar }: { maletaId: string; atual: string; valor: number; fechar: () => void }) {
+  const qc = useQueryClient();
+  const [busca, setBusca] = useState('');
+  const [escolhida, setEscolhida] = useState<{ id: string; nome: string } | null>(null);
+  const [motivo, setMotivo] = useState('');
+  const [excecao, setExcecao] = useState(false);
+  const reps = useQuery({ queryKey: ['maleta-troca-reps', busca], enabled: busca.trim().length >= 2 && !escolhida, queryFn: () => api<{ itens: { id: string; nome: string; cidade: string | null; status: string }[] }>(`/pessoas?tipo=representante&busca=${encodeURIComponent(busca.trim())}`) });
+  const sit = useQuery({ queryKey: ['maleta-troca-sit', escolhida?.id], enabled: !!escolhida, queryFn: () => api<{ creditoLivre: number; limite: number; emMaletas: number }>(`/maletas/situacao/${escolhida!.id}`) });
+  const trocar = useMutation({
+    mutationFn: () => api(`/maletas/${maletaId}/consignataria`, { corpo: { representanteId: escolhida!.id, motivo, liberarExcecao: excecao } }),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['maleta', maletaId] }); fechar(); },
+  });
+  const passa = sit.data && valor > sit.data.creditoLivre;
+  return (
+    <div className="cartao coluna" style={{ marginBottom: 14 }}>
+      <h3>Trocar a consignatária</h3>
+      <p className="muted" style={{ margin: 0 }}>A maleta inteira passa para outra consignatária, com as peças que estão nela ({reais(valor)}). O crédito dela é conferido, a promissória da anterior é cancelada e sai uma nova para a nova consignatária assinar.</p>
+      {!escolhida ? (
+        <div className="coluna" style={{ gap: 6 }}>
+          <input id="troca-busca" autoFocus placeholder="Nome, CPF ou telefone da nova consignatária" value={busca} onChange={(e) => setBusca(e.target.value)} />
+          {reps.data?.itens.filter((r) => r.id !== atual).slice(0, 8).map((r) => (
+            <button key={r.id} className="botao claro" style={{ justifyContent: 'flex-start' }} onClick={() => setEscolhida({ id: r.id, nome: r.nome })}>{r.nome}{r.cidade ? ` · ${r.cidade}` : ''}{r.status !== 'ativo' ? ` (${r.status})` : ''}</button>
+          ))}
+          {reps.data && !reps.data.itens.filter((r) => r.id !== atual).length && <span className="muted">Ninguém encontrado.</span>}
+        </div>
+      ) : (
+        <div className="coluna" style={{ gap: 8 }}>
+          <div className="flex" style={{ gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            <b>{escolhida.nome}</b>
+            {sit.data && <span className={`etiqueta ${passa ? 'erro' : 'ok'}`}>Crédito livre {reais(sit.data.creditoLivre)}</span>}
+            <button className="botao claro pequeno" onClick={() => { setEscolhida(null); setExcecao(false); }}>Trocar</button>
+          </div>
+          {passa && <div className="aviso alerta">As peças da maleta ({reais(valor)}) passam do crédito livre dela.{pode('configuracoes', 'editar') ? '' : ' Só a gestão pode liberar.'}</div>}
+          {passa && pode('configuracoes', 'editar') && <label className="check"><input type="checkbox" checked={excecao} onChange={(e) => setExcecao(e.target.checked)} /> Liberar mesmo assim (exceção registrada)</label>}
+          <textarea id="troca-motivo" rows={2} maxLength={300} placeholder="Motivo da troca (fica no histórico da maleta)" value={motivo} onChange={(e) => setMotivo(e.target.value)} />
+        </div>
+      )}
+      {trocar.error && <Erro erro={trocar.error} />}
+      <div className="flex">
+        <button className="botao" disabled={!escolhida || motivo.trim().length < 3 || trocar.isPending || (!!passa && !excecao)} onClick={() => trocar.mutate()}>{trocar.isPending ? 'Trocando…' : 'Confirmar a troca'}</button>
+        <button className="botao claro" onClick={fechar}>Desistir</button>
+      </div>
+    </div>
+  );
+}
+
+/** Data do acerto: a gerência muda direto; os outros mandam o pedido para a gerência autorizar. */
+function MudarDataAcerto({ maletaId, atual, retirada, fechar }: { maletaId: string; atual: string; retirada: string; fechar: () => void }) {
+  const qc = useQueryClient();
+  const gerencia = pode('maletas', 'excluir');
+  const [dataNova, setDataNova] = useState(atual);
+  const [motivo, setMotivo] = useState('');
+  const mudar = useMutation({
+    mutationFn: () => api<{ aplicada: boolean }>(`/maletas/${maletaId}/data-acerto`, { corpo: { dataLimite: dataNova, motivo } }),
+    onSuccess: (r) => { qc.invalidateQueries({ queryKey: ['maleta', maletaId] }); qc.invalidateQueries({ queryKey: ['maleta-solicitacoes'] }); if (r.aplicada) fechar(); },
+  });
+  return (
+    <div className="cartao coluna" style={{ marginBottom: 14 }}>
+      <h3>Mudar a data do acerto</h3>
+      <p className="muted" style={{ margin: 0 }}>{gerencia ? 'Você é da gerência: a data muda na hora e a promissória é refeita.' : 'A mudança vai para a gerência autorizar. Enquanto isso, vale a data atual.'}</p>
+      <div className="flex" style={{ gap: 8, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+        <label className="campo">Nova data<input id="data-acerto-nova" type="date" min={retirada} value={dataNova} onChange={(e) => setDataNova(e.target.value)} /></label>
+        <span className="muted">hoje: acerto até {data(atual)}</span>
+      </div>
+      <textarea id="data-acerto-motivo" rows={2} maxLength={300} placeholder="Motivo (ex.: consultora viajou, combinado com a gerência)" value={motivo} onChange={(e) => setMotivo(e.target.value)} />
+      {mudar.error && <Erro erro={mudar.error} />}
+      {mudar.data && !mudar.data.aplicada && <div className="aviso ok">Pedido enviado para a gerência autorizar.</div>}
+      <div className="flex">
+        <button className="botao" disabled={!dataNova || dataNova === atual || motivo.trim().length < 3 || mudar.isPending} onClick={() => mudar.mutate()}>{gerencia ? 'Mudar a data' : 'Pedir autorização'}</button>
+        <button className="botao claro" onClick={fechar}>Fechar</button>
+      </div>
+    </div>
+  );
+}
+
+type Solicitacao = { id: string; maletaId: string; numero: number; representante: string; tipo: string; dados: { de?: string; para?: string }; motivo: string; status: string; pedidoPor: string | null; criadoEm: string };
+
+/** Pedidos de autorização da maleta (ou de todas): a gerência aprova ou recusa aqui. */
+export function AutorizacoesDaMaleta({ maletaId }: { maletaId?: string }) {
+  const qc = useQueryClient();
+  const gerencia = pode('maletas', 'excluir');
+  const q = useQuery({ queryKey: ['maleta-solicitacoes', maletaId ?? 'todas'], queryFn: () => api<Solicitacao[]>(`/maletas/solicitacoes${maletaId ? `?maletaId=${maletaId}` : ''}`), refetchInterval: 60_000 });
+  const decidir = useMutation({
+    mutationFn: (v: { id: string; aprovar: boolean; observacao?: string | null }) => api(`/maletas/solicitacoes/${v.id}/decidir`, { corpo: { aprovar: v.aprovar, observacao: v.observacao ?? null } }),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['maleta-solicitacoes'] }); qc.invalidateQueries({ queryKey: ['maleta'] }); qc.invalidateQueries({ queryKey: ['maletas'] }); },
+  });
+  if (!q.data?.length) return null;
+  return (
+    <div className="cartao coluna" style={{ marginBottom: 14, borderColor: 'var(--dourado)' }}>
+      <h3>{gerencia ? 'Pedidos esperando sua autorização' : 'Pedidos esperando a gerência'}</h3>
+      {q.data.map((s) => (
+        <div key={s.id} className="flex entre" style={{ gap: 10, flexWrap: 'wrap', borderTop: '1px solid var(--linha)', paddingTop: 8 }}>
+          <div>
+            {!maletaId && <><Link to={`/maletas/${s.maletaId}`}>Maleta nº {s.numero}</Link> · {s.representante} · </>}
+            <b>Data do acerto</b> de {data(s.dados.de ?? '')} para <b>{data(s.dados.para ?? '')}</b>
+            <div className="muted" style={{ fontSize: 13 }}>{s.pedidoPor ?? 'Alguém'} pediu em {dataHora(s.criadoEm)}: “{s.motivo}”</div>
+          </div>
+          {gerencia && (
+            <div className="flex">
+              <button className="botao pequeno" disabled={decidir.isPending} onClick={() => decidir.mutate({ id: s.id, aprovar: true })}>Autorizar</button>
+              <button className="botao claro pequeno" disabled={decidir.isPending} onClick={() => { const o = window.prompt('Motivo da recusa (opcional):'); if (o !== null) decidir.mutate({ id: s.id, aprovar: false, observacao: o.trim() || null }); }}>Recusar</button>
+            </div>
+          )}
+        </div>
+      ))}
+      {decidir.error && <Erro erro={decidir.error} />}
+    </div>
   );
 }

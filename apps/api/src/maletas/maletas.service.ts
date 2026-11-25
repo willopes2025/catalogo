@@ -17,7 +17,7 @@ import { AuditoriaService } from '../comum/auditoria.service';
 import { EstoqueService } from '../estoque/estoque.service';
 import { ConfiguracoesService } from '../configuracoes/configuracoes.service';
 import { DocumentosService } from '../documentos/documentos.service';
-import { acertos, creditos, documentos, locaisEstoque, maletaItens, maletas, pessoas, produtos, titulos } from '../db/schema';
+import { acertos, creditos, documentos, locaisEstoque, maletaItens, maletaSolicitacoes, maletas, pessoas, produtos, titulos, usuarios } from '../db/schema';
 import { PlanoContasService } from '../financeiro/plano.service';
 
 export const hoje = () => new Date(Date.now() - 3 * 3600_000).toISOString().slice(0, 10); // horário de Brasília
@@ -407,6 +407,99 @@ export class MaletasService {
 
       await this.auditoria.registrar({ usuarioId, acao: fechou ? 'acerto' : 'acerto_parcial', entidade: 'maleta', entidadeId: id, dados: { acertoId: acerto.id, total: resultado.totalAPagar, limite: [sit.limite, lim.limite] } }, tx);
       return { acerto, resultado, parcelas, limiteNovo: lim.limite, motivoLimite: lim.motivo, fechou };
+    });
+  }
+
+  // ───────────── Alterar o pedido: consignatária e data do acerto ─────────────
+
+  /** Valor (preço de etiqueta) das peças que ainda estão na maleta. */
+  private async valorNaMaleta(tx: Tx, id: string) {
+    const [r] = await tx.select({ v: sql<number>`coalesce(sum((${maletaItens.enviada} - ${maletaItens.vendida} - ${maletaItens.devolvida} - ${maletaItens.perdida}) * ${maletaItens.preco}), 0)::bigint` }).from(maletaItens).where(eq(maletaItens.maletaId, id));
+    return Number(r?.v ?? 0);
+  }
+
+  /**
+   * Passa a maleta inteira para outra consignatária (antes ou depois de retirada).
+   * Confere o crédito da nova; os documentos da anterior para esta maleta são cancelados e sai uma promissória nova.
+   */
+  async trocarConsignataria(id: string, d: { representanteId: string; motivo: string; liberarExcecao?: boolean }, usuarioId: string, podeLiberarExcecao: boolean) {
+    return this.db.transaction(async (tx) => {
+      const m = await this.maletaAberta(tx, id);
+      if (m.representanteId === d.representanteId) throw new BadRequestException('A maleta já é desta consignatária.');
+      await tx.select({ id: pessoas.id }).from(pessoas).where(eq(pessoas.id, d.representanteId)).for('update');
+      const sit = await this.situacao(d.representanteId, tx);
+      if (sit.representante.status !== 'ativo') throw new BadRequestException('A nova consignatária precisa estar ativa (aprovada na triagem).');
+      if (sit.representante.modeloTrabalho && sit.representante.modeloTrabalho !== 'consignado') throw new BadRequestException(`A nova consignatária está no modelo ${sit.representante.modeloTrabalho}, não no consignado.`);
+      const valor = await this.valorNaMaleta(tx, id);
+      const regras = await this.config.regras(tx);
+      const lib = podeRetirarMaleta({ limite: sit.limite, emMaletas: sit.emMaletas, maletasAbertas: sit.maletasAbertas, maiorAtrasoDias: sit.maiorAtrasoDias, bloqueadaManualmente: sit.bloqueado }, valor, regras);
+      if (!lib.pode && !(d.liberarExcecao && podeLiberarExcecao)) throw new BadRequestException({ mensagem: `${sit.representante.nome} não pode ficar com esta maleta.`, motivos: lib.motivos, creditoLivre: lib.creditoLivre, valor });
+      const [antes] = await tx.select({ nome: pessoas.nome }).from(pessoas).where(eq(pessoas.id, m.representanteId));
+      const nota = `Consignatária trocada de ${antes?.nome ?? '?'} para ${sit.representante.nome} em ${hoje().split('-').reverse().join('/')}: ${d.motivo}`;
+      // Link do pedido novo (a anterior perde o acesso) e a nova confirma o recebimento de novo.
+      await tx.update(maletas).set({ representanteId: d.representanteId, linkToken: randomBytes(18).toString('base64url'), recebidaEm: null, observacaoInterna: sql`concat_ws(E'\n', ${maletas.observacaoInterna}, ${nota}::text)` }).where(eq(maletas.id, id));
+      await tx.update(locaisEstoque).set({ nome: `Maleta nº ${m.numero} · ${sit.representante.nome}` }).where(eq(locaisEstoque.id, m.localId));
+      // Termo e promissória da anterior deixam de valer para esta maleta.
+      await tx.update(documentos).set({ status: 'cancelado' }).where(and(eq(documentos.maletaId, id), eq(documentos.pessoaId, m.representanteId), inArray(documentos.status, ['pendente', 'assinado'])));
+      const promissoria = await this.documentos.gerar(tx, { pessoaId: d.representanteId, tipo: 'promissoria', maletaId: id }, usuarioId, false);
+      await this.auditoria.registrar({ usuarioId, acao: 'trocar_consignataria', entidade: 'maleta', entidadeId: id, dados: { de: m.representanteId, para: d.representanteId, motivo: d.motivo, valor, excecao: !lib.pode ? lib.motivos : undefined } }, tx);
+      return { ok: true, promissoriaId: promissoria?.id ?? null };
+    });
+  }
+
+  private async aplicarDataAcerto(tx: Tx, m: typeof maletas.$inferSelect, dataLimite: string, motivo: string, usuarioId: string) {
+    const nota = `Data do acerto mudou de ${m.dataLimite.split('-').reverse().join('/')} para ${dataLimite.split('-').reverse().join('/')}: ${motivo}`;
+    await tx.update(maletas).set({ dataLimite, observacaoInterna: sql`concat_ws(E'\n', ${maletas.observacaoInterna}, ${nota}::text)` }).where(eq(maletas.id, m.id));
+    await this.auditoria.registrar({ usuarioId, acao: 'mudar_data_acerto', entidade: 'maleta', entidadeId: m.id, dados: { de: m.dataLimite, para: dataLimite, motivo } }, tx);
+    // A promissória acompanha a data nova.
+    await this.documentos.gerar(tx, { pessoaId: m.representanteId, tipo: 'promissoria', maletaId: m.id }, usuarioId, false);
+  }
+
+  /** Muda a data do acerto. Gerência muda na hora; os outros pedem autorização. */
+  async mudarDataAcerto(id: string, d: { dataLimite: string; motivo: string }, usuarioId: string, gerencia: boolean) {
+    return this.db.transaction(async (tx) => {
+      const m = await this.maletaAberta(tx, id);
+      if (d.dataLimite === m.dataLimite) throw new BadRequestException('A maleta já está com esta data de acerto.');
+      if (d.dataLimite < m.dataRetirada) throw new BadRequestException('A data do acerto não pode ser antes da retirada.');
+      if (gerencia) {
+        await this.aplicarDataAcerto(tx, m, d.dataLimite, d.motivo, usuarioId);
+        // Pedido que estava esperando fica sem efeito.
+        await tx.update(maletaSolicitacoes).set({ status: 'cancelada', decididoPor: usuarioId, decididoEm: new Date(), observacaoDecisao: 'A gerência mudou a data direto.' }).where(and(eq(maletaSolicitacoes.maletaId, id), eq(maletaSolicitacoes.status, 'pendente')));
+        return { aplicada: true };
+      }
+      await tx.update(maletaSolicitacoes).set({ status: 'cancelada', observacaoDecisao: 'Substituído por um pedido novo.' }).where(and(eq(maletaSolicitacoes.maletaId, id), eq(maletaSolicitacoes.tipo, 'data_acerto'), eq(maletaSolicitacoes.status, 'pendente')));
+      const [s] = await tx.insert(maletaSolicitacoes).values({ maletaId: id, tipo: 'data_acerto', dados: { de: m.dataLimite, para: d.dataLimite }, motivo: d.motivo, pedidoPor: usuarioId }).returning();
+      await this.auditoria.registrar({ usuarioId, acao: 'pedir_data_acerto', entidade: 'maleta', entidadeId: id, dados: { de: m.dataLimite, para: d.dataLimite, motivo: d.motivo } }, tx);
+      return { aplicada: false, solicitacaoId: s.id };
+    });
+  }
+
+  /** Pedidos de autorização (para a gerência aprovar), com a maleta e quem pediu. */
+  async solicitacoes(status = 'pendente', maletaId?: string) {
+    return this.db
+      .select({ id: maletaSolicitacoes.id, maletaId: maletaSolicitacoes.maletaId, numero: maletas.numero, representante: pessoas.nome, tipo: maletaSolicitacoes.tipo, dados: maletaSolicitacoes.dados, motivo: maletaSolicitacoes.motivo, status: maletaSolicitacoes.status, pedidoPor: usuarios.nome, criadoEm: maletaSolicitacoes.criadoEm, decididoEm: maletaSolicitacoes.decididoEm, observacaoDecisao: maletaSolicitacoes.observacaoDecisao })
+      .from(maletaSolicitacoes)
+      .innerJoin(maletas, eq(maletas.id, maletaSolicitacoes.maletaId))
+      .innerJoin(pessoas, eq(pessoas.id, maletas.representanteId))
+      .leftJoin(usuarios, eq(usuarios.id, maletaSolicitacoes.pedidoPor))
+      .where(and(status === 'todas' ? undefined : eq(maletaSolicitacoes.status, status), maletaId ? eq(maletaSolicitacoes.maletaId, maletaId) : undefined))
+      .orderBy(asc(maletaSolicitacoes.criadoEm))
+      .limit(200);
+  }
+
+  /** A gerência aprova (aplica a mudança) ou recusa um pedido. */
+  async decidirSolicitacao(id: string, aprovar: boolean, observacao: string | null, usuarioId: string) {
+    return this.db.transaction(async (tx) => {
+      const [s] = await tx.select().from(maletaSolicitacoes).where(eq(maletaSolicitacoes.id, id)).for('update');
+      if (!s) throw new NotFoundException('Pedido não encontrado.');
+      if (s.status !== 'pendente') throw new BadRequestException(`Este pedido já está ${s.status}.`);
+      if (aprovar && s.tipo === 'data_acerto') {
+        const m = await this.maletaAberta(tx, s.maletaId);
+        await this.aplicarDataAcerto(tx, m, String(s.dados.para), `${s.motivo} (autorizado pela gerência)`, usuarioId);
+      }
+      await tx.update(maletaSolicitacoes).set({ status: aprovar ? 'aprovada' : 'recusada', decididoPor: usuarioId, decididoEm: new Date(), observacaoDecisao: observacao }).where(eq(maletaSolicitacoes.id, id));
+      await this.auditoria.registrar({ usuarioId, acao: aprovar ? 'aprovar_solicitacao' : 'recusar_solicitacao', entidade: 'maleta', entidadeId: s.maletaId, dados: { solicitacao: id, tipo: s.tipo, observacao } }, tx);
+      return { ok: true };
     });
   }
 

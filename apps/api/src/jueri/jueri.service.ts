@@ -275,6 +275,11 @@ export class JueriService {
         if (quer('maletas')) await rotular('Maletas', () => this.gravarMaletas(tx, ex, dados.pedidos, local, usuarioId));
         if (quer('financeiro')) await rotular('Contas a receber', () => this.gravarContas(tx, ex, dados.contas, Number(dados.contasTotal?.[0]?.n ?? 0)));
         if (quer('historico')) await rotular('Histórico', () => this.gravarHistorico(tx, ex, dados.historico));
+        // As maletas novas continuam a numeração depois do maior pedido do Jueri.
+        if (quer('maletas') || quer('historico')) {
+          const numeros = [...(dados.pedidos ?? []), ...(dados.historico ?? [])].map((p) => String(pegar(p, 'codigo_pedido') ?? '').trim()).filter((n) => /^\d{1,9}$/.test(n)).map(Number);
+          await this.ajustarNumeracao(tx, numeros.length ? Math.max(...numeros) : 0);
+        }
         this.checar();
         if (op.simular) throw new Simulacao();
       });
@@ -297,6 +302,17 @@ export class JueriService {
    * Acertos já baixados no Jueri viram histórico de vendas para os relatórios.
    * Não cria maleta, acerto, movimento de estoque nem conta: só números por acerto e por produto.
    */
+  /** Próximo número de maleta = maior número entre as maletas e os pedidos do Jueri, mais um. */
+  private async ajustarNumeracao(tx: Tx, maiorPedidoJueri = 0) {
+    await tx.execute(sql`
+      with x as (select greatest(
+        (select coalesce(max(numero), 0) from maletas),
+        (select coalesce(max(numero::bigint), 0) from jueri_historico where numero ~ '^[0-9]{1,9}$'),
+        ${maiorPedidoJueri}::bigint,
+        (select last_value from maletas_numero_seq where is_called)) as maior)
+      select setval(pg_get_serial_sequence('maletas', 'numero'), greatest(maior, 1), maior > 0) from x`);
+  }
+
   private async gravarHistorico(tx: Tx, ex: Execucao, pedidos: Reg[] = []) {
     const ph = this.parte(ex, 'Histórico de acertos');
     const revs = await this.mapa(tx, pessoas, 'rev:');
@@ -925,6 +941,13 @@ export class JueriService {
 
   // ───────────── Maletas abertas ─────────────
 
+  private async numeroLivre(tx: Tx, numero: unknown) {
+    const n = /^\d{1,9}$/.test(String(numero ?? '').trim()) ? Number(String(numero).trim()) : null;
+    if (!n) return {};
+    const [usado] = await tx.select({ id: maletas.id }).from(maletas).where(eq(maletas.numero, n)).limit(1);
+    return usado ? {} : { numero: n };
+  }
+
   private async gravarMaletas(tx: Tx, ex: Execucao, pedidos: Reg[] = [], origem: typeof locaisEstoque.$inferSelect, usuarioId: string) {
     const pm = this.parte(ex, 'Maletas abertas');
     const revs = await this.mapa(tx, pessoas, 'rev:');
@@ -1006,6 +1029,8 @@ export class JueriService {
         const [m] = await tx
           .insert(maletas)
           .values({
+            // Mesmo número do pedido no Jueri, quando é um número e está livre.
+            ...(await this.numeroLivre(tx, numero)),
             empresaId: origem.empresaId,
             representanteId: repId,
             localId: local.id,

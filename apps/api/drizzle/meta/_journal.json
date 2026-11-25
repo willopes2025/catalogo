@@ -316,6 +316,13 @@
       "when": 1795636999258,
       "tag": "0044_tarefas_com_mensagem",
       "breakpoints": true
+    },
+    {
+      "idx": 45,
+      "version": "7",
+      "when": 1795645258192,
+      "tag": "0045_maleta_alteracoes_e_numeracao",
+      "breakpoints": true
     }
   ]
 }

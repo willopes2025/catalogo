@@ -93,6 +93,21 @@ export class MaletasController {
     return this.svc.situacao(id);
   }
 
+  /** Pedidos de autorização das maletas (para a gerência). */
+  @Get('solicitacoes')
+  @Permissao('maletas', 'ver')
+  solicitacoes(@Query('status') status?: string, @Query('maletaId') maletaId?: string) {
+    const st = ['pendente', 'aprovada', 'recusada', 'cancelada', 'todas'].includes(status ?? '') ? status! : 'pendente';
+    return this.svc.solicitacoes(st, maletaId && /^[0-9a-f-]{36}$/i.test(maletaId) ? maletaId : undefined);
+  }
+
+  @Post('solicitacoes/:sid/decidir')
+  @Permissao('maletas', 'excluir')
+  decidirSolicitacao(@Usuario() u: UsuarioLogado, @Param('sid', ParseUUIDPipe) sid: string, @Body() body: unknown) {
+    const d = validar(z.object({ aprovar: z.boolean(), observacao: z.string().trim().max(300).nullable().optional() }), body);
+    return this.svc.decidirSolicitacao(sid, d.aprovar, d.observacao ?? null, u.id);
+  }
+
   @Get(':id')
   @Permissao('maletas', 'ver')
   obter(@Param('id', ParseUUIDPipe) id: string) {
@@ -134,6 +149,22 @@ export class MaletasController {
   @Permissao('maletas', 'editar')
   acertar(@Usuario() u: UsuarioLogado, @Param('id', ParseUUIDPipe) id: string, @Body() body: unknown) {
     return this.svc.acertar(id, validar(acertoSchema, body) as DadosAcerto, u.id);
+  }
+
+  /** Passa a maleta para outra consignatária (crédito conferido; promissória nova). */
+  @Post(':id/consignataria')
+  @Permissao('maletas', 'editar')
+  trocarConsignataria(@Usuario() u: UsuarioLogado, @Param('id', ParseUUIDPipe) id: string, @Body() body: unknown) {
+    const d = validar(z.object({ representanteId: z.string().uuid('Escolha a consignatária'), motivo: z.string().trim().min(3, 'Informe o motivo').max(300), liberarExcecao: z.boolean().optional() }), body);
+    return this.svc.trocarConsignataria(id, d, u.id, temPermissao(u.permissoes, 'configuracoes', 'editar'));
+  }
+
+  /** Muda a data do acerto: a gerência (Maletas › excluir) muda direto; os outros pedem autorização. */
+  @Post(':id/data-acerto')
+  @Permissao('maletas', 'editar')
+  mudarDataAcerto(@Usuario() u: UsuarioLogado, @Param('id', ParseUUIDPipe) id: string, @Body() body: unknown) {
+    const d = validar(z.object({ dataLimite: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Data inválida'), motivo: z.string().trim().min(3, 'Informe o motivo').max(300) }), body);
+    return this.svc.mudarDataAcerto(id, d, u.id, temPermissao(u.permissoes, 'maletas', 'excluir'));
   }
 
   @Post(':id/cancelar')

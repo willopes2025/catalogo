@@ -4,6 +4,7 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { api, pode } from '../api';
 import { data, dataHora, reais } from '../formato';
 import { Abas, Carregando, Erro, StatusMaleta, Topo } from '../componentes/ui';
+import { AutorizacoesDaMaleta } from './DetalheMaleta';
 
 type Aba = 'abertas' | 'vencendo' | 'atrasadas' | 'acertadas' | 'canceladas' | 'pedidos';
 
@@ -18,6 +19,7 @@ export function Maletas() {
   return (
     <>
       <Topo eb="Maletas" titulo="Consignado" sub={q.data && `${q.data.length} maletas · ${reais(total)} em peças`} acoes={pode('maletas', 'criar') && <Link className="botao" to="/maletas/nova">Nova maleta</Link>} />
+      <AutorizacoesDaMaleta />
       <Abas ativa={aba} mudar={(a) => setParams({ aba: a })} abas={[['abertas', 'Abertas'], ['vencendo', 'Vencendo em 7 dias'], ['atrasadas', 'Atrasadas'], ['acertadas', 'Acertadas'], ['canceladas', 'Canceladas'], ['pedidos', 'Pedidos das representantes']]} />
       {aba === 'pedidos' ? <PedidosRepresentantes /> : <>
       <form className="busca" onSubmit={(e) => { e.preventDefault(); setBuscaAtiva(busca); }}>
