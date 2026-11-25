@@ -115,9 +115,13 @@ export class HistoricoWhatsappService implements OnModuleInit, OnModuleDestroy {
       const de = inicioDoDia(imp.de);
       const ate = fimDoDia(imp.ate);
       let novas = 0;
+      // Mensagens que não entraram, por motivo (ex.: telefone de outro país ou em formato que o WhatsApp não usa).
+      const puladas = new Map<string, number>();
       for await (const lote of con.mensagensGuardadas(de, ate)) {
         for (const m of lote) {
           const r = await this.canais.gravarDoHistorico(c, con, m, imp.midias).catch((e) => {
+            const motivo = (e as Error).message.replace(/\.$/, '').toLowerCase();
+            puladas.set(motivo, (puladas.get(motivo) ?? 0) + 1);
             this.log.warn(`Mensagem do histórico não gravada: ${(e as Error).message}`);
             return null;
           });
@@ -132,6 +136,8 @@ export class HistoricoWhatsappService implements OnModuleInit, OnModuleDestroy {
           where c.canal_id = ${c.id} and m.criado_em between ${de} and ${ate}`)
       ).rows;
       const total = imp.mensagens + novas;
+      const qtdPuladas = [...puladas.values()].reduce((a, b) => a + b, 0);
+      const avisoPuladas = qtdPuladas ? ` ${qtdPuladas} mensagem(ns) não entraram: ${[...puladas].map(([m, n]) => `${n} por ${m}`).join('; ')}.` : '';
       const vazio = proprio
         ? 'O WhatsApp não mandou mensagens desse período. Ele costuma mandar só alguns meses para trás; confira o período.'
         : 'O servidor Evolution não tem mensagens guardadas desse período. Ele precisa estar configurado para guardar o histórico (DATABASE_SAVE_DATA_HISTORIC).';
@@ -142,8 +148,8 @@ export class HistoricoWhatsappService implements OnModuleInit, OnModuleDestroy {
           conversas,
           rodadas: imp.rodadas + 1,
           ...(final
-            ? { status: 'concluida', concluidoEm: new Date(), detalhe: total ? `${total} mensagem(ns) importada(s). As conversas entraram como resolvidas.` : vazio }
-            : { detalhe: `${total} mensagem(ns) importada(s) até agora. O WhatsApp ainda pode mandar mais; a próxima busca é em alguns minutos.` }),
+            ? { status: 'concluida', concluidoEm: new Date(), detalhe: (total ? `${total} mensagem(ns) importada(s). As conversas entraram como resolvidas.` : vazio) + avisoPuladas }
+            : { detalhe: `${total} mensagem(ns) importada(s) até agora. O WhatsApp ainda pode mandar mais; a próxima busca é em alguns minutos.${avisoPuladas}` }),
         })
         .where(eq(crmImportacoes.id, id));
     } catch (e) {
