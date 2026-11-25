@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { api, pode } from '../../api';
+import { api, lerSessao, pode } from '../../api';
 import { Campo, Carregando, Erro } from '../../componentes/ui';
 import { ha, ligar, meuId, telefoneBonito, useMidia, useRelogio, usarAtendentes, usarFunis, type Template } from './comum';
 
@@ -161,7 +161,7 @@ export function Chat({ conversaId, leadId, aoMudar, abas, aoSair }: { conversaId
   const gestor = pode('crm', 'excluir');
   const editar = pode('crm', 'editar');
   const q = useQuery({ queryKey: ['crm', 'msgs', conversaId], queryFn: () => api<Dados>(`/crm/conversas/${conversaId}/mensagens`), refetchInterval: 3000 });
-  const respostas = useQuery({ queryKey: ['crm', 'respostas'], queryFn: () => api<{ id: string; atalho: string; texto: string }[]>('/crm/respostas'), staleTime: 60_000 });
+  const respostas = useQuery({ queryKey: ['crm', 'respostas'], queryFn: () => api<{ id: string; atalho: string; texto: string; midia: string | null; midiaMime: string | null; midiaNome: string | null }[]>('/crm/respostas'), staleTime: 60_000 });
   const canalId = q.data?.conversa.canalId;
   const templates = useQuery({ queryKey: ['crm', 'templates', canalId], queryFn: () => api<Template[]>(`/crm/templates?canalId=${canalId}`), enabled: !!canalId, staleTime: 60_000 });
   const atendentes = usarAtendentes();
@@ -302,11 +302,14 @@ export function Chat({ conversaId, leadId, aoMudar, abas, aoSair }: { conversaId
 
   // "/" → respostas rápidas e templates (digitar mais filtra pelo nome); "@nome" na conversa interna → colegas.
   const cv = q.data?.conversa;
-  const sugestoes = useMemo((): { rotulo: string; valor: string; etiqueta?: string; templateId?: string }[] => {
+  const sugestoes = useMemo((): { rotulo: string; valor: string; etiqueta?: string; templateId?: string; midia?: { nome: string; mime: string | null; arquivo: string } }[] => {
     const barra = texto.match(/^\/(.*)$/);
     if (barra && !interna && !barra[1].includes('\n')) {
       const termo = barra[1].trim().toLowerCase();
-      const rapidas = (respostas.data ?? []).filter((r) => r.atalho.startsWith(termo) || r.texto.toLowerCase().includes(termo)).map((r) => ({ rotulo: `/${r.atalho} — ${r.texto.slice(0, 60)}`, valor: r.texto, etiqueta: 'Resposta rápida' }));
+      const icone = (mime: string | null) => (mime?.startsWith('image/') ? '🖼 ' : mime?.startsWith('video/') ? '🎬 ' : mime?.startsWith('audio/') ? '🎤 ' : '');
+      const rapidas = (respostas.data ?? [])
+        .filter((r) => r.atalho.startsWith(termo) || r.texto.toLowerCase().includes(termo))
+        .map((r) => ({ rotulo: `/${r.atalho} — ${icone(r.midiaMime)}${r.texto.slice(0, 60) || r.midiaNome || ''}`, valor: r.texto, etiqueta: 'Resposta rápida', ...(r.midia ? { midia: { nome: r.midiaNome ?? 'arquivo', mime: r.midiaMime, arquivo: r.midia } } : {}) }));
       const modelos = (templates.data ?? [])
         .filter((t) => (t.tipo === 'meta' ? t.status === 'APPROVED' && cv?.canalTipo === 'oficial' : cv?.canalTipo !== 'oficial' || cv?.dentroDaJanela))
         .filter((t) => t.nome.toLowerCase().includes(termo) || t.texto.toLowerCase().includes(termo))
@@ -318,9 +321,17 @@ export function Chat({ conversaId, leadId, aoMudar, abas, aoSair }: { conversaId
     if (arroba && interna) return (atendentes.data ?? []).filter((a) => a.nome.toLowerCase().startsWith(arroba[2].toLowerCase())).slice(0, 6).map((a) => ({ rotulo: `@${a.nome}`, valor: texto.replace(/@(\S*)$/, `@${a.nome.split(' ')[0]} `) }));
     return [];
   }, [texto, interna, respostas.data, atendentes.data, templates.data, cv?.canalTipo, cv?.dentroDaJanela]);
-  const usarSugestao = (sg: { valor: string; templateId?: string }) => {
+  const usarSugestao = (sg: { valor: string; templateId?: string; midia?: { nome: string; mime: string | null; arquivo: string } }) => {
     if (sg.templateId) enviar.mutate({ tipo: 'template', templateId: sg.templateId });
     else setTexto(sg.valor);
+    // Resposta rápida com foto, vídeo ou áudio: o arquivo fica anexado esperando o "Enviar" (o texto vira legenda).
+    if (sg.midia) {
+      const m = sg.midia;
+      fetch(`/api/crm/midia/${m.arquivo}`, { headers: { authorization: `Bearer ${lerSessao()?.token ?? ''}` } })
+        .then((r) => (r.ok ? r.blob() : Promise.reject(new Error('O arquivo da resposta rápida não foi encontrado.'))))
+        .then((b) => escolher(m.mime ? new Blob([b], { type: m.mime }) : b, m.nome))
+        .catch((e) => setErroLocal((e as Error).message));
+    }
     campoTexto.current?.focus();
   };
   const semSugestao = !interna && /^\/[^\n]*$/.test(texto) && !sugestoes.length;

@@ -1,10 +1,10 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, lerSessao, pode } from '../../api';
 import { Link } from 'react-router-dom';
 import { Abas, Campo, Carregando, Erro, camposComErro } from '../../componentes/ui';
 import { Distribuicao } from './Distribuicao';
-import { NOME_TIPO_CANAL, NovoCampo, TIPOS_CAMPO, usarAtendentes, usarCampos, usarUsuariosDoCrm, usarCanais, usarFunis, variavelDoCampo, type CampoDef, type Canal, type Template, type TipoCanal } from './comum';
+import { NOME_TIPO_CANAL, NovoCampo, TIPOS_CAMPO, usarAtendentes, usarCampos, usarUsuariosDoCrm, usarCanais, usarFunis, useMidia, variavelDoCampo, type CampoDef, type Canal, type Template, type TipoCanal } from './comum';
 
 type Sub = 'numeros' | 'funis' | 'distribuicao' | 'campos' | 'templates' | 'respostas' | 'ia' | 'ramais';
 const sel = { padding: 7, borderRadius: 8, border: '1px solid var(--linha)', font: 'inherit' } as const;
@@ -274,6 +274,7 @@ function FormCanal({ tipo, canal, fechar, porToken: novoPorToken }: { tipo: Tipo
         <button className="botao" disabled={!f.nome.trim() || salvar.isPending || (porToken && !canal && !(f.config.servidor?.trim() && f.config.instancia?.trim() && f.config.token?.trim()))} onClick={() => salvar.mutate()}>{salvar.isPending ? 'Preparando…' : porToken ? (canal ? 'Salvar' : 'Conferir e conectar') : tipo === 'evolution' && !canal ? 'Salvar e mostrar o QR code' : 'Salvar'}</button>
         <button className="botao claro" onClick={() => fechar()}>Voltar</button>
       </div>
+      {canal && tipo === 'evolution' && <div className="l4"><ImportarHistorico canal={canal} /></div>}
     </div>
   );
 }
@@ -478,26 +479,70 @@ function Templates() {
 
 // ───────────── Respostas rápidas ─────────────
 
+type RespostaRapida = { id: string; atalho: string; texto: string; midia: string | null; midiaMime: string | null; midiaNome: string | null };
+const tipoMidia = (mime?: string | null) => (mime?.startsWith('image/') ? 'Foto' : mime?.startsWith('video/') ? 'Vídeo' : mime?.startsWith('audio/') ? 'Áudio' : null);
+const lerBase64 = (f: Blob) => new Promise<string>((ok, erro) => { const r = new FileReader(); r.onload = () => ok(String(r.result).split(',')[1] ?? ''); r.onerror = () => erro(new Error('Não foi possível ler o arquivo.')); r.readAsDataURL(f); });
+
+function PreviaResposta({ r }: { r: RespostaRapida }) {
+  const url = useMidia(r.midia);
+  if (!r.midia) return null;
+  if (!url) return <span className="muted">Carregando…</span>;
+  if (r.midiaMime?.startsWith('image/')) return <img src={url} alt={r.midiaNome ?? 'foto'} style={{ maxWidth: 120, maxHeight: 90, borderRadius: 8, display: 'block' }} />;
+  if (r.midiaMime?.startsWith('video/')) return <video src={url} controls style={{ maxWidth: 180, maxHeight: 120, borderRadius: 8, display: 'block' }} />;
+  return <audio src={url} controls style={{ maxWidth: 240, display: 'block' }} />;
+}
+
 function Respostas() {
   const qc = useQueryClient();
-  const q = useQuery({ queryKey: ['crm', 'respostas'], queryFn: () => api<{ id: string; atalho: string; texto: string }[]>('/crm/respostas') });
+  const q = useQuery({ queryKey: ['crm', 'respostas'], queryFn: () => api<RespostaRapida[]>('/crm/respostas') });
   const [f, setF] = useState({ atalho: '', texto: '' });
+  const [arquivo, setArquivo] = useState<File | null>(null);
+  const [erroArquivo, setErroArquivo] = useState<string | null>(null);
+  const campoArquivo = useRef<HTMLInputElement>(null);
   const m = useMutation({ mutationFn: ({ rota, metodo, corpo }: { rota: string; metodo?: string; corpo?: unknown }) => api(rota, { metodo, corpo: corpo ?? {} }), onSuccess: () => qc.invalidateQueries({ queryKey: ['crm', 'respostas'] }) });
+  const adicionar = useMutation({
+    mutationFn: async () => api('/crm/respostas', { corpo: { atalho: f.atalho, texto: f.texto, midia: arquivo ? { nome: arquivo.name, mime: arquivo.type || 'application/octet-stream', base64: await lerBase64(arquivo) } : null } }),
+    onSuccess: () => { setF({ atalho: '', texto: '' }); setArquivo(null); qc.invalidateQueries({ queryKey: ['crm', 'respostas'] }); },
+  });
   const gestor = pode('crm', 'excluir');
+  const escolher = (a: File | undefined) => {
+    setErroArquivo(null);
+    if (!a) return setArquivo(null);
+    if (!/^(image|video|audio)\//.test(a.type)) return setErroArquivo('Escolha uma foto, um vídeo ou um áudio.');
+    if (a.size > 16_000_000) return setErroArquivo('Arquivo maior que 16 MB.');
+    setArquivo(a);
+  };
   if (q.isLoading) return <Carregando />;
   return (
     <div className="cartao">
-      <p className="muted" style={{ marginTop: 0 }}>No chat, digite "/" e o atalho para inserir o texto.</p>
-      {m.error && <Erro erro={m.error} />}
-      <table className="tabela">
-        <thead><tr><th>Atalho</th><th>Texto</th><th></th></tr></thead>
-        <tbody>{q.data?.map((r) => <tr key={r.id}><td><code>/{r.atalho}</code></td><td style={{ whiteSpace: 'pre-wrap' }}>{r.texto}</td><td>{gestor && <button className="botao perigo pequeno" onClick={() => m.mutate({ rota: `/crm/respostas/${r.id}`, metodo: 'DELETE' })}>Apagar</button>}</td></tr>)}</tbody>
-      </table>
+      <p className="muted" style={{ marginTop: 0 }}>No chat, digite "/" e o atalho. O texto entra no campo e a foto, o vídeo ou o áudio fica anexado, pronto para enviar (o texto vira a legenda).</p>
+      {(m.error || adicionar.error) && <Erro erro={m.error ?? adicionar.error} />}
+      <div style={{ overflowX: 'auto' }}>
+        <table className="tabela">
+          <thead><tr><th>Atalho</th><th>Texto</th><th>Mídia</th><th></th></tr></thead>
+          <tbody>{q.data?.map((r) => (
+            <tr key={r.id}>
+              <td><code>/{r.atalho}</code></td>
+              <td style={{ whiteSpace: 'pre-wrap' }}>{r.texto || <span className="muted">(sem texto)</span>}</td>
+              <td>{r.midia ? <div className="coluna" style={{ gap: 4 }}><span className="tag">{tipoMidia(r.midiaMime)}</span><PreviaResposta r={r} /></div> : <span className="muted">—</span>}</td>
+              <td>{gestor && <button className="botao perigo pequeno" onClick={() => m.mutate({ rota: `/crm/respostas/${r.id}`, metodo: 'DELETE' })}>Apagar</button>}</td>
+            </tr>
+          ))}</tbody>
+        </table>
+      </div>
       {gestor && (
-        <div className="flex" style={{ gap: 6, marginTop: 10, flexWrap: 'wrap' }}>
-          <input placeholder="atalho" value={f.atalho} onChange={(e) => setF({ ...f, atalho: e.target.value })} style={{ ...sel, width: 140 }} />
-          <input placeholder="Texto da resposta" value={f.texto} onChange={(e) => setF({ ...f, texto: e.target.value })} style={{ ...sel, flex: 1, minWidth: 240 }} />
-          <button className="botao claro" disabled={!f.atalho.trim() || !f.texto.trim()} onClick={() => { m.mutate({ rota: '/crm/respostas', corpo: f }); setF({ atalho: '', texto: '' }); }}>Adicionar</button>
+        <div className="coluna" style={{ gap: 8, marginTop: 10 }}>
+          <div className="flex" style={{ gap: 6, flexWrap: 'wrap' }}>
+            <input id="resposta-atalho" placeholder="atalho" value={f.atalho} onChange={(e) => setF({ ...f, atalho: e.target.value })} style={{ ...sel, width: 140 }} />
+            <textarea id="resposta-texto" placeholder={arquivo ? 'Legenda (opcional)' : 'Texto da resposta'} value={f.texto} rows={2} onChange={(e) => setF({ ...f, texto: e.target.value })} style={{ ...sel, flex: 1, minWidth: 240, resize: 'vertical' }} />
+          </div>
+          <div className="flex" style={{ gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+            <button className="botao claro pequeno" onClick={() => campoArquivo.current?.click()}>{arquivo ? 'Trocar arquivo' : '📎 Foto, vídeo ou áudio (opcional)'}</button>
+            <input ref={campoArquivo} type="file" hidden accept="image/jpeg,image/png,image/webp,image/gif,video/mp4,video/quicktime,audio/*" onChange={(e) => { escolher(e.target.files?.[0]); e.target.value = ''; }} />
+            {arquivo && <span className="muted" style={{ fontSize: 13 }}>{tipoMidia(arquivo.type)}: {arquivo.name} <button className="botao claro pequeno" onClick={() => setArquivo(null)}>Tirar</button></span>}
+            <button className="botao" disabled={!f.atalho.trim() || (!f.texto.trim() && !arquivo) || adicionar.isPending} onClick={() => adicionar.mutate()}>{adicionar.isPending ? 'Salvando…' : 'Adicionar'}</button>
+          </div>
+          {erroArquivo && <div className="aviso erro">{erroArquivo}</div>}
         </div>
       )}
     </div>

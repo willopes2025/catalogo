@@ -1297,8 +1297,26 @@ export class AtendimentoController {
   @Post('crm/respostas')
   @Permissao('crm', 'excluir')
   async criarResposta(@Body() body: unknown) {
-    const d = validar(z.object({ atalho: z.string().trim().min(2).max(30).regex(/^[a-z0-9_-]+$/i, 'Use letras, números, - ou _').transform((s) => s.toLowerCase()), texto: z.string().trim().min(1).max(4096) }), body);
-    const [r] = await this.db.insert(crmRespostasRapidas).values(d).returning();
+    const d = validar(
+      z.object({
+        atalho: z.string().trim().min(2).max(30).regex(/^[a-z0-9_-]+$/i, 'Use letras, números, - ou _').transform((s) => s.toLowerCase()),
+        texto: z.string().trim().max(4096).default(''),
+        midia: z.object({ nome: z.string().trim().min(1).max(200), mime: z.string().trim().max(100), base64: z.string().min(10) }).nullable().optional(),
+      }),
+      body,
+    );
+    if (!d.texto && !d.midia) throw new BadRequestException('Escreva o texto ou escolha uma foto, vídeo ou áudio.');
+    let arquivo: { midia: string; midiaMime: string; midiaNome: string } | null = null;
+    if (d.midia) {
+      const mime = d.midia.mime.split(';')[0].toLowerCase();
+      if (!/^(image\/(jpeg|png|webp|gif)|video\/(mp4|3gpp|quicktime)|audio\/(ogg|mpeg|mp4|aac|webm|wav|x-m4a|amr))$/.test(mime)) throw new BadRequestException('Use foto (JPG, PNG, WEBP), vídeo (MP4) ou áudio (OGG, MP3, M4A).');
+      const conteudo = Buffer.from(d.midia.base64.replace(/^data:[^;]+;base64,/, ''), 'base64');
+      if (conteudo.length > 16_000_000) throw new BadRequestException('Arquivo maior que 16 MB.');
+      arquivo = { midia: await this.arquivos.salvarMidia(conteudo, mime), midiaMime: mime, midiaNome: d.midia.nome };
+    }
+    const [ja] = await this.db.select({ id: crmRespostasRapidas.id }).from(crmRespostasRapidas).where(eq(crmRespostasRapidas.atalho, d.atalho));
+    if (ja) throw new BadRequestException(`Já existe a resposta /${d.atalho}. Apague a antiga ou use outro atalho.`);
+    const [r] = await this.db.insert(crmRespostasRapidas).values({ atalho: d.atalho, texto: d.texto, ...(arquivo ?? {}) }).returning();
     return r;
   }
 

@@ -1268,7 +1268,12 @@ export const crmTemplates = pgTable('crm_templates', {
 export const crmRespostasRapidas = pgTable('crm_respostas_rapidas', {
   id: id(),
   atalho: text('atalho').notNull().unique(),
-  texto: text('texto').notNull(),
+  /** Texto (ou legenda da mídia). Pode ficar vazio quando a resposta é só uma foto, vídeo ou áudio. */
+  texto: text('texto').notNull().default(''),
+  /** Foto, vídeo ou áudio que vai junto (arquivo em /crm/midia). */
+  midia: text('midia'),
+  midiaMime: text('midia_mime'),
+  midiaNome: text('midia_nome'),
   criadoEm: criadoEm(),
 });
 

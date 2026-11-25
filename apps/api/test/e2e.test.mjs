@@ -4208,3 +4208,21 @@ test('transferir conversa: lista todos os usuários, dizendo quem não pode rece
   await ok('POST', `/crm/conversas/${cv.id}/transferir`, { usuarioId: pode.id });
   await ok('DELETE', `/crm/canais/${c.id}`);
 });
+
+test('respostas rápidas com foto, vídeo ou áudio', async () => {
+  const png = Buffer.from('89504e470d0a1a0a0000000d4948445200000001000000010806000000', 'hex').toString('base64');
+  const r = await ok('POST', '/crm/respostas', { atalho: 'catalogo-foto', texto: 'Olha o catálogo novo!', midia: { nome: 'catalogo.png', mime: 'image/png', base64: png } });
+  assert.deepEqual([r.midiaMime, r.midiaNome], ['image/png', 'catalogo.png']);
+  const so = await ok('POST', '/crm/respostas', { atalho: 'audio-boasvindas', midia: { nome: 'oi.ogg', mime: 'audio/ogg; codecs=opus', base64: Buffer.from('OggS-audio-de-teste').toString('base64') } });
+  assert.deepEqual([so.texto, so.midiaMime], ['', 'audio/ogg']);
+  const arq = await fetch(`${API}/crm/midia/${r.midia}`, { headers: { authorization: `Bearer ${token}` } });
+  assert.equal(arq.status, 200);
+  assert.equal((await fetch(`${API}/crm/midia/${r.midia}`)).status, 401, 'a mídia só sai com login');
+  assert.equal((await chamar('POST', '/crm/respostas', { atalho: 'vazia' })).status, 400, 'sem texto e sem mídia');
+  assert.equal((await chamar('POST', '/crm/respostas', { atalho: 'pdf-nao', midia: { nome: 'a.pdf', mime: 'application/pdf', base64: png } })).status, 400, 'só foto, vídeo ou áudio');
+  assert.equal((await chamar('POST', '/crm/respostas', { atalho: 'catalogo-foto', texto: 'de novo' })).status, 400, 'atalho repetido');
+  const lista = await ok('GET', '/crm/respostas');
+  assert.ok(lista.some((x) => x.atalho === 'catalogo-foto' && x.midia === r.midia));
+  await ok('DELETE', `/crm/respostas/${r.id}`);
+  await ok('DELETE', `/crm/respostas/${so.id}`);
+});
