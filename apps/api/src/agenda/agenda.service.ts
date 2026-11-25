@@ -7,6 +7,7 @@ import { CanaisService } from '../crm/canais.service';
 import { CrmService } from '../crm/crm.service';
 import { GoogleService } from './google.service';
 import { PushService } from '../portal/push.service';
+import { ConfiguracoesService } from '../configuracoes/configuracoes.service';
 
 export type Compromisso = typeof agendaCompromissos.$inferSelect;
 
@@ -53,6 +54,7 @@ export class AgendaService implements OnModuleInit, OnModuleDestroy {
     private readonly crm: CrmService,
     private readonly canais: CanaisService,
     private readonly push: PushService,
+    private readonly config: ConfiguracoesService,
   ) {}
 
   onModuleInit() {
@@ -198,29 +200,33 @@ export class AgendaService implements OnModuleInit, OnModuleDestroy {
 
   // ───── WhatsApp ─────
 
-  private async canalPadrao() {
+  /** Número que manda os avisos da Agenda: o escolhido em Configurações, ou o primeiro por QR code. */
+  private async canalPadrao(escolhido: string | null) {
     const cs = await this.db.select({ id: crmCanais.id, tipo: crmCanais.tipo }).from(crmCanais).where(and(eq(crmCanais.ativo, true), isNull(crmCanais.excluidoEm))).orderBy(asc(crmCanais.criadoEm));
+    if (escolhido && cs.some((c) => c.id === escolhido)) return escolhido;
     return (cs.find((c) => c.tipo !== 'oficial') ?? cs[0])?.id ?? null;
   }
 
   private async avisar(c: Compromisso, motivo: 'marcado' | 'remarcado' | 'cancelado' | 'lembrete_dia' | 'lembrete_hora') {
     const quem = await this.convidado(c);
     if (!quem?.telefone) throw new Error('sem telefone de quem vai participar');
-    const canalId = await this.canalPadrao();
+    const msgs = await this.config.ler('mensagens_agenda');
+    const canalId = await this.canalPadrao(msgs.canalId);
     if (!canalId) throw new Error('nenhum número de WhatsApp ativo no CRM');
-    const primeiro = quem.nome.split(' ')[0];
-    const onde = c.online ? (c.link ? `Link da chamada: ${c.link}` : 'É online: o link chega antes do horário.') : c.local ? `Local: ${c.local}` : '';
-    const portal = quem.pessoaId ? `\nConfirme no portal: ${urlPublica()}/portal` : '';
-    const textos = {
-      marcado: `Oi, ${primeiro}! Marcamos: *${c.titulo}*\n📅 ${dia(c.inicio)}, às ${hora(c.inicio)}\n${onde}${portal}`,
-      remarcado: `Oi, ${primeiro}! Mudamos o horário: *${c.titulo}*\n📅 agora ${dia(c.inicio)}, às ${hora(c.inicio)}\n${onde}${portal}`,
-      cancelado: `Oi, ${primeiro}! O compromisso *${c.titulo}* de ${dia(c.inicio)}, às ${hora(c.inicio)}, foi cancelado. Qualquer dúvida, é só responder aqui.`,
-      lembrete_dia: `Oi, ${primeiro}! Lembrete: *${c.titulo}* amanhã (${dia(c.inicio)}), às ${hora(c.inicio)}.\n${onde}${portal}`,
-      lembrete_hora: `Oi, ${primeiro}! Daqui a pouco, às ${hora(c.inicio)}: *${c.titulo}*.\n${onde}`,
-    };
+    const texto = montarMensagemAgenda(msgs[motivo], {
+      primeiro_nome: quem.nome.split(' ')[0],
+      nome: quem.nome,
+      titulo: c.titulo,
+      dia: dia(c.inicio),
+      hora: hora(c.inicio),
+      onde: c.online ? (c.link ? `Link da chamada: ${c.link}` : 'É online: o link chega antes do horário.') : c.local ? `Local: ${c.local}` : '',
+      link: c.link ?? '',
+      local: c.local ?? '',
+      portal: quem.pessoaId ? `Confirme no portal: ${urlPublica()}/portal` : '',
+    });
     const contato = await this.crm.garantirContato({ telefone: quem.telefone, nome: quem.nome, pessoaId: quem.pessoaId });
     const cv = await this.canais.garantirConversa(contato.id, canalId, 'resolvida');
-    await this.canais.enviar({ conversaId: cv.id, tipo: 'texto', texto: textos[motivo].trim(), leadId: c.leadId ?? undefined });
+    await this.canais.enviar({ conversaId: cv.id, tipo: 'texto', texto, leadId: c.leadId ?? undefined });
   }
 
   /** Véspera (entre 2 h e 24 h antes) e uma hora antes. Cada lembrete sai uma vez só. */
@@ -278,4 +284,15 @@ export class AgendaService implements OnModuleInit, OnModuleDestroy {
       .limit(500)
       .then((r) => r.map(({ c, responsavel, pessoa, contato }) => ({ ...c, responsavel, quem: pessoa ?? contato ?? c.convidadoNome })));
   }
+}
+
+/** Troca as variáveis da mensagem da Agenda e tira as linhas que ficaram vazias. */
+export function montarMensagemAgenda(modelo: string, v: Record<string, string>) {
+  return modelo
+    .replace(/\{\{\s*([a-z_]+)\s*\}\}/g, (_, k: string) => v[k] ?? '')
+    .split('\n')
+    .map((l) => l.replace(/[ \t]+$/, ''))
+    .filter((l) => l.trim() !== '')
+    .join('\n')
+    .trim();
 }

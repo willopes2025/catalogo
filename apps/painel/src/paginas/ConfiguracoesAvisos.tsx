@@ -34,8 +34,59 @@ export function AvisosERegras() {
   return (
     <div className="coluna">
       <Avisos />
+      <MensagensAgenda />
       <Impressao />
       <OutrasRegras />
+    </div>
+  );
+}
+
+interface CfgMsgAgenda { canalId: string | null; marcado: string; remarcado: string; cancelado: string; lembrete_dia: string; lembrete_hora: string }
+const MSGS_AGENDA: [keyof Omit<CfgMsgAgenda, 'canalId'>, string, string][] = [
+  ['marcado', 'Ao marcar', 'Sai assim que o compromisso é marcado (com "Avisar pelo WhatsApp" ligado).'],
+  ['remarcado', 'Ao remarcar', 'Quando a data ou a hora mudam.'],
+  ['cancelado', 'Ao cancelar', 'Quando o compromisso é cancelado.'],
+  ['lembrete_dia', 'Na véspera', 'No dia anterior ao compromisso.'],
+  ['lembrete_hora', 'Pouco antes', 'Perto do horário.'],
+];
+const VARS_AGENDA = ['primeiro_nome', 'nome', 'titulo', 'dia', 'hora', 'onde', 'link', 'local', 'portal'];
+const EXEMPLO_AGENDA: Record<string, string> = { primeiro_nome: 'Patrícia', nome: 'Patrícia Moura', titulo: 'Entrevista de candidata', dia: 'quinta-feira, 26/11', hora: '10:00', onde: 'Link da chamada: https://meet.google.com/abc-defg-hij', link: 'https://meet.google.com/abc-defg-hij', local: '', portal: 'Confirme no portal: https://aritana.wideic.com/portal' };
+const previaAgenda = (t: string) => t.replace(/\{\{\s*([a-z_]+)\s*\}\}/g, (_, k: string) => EXEMPLO_AGENDA[k] ?? '').split('\n').filter((l) => l.trim()).join('\n');
+
+/** Mensagens de WhatsApp da Agenda: texto de cada aviso e o número que manda. */
+function MensagensAgenda() {
+  const { v, setV, salvar, carregando } = useConfig<CfgMsgAgenda>('mensagens_agenda');
+  const padrao = useQuery({ queryKey: ['config-padrao', 'mensagens_agenda'], queryFn: () => api<CfgMsgAgenda>('/configuracoes/padrao/mensagens_agenda'), staleTime: Infinity });
+  const canais = useQuery({ queryKey: ['crm', 'canais'], queryFn: () => api<{ id: string; nome: string; tipo: string; ativo: boolean }[]>('/crm/canais') });
+  const [aberta, setAberta] = useState<string | null>(null);
+  if (carregando || !v) return <Carregando />;
+  return (
+    <div className="cartao form">
+      <div className="secao">Mensagens da Agenda (WhatsApp)</div>
+      <Campo rotulo="Número que manda os avisos da Agenda" className="l2" ajuda="Em branco: o primeiro número por QR code ligado ao CRM.">
+        <select value={v.canalId ?? ''} onChange={(e) => setV({ ...v, canalId: e.target.value || null })}>
+          <option value="">Automático (primeiro número por QR code)</option>
+          {canais.data?.filter((c) => c.ativo).map((c) => <option key={c.id} value={c.id}>{c.nome}{c.tipo === 'oficial' ? ' (oficial: só chega se a pessoa escreveu nas últimas 24 h)' : ''}</option>)}
+        </select>
+      </Campo>
+      <p className="muted" style={{ gridColumn: 'span 4', margin: 0 }}>
+        Variáveis (clique para copiar): {VARS_AGENDA.map((x) => <button key={x} type="button" className="tag" style={{ marginRight: 4, cursor: 'pointer', border: 0 }} onClick={() => void navigator.clipboard?.writeText(`{{${x}}}`).catch(() => undefined)}>{`{{${x}}}`}</button>)}
+        <br />{'{{onde}}'} vira "Link da chamada: …" no online ou "Local: …" no presencial. {'{{portal}}'} só aparece para consultora. Linha que ficar vazia some sozinha. Use *asteriscos* para negrito no WhatsApp.
+      </p>
+      {MSGS_AGENDA.map(([k, rotulo, ajuda]) => (
+        <div key={k} className="campo" style={{ gridColumn: 'span 4' }}>
+          <div className="flex entre" style={{ gap: 8, flexWrap: 'wrap' }}>
+            <label htmlFor={`msg-agenda-${k}`}><b>{rotulo}</b> <span className="muted" style={{ fontSize: 12 }}>· {ajuda}</span></label>
+            <span className="flex" style={{ gap: 6 }}>
+              <button type="button" className="botao claro pequeno" onClick={() => setAberta(aberta === k ? null : k)}>{aberta === k ? 'Esconder prévia' : 'Ver prévia'}</button>
+              {padrao.data && v[k] !== padrao.data[k] && <button type="button" className="botao claro pequeno" onClick={() => setV({ ...v, [k]: padrao.data![k] })}>Voltar ao padrão</button>}
+            </span>
+          </div>
+          <textarea id={`msg-agenda-${k}`} rows={4} maxLength={1500} value={v[k]} onChange={(e) => setV({ ...v, [k]: e.target.value })} style={{ resize: 'vertical', fontFamily: 'inherit' }} />
+          {aberta === k && <div className="aviso" style={{ whiteSpace: 'pre-wrap', fontSize: 13 }}><b>Exemplo:</b>{'\n'}{previaAgenda(v[k])}</div>}
+        </div>
+      ))}
+      <Salvar s={salvar} valor={v} />
     </div>
   );
 }

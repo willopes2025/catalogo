@@ -37,6 +37,29 @@ export const CONFIGS = {
       diasAntesTitulo: z.number().int().min(0).max(15),
     }),
   },
+  /**
+   * Mensagens de WhatsApp da Agenda (ao marcar, remarcar, cancelar e os lembretes) e o número que manda.
+   * Variáveis: {{primeiro_nome}} {{nome}} {{titulo}} {{dia}} {{hora}} {{onde}} {{link}} {{local}} {{portal}}.
+   * Linha que fica vazia depois de trocar as variáveis some sozinha.
+   */
+  mensagens_agenda: {
+    padrao: {
+      canalId: null as string | null,
+      marcado: 'Oi, {{primeiro_nome}}! Marcamos: *{{titulo}}*\n📅 {{dia}}, às {{hora}}\n{{onde}}\n{{portal}}',
+      remarcado: 'Oi, {{primeiro_nome}}! Mudamos o horário: *{{titulo}}*\n📅 agora {{dia}}, às {{hora}}\n{{onde}}\n{{portal}}',
+      cancelado: 'Oi, {{primeiro_nome}}! O compromisso *{{titulo}}* de {{dia}}, às {{hora}}, foi cancelado. Qualquer dúvida, é só responder aqui.',
+      lembrete_dia: 'Oi, {{primeiro_nome}}! Lembrete: *{{titulo}}* amanhã ({{dia}}), às {{hora}}.\n{{onde}}\n{{portal}}',
+      lembrete_hora: 'Oi, {{primeiro_nome}}! Daqui a pouco, às {{hora}}: *{{titulo}}*.\n{{onde}}',
+    },
+    schema: z.object({
+      canalId: z.string().uuid().nullable(),
+      marcado: z.string().trim().min(5, 'Escreva a mensagem de compromisso marcado.').max(1500),
+      remarcado: z.string().trim().min(5, 'Escreva a mensagem de compromisso remarcado.').max(1500),
+      cancelado: z.string().trim().min(5, 'Escreva a mensagem de compromisso cancelado.').max(1500),
+      lembrete_dia: z.string().trim().min(5, 'Escreva o lembrete da véspera.').max(1500),
+      lembrete_hora: z.string().trim().min(5, 'Escreva o lembrete de pouco antes.').max(1500),
+    }),
+  },
   /** Indique e ganhe: prêmio para quem traz uma nova consultora pelo próprio link. */
   indicacao: {
     padrao: { ativo: true, valor: 5000, valorEquipe: null as number | null, validadeDias: 120, lancarNoFinanceiro: true, prazoPagamentoDias: 10, mensagemConvite: 'Quer ganhar uma renda extra vendendo semijoias? Faça seu cadastro para ser consultora Aritana pelo meu link:' },

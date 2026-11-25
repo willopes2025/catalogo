@@ -2250,6 +2250,18 @@ test('agenda: marca, avisa conflito, gera Meet pelo Google, lembra no WhatsApp e
     assert.ok(a.avisos.some((x) => /conecte a conta Google/.test(x)));
     assert.equal(a.link, null);
     assert.ok((await textos()).some((x) => x.includes('Marcamos') && x.includes('Acerto por v')), 'aviso de marcado foi pelo WhatsApp');
+    // Mensagem editada em Configurações: as variáveis são trocadas e a linha vazia some.
+    const padraoMsg = await ok('GET', '/configuracoes/padrao/mensagens_agenda');
+    assert.match(padraoMsg.marcado, /\{\{titulo\}\}/);
+    assert.equal((await chamar('PUT', '/configuracoes/chave/mensagens_agenda', { ...padraoMsg, marcado: '' })).status, 400, 'mensagem vazia não salva');
+    await ok('PUT', '/configuracoes/chave/mensagens_agenda', { ...padraoMsg, marcado: 'Olá {{primeiro_nome}}, combinado: {{titulo}} em {{dia}} às {{hora}}.\n{{local}}\nAté lá!' });
+    await ok('POST', '/agenda', { tipo: 'outro', inicio: daqui(20 * 24 * 60 + 17), duracaoMin: 30, online: false, convidadoNome: 'Graça Mensagem Nova', convidadoTelefone: '27966640001', avisar: true });
+    const nova = (await recebidos()).filter((r) => (r.corpo?.text ?? r.corpo?.text?.body ?? '').includes?.('Graça') || JSON.stringify(r.corpo ?? '').includes('Olá Graça')).pop();
+    assert.ok(nova, 'saiu a mensagem editada');
+    const textoNovo = JSON.stringify(nova.corpo);
+    assert.ok(textoNovo.includes('Olá Graça, combinado:') && textoNovo.includes('Até lá!') && !textoNovo.includes('{{'), textoNovo);
+    assert.ok(!textoNovo.includes('\\n\\n'), 'a linha do {{local}} vazia sumiu');
+    await ok('PUT', '/configuracoes/chave/mensagens_agenda', padraoMsg);
     // Mesmo responsável, mesmo horário: avisa; com "marcar mesmo assim", marca.
     const bate = await chamar('POST', '/agenda', { tipo: 'reuniao', titulo: 'Reunião de equipe', inicio: daqui(48 * 60 + 15), duracaoMin: 30, online: false, local: 'Matriz', avisar: false });
     assert.equal(bate.status, 409);

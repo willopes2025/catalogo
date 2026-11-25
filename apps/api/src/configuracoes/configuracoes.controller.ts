@@ -43,6 +43,13 @@ export class ConfiguracoesController {
     return r;
   }
 
+  /** Valor padrão de uma configuração (botão "voltar ao padrão"). */
+  @Get('padrao/:chave')
+  padraoChave(@Param('chave') chave: string) {
+    if (!(chave in CONFIGS)) throw new BadRequestException('Configuração desconhecida.');
+    return CONFIGS[chave as ChaveConfig].padrao;
+  }
+
   @Get('chave/:chave')
   lerChave(@Param('chave') chave: string) {
     if (!(chave in CONFIGS)) throw new BadRequestException('Configuração desconhecida.');
