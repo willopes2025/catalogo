@@ -24,23 +24,69 @@ function diaBase(d: Date) {
   return new Date(`${diaChave(d)}T12:00:00Z`);
 }
 
+type Modo = 'dia' | 'semana' | 'mes';
+const DIA_MS = 86_400_000;
+const somarDias = (d: Date, n: number) => new Date(d.getTime() + n * DIA_MS);
+/** Início (meia-noite de Brasília) de um dia base, em ISO. */
+const inicioIso = (d: Date) => new Date(`${d.toISOString().slice(0, 10)}T00:00:00-03:00`).toISOString();
+const MODO_SALVO = 'aritana.agenda.modo';
+
+/** Item da agenda: hora, título e com quem (pessoa, card ou convidado). */
+function ItemAgenda({ c, mostrarResp, compacto, abrir }: { c: Compromisso; mostrarResp: boolean; compacto?: boolean; abrir: () => void }) {
+  return (
+    <button className={`ag-item s-${c.status} ${compacto ? 'compacto' : ''}`} style={{ borderLeftColor: COR_TIPO[c.tipo] ?? '#7a7166' }} onClick={abrir} title={`${hora(c.inicio)} · ${c.titulo}${c.quem ? ` · com ${c.quem}` : ''}`}>
+      <span className="ag-hora">{hora(c.inicio)}{c.online && !compacto ? ' · online' : ''}{compacto && c.quem ? <span className="ag-com"> {c.quem}</span> : null}</span>
+      {!compacto && <span className="ag-titulo">{c.titulo}</span>}
+      {compacto && !c.quem && <span className="ag-titulo">{c.titulo}</span>}
+      {!compacto && c.quem && !c.titulo.includes(c.quem) && <span className="ag-com">com <b>{c.quem}</b></span>}
+      {!compacto && c.responsavel && mostrarResp && <span className="ag-quem">{c.responsavel}</span>}
+      {!compacto && c.status === 'confirmado' && <span className="ag-ok">✓ confirmado</span>}
+    </button>
+  );
+}
+
 export function Agenda() {
   const [params, setParams] = useSearchParams();
-  // Mostra 7 dias a partir de hoje (ou do dia escolhido): domingo à noite ainda vê a semana que vem.
-  const [semana, setSemana] = useState(() => diaBase(new Date()));
+  const [modo, setModoBruto] = useState<Modo>(() => {
+    try {
+      const m = localStorage.getItem(MODO_SALVO);
+      return m === 'dia' || m === 'mes' ? m : 'semana';
+    } catch {
+      return 'semana';
+    }
+  });
+  const setModo = (m: Modo) => {
+    setModoBruto(m);
+    try { localStorage.setItem(MODO_SALVO, m); } catch { /* sem armazenamento: só não lembra */ }
+  };
+  // Dia de referência (meio-dia UTC do dia de Brasília). Semana: 7 dias a partir dele (domingo à noite já vê a semana que vem).
+  const [base, setBase] = useState(() => diaBase(new Date()));
   const [resp, setResp] = useState('');
   const [aberto, setAberto] = useState<Compromisso | null>(null);
   const [novo, setNovo] = useState<Partial<DadosForm> | null>(null);
   const tipos = usarTipos();
-  const fimSemana = new Date(semana.getTime() + 7 * 86_400_000);
+
+  // Dias que aparecem na tela, conforme o modo.
+  const dias = useMemo(() => {
+    if (modo === 'dia') return [base];
+    if (modo === 'semana') return Array.from({ length: 7 }, (_, i) => somarDias(base, i));
+    // Mês: semanas inteiras, de segunda a domingo, cobrindo o mês todo.
+    const primeiro = new Date(`${base.toISOString().slice(0, 8)}01T12:00:00Z`);
+    const recuo = (primeiro.getUTCDay() + 6) % 7;
+    const inicio = somarDias(primeiro, -recuo);
+    const ultimo = new Date(Date.UTC(primeiro.getUTCFullYear(), primeiro.getUTCMonth() + 1, 0, 12));
+    const total = Math.ceil(((ultimo.getTime() - inicio.getTime()) / DIA_MS + 1) / 7) * 7;
+    return Array.from({ length: total }, (_, i) => somarDias(inicio, i));
+  }, [modo, base]);
+  const de = inicioIso(dias[0]);
+  const ate = inicioIso(somarDias(dias[dias.length - 1], 1));
   const q = useQuery({
-    queryKey: ['agenda', semana.toISOString(), resp],
-    queryFn: () => api<Compromisso[]>(`/agenda?de=${new Date(`${semana.toISOString().slice(0, 10)}T00:00:00-03:00`).toISOString()}&ate=${new Date(`${fimSemana.toISOString().slice(0, 10)}T00:00:00-03:00`).toISOString()}${resp ? `&responsavelId=${resp}` : ''}`),
+    queryKey: ['agenda', de, ate, resp],
+    queryFn: () => api<Compromisso[]>(`/agenda?de=${de}&ate=${ate}${resp ? `&responsavelId=${resp}` : ''}`),
     refetchInterval: 60_000,
   });
   const atendentes = useQuery({ queryKey: ['crm', 'atendentes'], queryFn: () => api<{ id: string; nome: string }[]>('/crm/atendentes'), staleTime: 60_000 });
   const retornoGoogle = params.get('google');
-  const dias = Array.from({ length: 7 }, (_, i) => new Date(semana.getTime() + i * 86_400_000));
   const porDia = useMemo(() => {
     const m = new Map<string, Compromisso[]>();
     for (const c of q.data ?? []) {
@@ -50,11 +96,23 @@ export function Agenda() {
     return m;
   }, [q.data]);
   const hoje = diaChave(new Date());
-  const rotuloSemana = `${dias[0].toLocaleDateString('pt-BR', { day: '2-digit', month: 'short', timeZone: 'UTC' })} a ${dias[6].toLocaleDateString('pt-BR', { day: '2-digit', month: 'short', year: 'numeric', timeZone: 'UTC' })}`;
+  const fmt = (d: Date, o: Intl.DateTimeFormatOptions) => d.toLocaleDateString('pt-BR', { ...o, timeZone: 'UTC' });
+  const rotulo =
+    modo === 'dia' ? fmt(base, { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' })
+    : modo === 'semana' ? `${fmt(dias[0], { day: '2-digit', month: 'short' })} a ${fmt(dias[6], { day: '2-digit', month: 'short', year: 'numeric' })}`
+    : fmt(base, { month: 'long', year: 'numeric' });
+  const andar = (sentido: 1 | -1) => {
+    if (modo === 'dia') setBase(somarDias(base, sentido));
+    else if (modo === 'semana') setBase(somarDias(base, 7 * sentido));
+    else setBase(new Date(Date.UTC(base.getUTCFullYear(), base.getUTCMonth() + sentido, 1, 12)));
+  };
+  const nomeAndar = modo === 'dia' ? ['‹ Dia anterior', 'Próximo dia ›'] : modo === 'semana' ? ['‹ 7 dias antes', '7 dias depois ›'] : ['‹ Mês anterior', 'Próximo mês ›'];
+  const mesAtual = base.toISOString().slice(0, 7);
+  const podeCriar = pode('agenda', 'criar');
 
   return (
     <>
-      <Topo eb="Agenda" titulo="Compromissos" sub="Entrevistas, acertos por vídeo, retiradas de maleta e reuniões, com lembrete pelo WhatsApp." acoes={pode('agenda', 'criar') && <button className="botao" onClick={() => setNovo({})}>+ Novo compromisso</button>} />
+      <Topo eb="Agenda" titulo="Compromissos" sub="Entrevistas, acertos por vídeo, retiradas de maleta e reuniões, com lembrete pelo WhatsApp." acoes={podeCriar && <button className="botao" onClick={() => setNovo({})}>+ Novo compromisso</button>} />
       {retornoGoogle && (
         <div className={`aviso ${retornoGoogle === 'ok' ? 'ok' : 'erro'}`} style={{ marginBottom: 12 }}>
           {retornoGoogle === 'ok' ? 'Conta Google conectada: os compromissos online já saem com link do Meet.' : retornoGoogle === 'negado' ? 'A autorização foi negada no Google. Tente de novo e clique em "Permitir".' : 'Não deu para conectar o Google. Confira o Client ID, o Client secret e o endereço de retorno, e tente de novo.'}
@@ -65,37 +123,47 @@ export function Agenda() {
       {novo && <FormCompromisso inicial={novo} fechar={() => setNovo(null)} />}
 
       <div className="ag-barra">
-        <button className="botao claro pequeno" onClick={() => setSemana(new Date(semana.getTime() - 7 * 86_400_000))}>‹ 7 dias antes</button>
-        <button className="botao claro pequeno" onClick={() => setSemana(diaBase(new Date()))}>Hoje</button>
-        <button className="botao claro pequeno" onClick={() => setSemana(new Date(semana.getTime() + 7 * 86_400_000))}>7 dias depois ›</button>
-        <b className="ag-rotulo">{rotuloSemana}</b>
+        <div className="ag-modos" role="group" aria-label="Ver por">
+          {([['dia', 'Dia'], ['semana', 'Semana'], ['mes', 'Mês']] as const).map(([m, r]) => (
+            <button key={m} className={`botao pequeno ${modo === m ? '' : 'claro'}`} aria-pressed={modo === m} onClick={() => setModo(m)}>{r}</button>
+          ))}
+        </div>
+        <button className="botao claro pequeno" onClick={() => andar(-1)}>{nomeAndar[0]}</button>
+        <button className="botao claro pequeno" onClick={() => setBase(diaBase(new Date()))}>Hoje</button>
+        <button className="botao claro pequeno" onClick={() => andar(1)}>{nomeAndar[1]}</button>
+        <b className="ag-rotulo">{rotulo}</b>
         <select value={resp} onChange={(e) => setResp(e.target.value)} className="ag-filtro"><option value="">Todos os responsáveis</option>{atendentes.data?.map((a) => <option key={a.id} value={a.id}>{a.nome}</option>)}</select>
       </div>
-      {q.isLoading ? <Carregando /> : q.error ? <Erro erro={q.error} /> : (
-        <div className="ag-semana">
-          {dias.map((d) => {
-            const k = d.toISOString().slice(0, 10);
-            const lista = porDia.get(k) ?? [];
-            return (
-              <div key={k} className={`ag-dia ${k === hoje ? 'hoje' : ''} ${k < hoje ? 'passado' : ''}`}>
-                <div className="ag-dia-topo">
-                  <span>{d.toLocaleDateString('pt-BR', { weekday: 'short', timeZone: 'UTC' }).replace('.', '')}</span>
-                  <b>{d.toLocaleDateString('pt-BR', { day: '2-digit', timeZone: 'UTC' })}</b>
-                  {pode('agenda', 'criar') && k >= hoje && <button className="ag-mais" title="Marcar neste dia" onClick={() => setNovo({ data: k })}>+</button>}
-                </div>
-                {lista.map((c) => (
-                  <button key={c.id} className={`ag-item s-${c.status}`} style={{ borderLeftColor: COR_TIPO[c.tipo] ?? '#7a7166' }} onClick={() => setAberto(c)}>
-                    <span className="ag-hora">{hora(c.inicio)}{c.online ? ' · online' : ''}</span>
-                    <span className="ag-titulo">{c.titulo}</span>
-                    {c.responsavel && !resp && <span className="ag-quem">{c.responsavel}</span>}
-                    {c.status === 'confirmado' && <span className="ag-ok">✓ confirmado</span>}
-                  </button>
-                ))}
-                {!lista.length && <div className="ag-vazio">—</div>}
-              </div>
-            );
-          })}
+      {q.isLoading ? <Carregando /> : q.error ? <Erro erro={q.error} /> : modo === 'dia' ? (
+        <div className="ag-diaunico">
+          {podeCriar && base.toISOString().slice(0, 10) >= hoje && <div><button className="botao claro pequeno" onClick={() => setNovo({ data: base.toISOString().slice(0, 10) })}>+ Marcar neste dia</button></div>}
+          {(porDia.get(base.toISOString().slice(0, 10)) ?? []).map((c) => <ItemAgenda key={c.id} c={c} mostrarResp={!resp} abrir={() => setAberto(c)} />)}
+          {!(porDia.get(base.toISOString().slice(0, 10)) ?? []).length && <div className="ag-vazio">Nenhum compromisso neste dia.</div>}
         </div>
+      ) : (
+        <>
+          {modo === 'mes' && <div className="ag-mes-cab">{['Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb', 'Dom'].map((d) => <span key={d}>{d}</span>)}</div>}
+          <div className={modo === 'mes' ? 'ag-mes' : 'ag-semana'}>
+            {dias.map((d) => {
+              const k = d.toISOString().slice(0, 10);
+              const lista = porDia.get(k) ?? [];
+              const foraDoMes = modo === 'mes' && k.slice(0, 7) !== mesAtual;
+              const mostrar = modo === 'mes' ? lista.slice(0, 3) : lista;
+              return (
+                <div key={k} className={`ag-dia ${k === hoje ? 'hoje' : ''} ${k < hoje ? 'passado' : ''} ${foraDoMes ? 'fora' : ''}`}>
+                  <div className="ag-dia-topo">
+                    {modo === 'semana' && <span>{fmt(d, { weekday: 'short' }).replace('.', '')}</span>}
+                    <button className="ag-num" title="Ver o dia" onClick={() => { setBase(d); setModo('dia'); }}>{fmt(d, { day: '2-digit' })}</button>
+                    {podeCriar && k >= hoje && <button className="ag-mais" title="Marcar neste dia" onClick={() => setNovo({ data: k })}>+</button>}
+                  </div>
+                  {mostrar.map((c) => <ItemAgenda key={c.id} c={c} mostrarResp={!resp} compacto={modo === 'mes'} abrir={() => setAberto(c)} />)}
+                  {modo === 'mes' && lista.length > 3 && <button className="ag-mais-itens" onClick={() => { setBase(d); setModo('dia'); }}>+{lista.length - 3} mais</button>}
+                  {!lista.length && modo === 'semana' && <div className="ag-vazio">—</div>}
+                </div>
+              );
+            })}
+          </div>
+        </>
       )}
       {aberto && <Detalhe c={aberto} tipos={tipos.data} fechar={() => setAberto(null)} />}
     </>

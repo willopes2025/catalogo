@@ -37,3 +37,27 @@
 .ag-form.estreito > * { width: 100%; min-width: 0; }
 .ag-form.estreito input, .ag-form.estreito select { width: 100%; }
 .ag-form.estreito input[type=radio], .ag-form.estreito input[type=checkbox] { width: auto; }
+
+/* Modos dia / semana / mês */
+.ag-modos { display: inline-flex; gap: 4px; margin-right: 6px; }
+.ag-num { border: 0; background: none; padding: 0; font: inherit; font-size: 18px; font-weight: 700; color: var(--tinta); cursor: pointer; }
+.ag-num:hover { color: var(--dourado); text-decoration: underline; }
+.ag-com { font-size: 12px; color: var(--tinta); overflow-wrap: anywhere; }
+.ag-hora .ag-com { font-weight: 500; }
+.ag-item.compacto { padding: 3px 6px; border-left-width: 3px; }
+.ag-item.compacto .ag-hora { font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ag-item.compacto .ag-titulo { font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ag-mes-cab { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 6px; font-size: 12px; color: var(--suave, #7a7166); text-transform: uppercase; letter-spacing: .06em; margin-bottom: 4px; padding: 0 4px; }
+.ag-mes { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 6px; }
+.ag-mes .ag-dia { min-height: 104px; padding: 6px; gap: 4px; }
+.ag-mes .ag-dia .ag-num { font-size: 14px; }
+.ag-dia.fora { opacity: .45; }
+.ag-mais-itens { border: 0; background: none; font: inherit; font-size: 11px; color: var(--dourado); cursor: pointer; text-align: left; padding: 0 2px; }
+.ag-diaunico { display: flex; flex-direction: column; gap: 8px; max-width: 720px; }
+.ag-diaunico .ag-item { padding: 10px 12px; }
+.ag-diaunico .ag-hora { font-size: 14px; }
+.ag-diaunico .ag-titulo { font-size: 15px; }
+@media (max-width: 760px) {
+  .ag-mes .ag-item.compacto .ag-titulo, .ag-mes .ag-item.compacto .ag-com { display: none; }
+  .ag-mes .ag-dia { min-height: 64px; }
+}
