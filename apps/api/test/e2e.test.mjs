@@ -915,6 +915,9 @@ test('Marketing › Meta: configurar pela lista, campanhas, pausar, orçamento, 
   assert.equal(p.linhas.find((l) => l.id === '120000009').situacao, 'ARCHIVED', 'apagada que gastou no período entra só com os números');
   assert.equal(p.totais.gasto, 17000);
   assert.equal((await ok('GET', '/marketing/meta/painel?nivel=adset&pai=120000001')).linhas[0].nome, 'Mulheres 25-45 ES');
+  // Anúncios do conjunto, com a imagem de cada criativo (foto ou miniatura do vídeo) e o link da prévia.
+  const ads = (await ok('GET', '/marketing/meta/painel?nivel=ad&pai=130000001')).linhas;
+  assert.deepEqual(ads.map((a) => [a.nome, a.imagem, a.previa]), [['Anúncio foto maleta', 'https://scontent.example/criativo-maleta.jpg', 'https://fb.me/previa-140000001'], ['Anúncio vídeo', 'https://scontent.example/mini-video.jpg', null]]);
   assert.equal((await chamar('GET', '/marketing/meta/painel?de=2026-11-20&ate=2026-11-01')).status, 400);
 
   // Pausar, ativar e orçamento: só na conta escolhida.

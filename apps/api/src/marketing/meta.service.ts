@@ -159,11 +159,25 @@ export class MetaService implements OnModuleInit, OnModuleDestroy {
   async painel(de: string, ate: string, nivel: Nivel, paiId?: string) {
     const conta = this.exigirConta();
     const lista = nivel === 'campaign' ? 'campaigns' : nivel === 'adset' ? 'adsets' : 'ads';
-    const camposObj = nivel === 'ad' ? 'id,name,status,effective_status,adset_id,campaign_id' : nivel === 'adset' ? 'id,name,status,effective_status,daily_budget,lifetime_budget,campaign_id' : 'id,name,status,effective_status,daily_budget,lifetime_budget,objective';
+    const camposObj = nivel === 'ad' ? 'id,name,status,effective_status,adset_id,campaign_id,preview_shareable_link,creative{id,thumbnail_url,image_url,object_type}' : nivel === 'adset' ? 'id,name,status,effective_status,daily_budget,lifetime_budget,campaign_id' : 'id,name,status,effective_status,daily_budget,lifetime_budget,objective';
     const filtro = paiId ? [{ field: nivel === 'ad' ? 'adset.id' : 'campaign.id', operator: 'EQUAL', value: paiId }] : undefined;
     const raiz = paiId && nivel !== 'campaign' ? `${paiId}/${lista}` : `${conta}/${lista}`;
+    // Situações que entram na lista, por nível (o Meta recusa a lista inteira quando ela tem uma que não vale para aquele nível).
+    const situacoes =
+      nivel === 'campaign' ? ['ACTIVE', 'PAUSED', 'WITH_ISSUES', 'IN_PROCESS']
+      : nivel === 'adset' ? ['ACTIVE', 'PAUSED', 'CAMPAIGN_PAUSED', 'WITH_ISSUES', 'IN_PROCESS']
+      : ['ACTIVE', 'PAUSED', 'CAMPAIGN_PAUSED', 'ADSET_PAUSED', 'WITH_ISSUES', 'IN_PROCESS', 'PENDING_REVIEW', 'DISAPPROVED'];
+    const buscarObjetos = async () => {
+      try {
+        return await this.todos<Json>(raiz, { fields: camposObj, effective_status: situacoes });
+      } catch (e) {
+        // Se o filtro de situação for recusado, traz tudo (as arquivadas vêm junto, marcadas como tal).
+        this.log.warn(`Lista de ${lista} sem filtro de situação: ${(e as Error).message}`);
+        return this.todos<Json>(raiz, { fields: camposObj });
+      }
+    };
     const [objetos, insights] = await Promise.all([
-      this.todos<Json>(raiz, { fields: camposObj, effective_status: ['ACTIVE', 'PAUSED', 'CAMPAIGN_PAUSED', 'ADSET_PAUSED', 'WITH_ISSUES', 'IN_PROCESS', 'PENDING_REVIEW'] }),
+      buscarObjetos(),
       this.todos<Json>(`${conta}/insights`, { level: nivel, fields: `${nivel}_id,${nivel}_name,spend,impressions,reach,clicks,inline_link_clicks,actions`, time_range: { since: de, until: ate }, ...(filtro ? { filtering: filtro } : {}) }),
     ]);
     const porId = new Map(insights.map((i) => [String(i[`${nivel}_id`]), i]));
@@ -176,7 +190,7 @@ export class MetaService implements OnModuleInit, OnModuleDestroy {
     };
     const ids = new Set(objetos.map((o) => String(o.id)));
     // Campanhas arquivadas ou apagadas que ainda gastaram no período entram só com os números.
-    const soNumeros = insights.filter((i) => !ids.has(String(i[`${nivel}_id`]))).map((i) => ({ id: String(i[`${nivel}_id`]), name: i[`${nivel}_name`], status: 'ARCHIVED', effective_status: 'ARCHIVED' }) as Json);
+    const soNumeros = insights.filter((i) => i[`${nivel}_id`] && !ids.has(String(i[`${nivel}_id`]))).map((i) => ({ id: String(i[`${nivel}_id`]), name: i[`${nivel}_name`], status: 'ARCHIVED', effective_status: 'ARCHIVED' }) as Json);
     const linhas = [...objetos, ...soNumeros].map((o) => {
       const i = porId.get(String(o.id));
       const gasto = centavosDe(i?.spend);
@@ -186,6 +200,9 @@ export class MetaService implements OnModuleInit, OnModuleDestroy {
       const impressoes = numero(i?.impressions);
       return {
         id: String(o.id), nome: o.name as string, status: o.status as string, situacao: (o.effective_status ?? o.status) as string, objetivo: (o.objective as string) ?? null,
+        // Anúncio: a imagem do criativo (ou a miniatura do vídeo) e o link da prévia no Facebook.
+        imagem: ((o.creative as Json | undefined)?.image_url ?? (o.creative as Json | undefined)?.thumbnail_url ?? null) as string | null,
+        previa: (o.preview_shareable_link as string | undefined) ?? null,
         orcamentoDiario: o.daily_budget ? Number(o.daily_budget) : null, orcamentoTotal: o.lifetime_budget ? Number(o.lifetime_budget) : null,
         gasto, impressoes, alcance: numero(i?.reach), cliques, leads, conversas,
         ctr: impressoes ? Math.round((cliques / impressoes) * 10000) / 100 : null,

@@ -54,7 +54,7 @@ export function MarketingMeta() {
 
 // ───── Campanhas ─────
 
-interface Linha { id: string; nome: string; status: string; situacao: string; objetivo: string | null; orcamentoDiario: number | null; orcamentoTotal: number | null; gasto: number; impressoes: number; alcance: number; cliques: number; leads: number; conversas: number; ctr: number | null; custoPorClique: number | null; custoPorLead: number | null; custoPorConversa: number | null }
+interface Linha { id: string; nome: string; status: string; situacao: string; objetivo: string | null; orcamentoDiario: number | null; orcamentoTotal: number | null; gasto: number; impressoes: number; alcance: number; cliques: number; leads: number; conversas: number; ctr: number | null; custoPorClique: number | null; custoPorLead: number | null; custoPorConversa: number | null; imagem?: string | null; previa?: string | null }
 interface Painel { linhas: Linha[]; totais: { gasto: number; impressoes: number; cliques: number; leads: number; conversas: number; ativas: number } }
 const NIVEIS = ['campaign', 'adset', 'ad'] as const;
 const NOME_NIVEL = { campaign: 'Campanha', adset: 'Conjunto de anúncios', ad: 'Anúncio' } as const;
@@ -70,6 +70,7 @@ function Campanhas({ editar }: { editar: boolean }) {
   const pai = caminho[caminho.length - 1];
   const q = useQuery({ queryKey: ['meta', 'painel', de, ate, nivel, pai?.id ?? ''], queryFn: () => api<Painel>(`/marketing/meta/painel?de=${de}&ate=${ate}&nivel=${nivel}${pai ? `&pai=${pai.id}` : ''}`), enabled: de <= ate });
   const [orc, setOrc] = useState<{ id: string; valor: string } | null>(null);
+  const [ampliada, setAmpliada] = useState<Linha | null>(null);
   const recarregar = () => qc.invalidateQueries({ queryKey: ['meta', 'painel'] });
   const status = useMutation({ mutationFn: (v: { id: string; status: 'ACTIVE' | 'PAUSED' }) => api(`/marketing/meta/itens/${v.id}/status`, { corpo: { status: v.status } }), onSuccess: recarregar });
   const orcamento = useMutation({ mutationFn: (v: { id: string; diario: number }) => api(`/marketing/meta/itens/${v.id}/orcamento`, { corpo: { diario: v.diario } }), onSuccess: () => { setOrc(null); recarregar(); } });
@@ -114,7 +115,16 @@ function Campanhas({ editar }: { editar: boolean }) {
                 const mexe = editar && l.situacao !== 'ARCHIVED';
                 return (
                   <tr key={l.id}>
-                    <td>{nivel !== 'ad' && l.situacao !== 'ARCHIVED' ? <button className="link" style={{ background: 'none', border: 0, padding: 0, font: 'inherit', color: 'var(--marrom)', textDecoration: 'underline', cursor: 'pointer', textAlign: 'left' }} title={nivel === 'campaign' ? 'Ver os conjuntos de anúncios' : 'Ver os anúncios'} onClick={() => setCaminho([...caminho, { id: l.id, nome: l.nome }])}>{l.nome}</button> : l.nome}</td>
+                    <td>{nivel !== 'ad' && l.situacao !== 'ARCHIVED' ? <button className="link" style={{ background: 'none', border: 0, padding: 0, font: 'inherit', color: 'var(--marrom)', textDecoration: 'underline', cursor: 'pointer', textAlign: 'left' }} title={nivel === 'campaign' ? 'Ver os conjuntos de anúncios' : 'Ver os anúncios'} onClick={() => setCaminho([...caminho, { id: l.id, nome: l.nome }])}>{l.nome}</button> : nivel === 'ad' ? (
+                      <span className="flex" style={{ gap: 10, alignItems: 'center' }}>
+                        {l.imagem ? (
+                          <button type="button" title="Ver o criativo maior" onClick={() => setAmpliada(l)} style={{ padding: 0, border: '1px solid var(--linha)', borderRadius: 8, background: '#fff', cursor: 'zoom-in', flex: 'none' }}>
+                            <img src={l.imagem} alt={`Criativo de ${l.nome}`} loading="lazy" referrerPolicy="no-referrer" style={{ width: 56, height: 56, objectFit: 'cover', borderRadius: 7, display: 'block' }} />
+                          </button>
+                        ) : <span className="muted" style={{ width: 56, height: 56, border: '1px dashed var(--linha)', borderRadius: 8, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, flex: 'none' }}>sem imagem</span>}
+                        <span>{l.nome}{l.previa && <><br /><a href={l.previa} target="_blank" rel="noreferrer" style={{ fontSize: 12 }}>Ver o anúncio ↗</a></>}</span>
+                      </span>
+                    ) : l.nome}</td>
                     <td><span className={`etiqueta ${cor}`}>{rotulo}</span></td>
                     <td className="num">
                       {orc?.id === l.id ? (
@@ -142,6 +152,18 @@ function Campanhas({ editar }: { editar: boolean }) {
               {q.data.linhas.length === 0 && <tr><td colSpan={editar ? 12 : 11} className="muted">Nada neste período.</td></tr>}
             </tbody>
           </table>
+        </div>
+      )}
+      {ampliada?.imagem && (
+        <div role="dialog" aria-label={`Criativo de ${ampliada.nome}`} onClick={() => setAmpliada(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(30,20,12,.72)', zIndex: 50, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20, cursor: 'zoom-out' }}>
+          <div onClick={(e) => e.stopPropagation()} className="cartao coluna" style={{ maxWidth: 'min(92vw, 640px)', gap: 10, cursor: 'default' }}>
+            <div className="flex entre" style={{ gap: 10 }}><b>{ampliada.nome}</b><button className="botao claro pequeno" onClick={() => setAmpliada(null)}>Fechar</button></div>
+            <img src={ampliada.imagem} alt={`Criativo de ${ampliada.nome}`} referrerPolicy="no-referrer" style={{ maxWidth: '100%', maxHeight: '70vh', objectFit: 'contain', borderRadius: 8 }} />
+            <div className="flex" style={{ gap: 12, flexWrap: 'wrap', fontSize: 13 }}>
+              <span>Gasto {reais(ampliada.gasto)}</span><span>Cliques {num(ampliada.cliques)}</span><span>Leads {num(ampliada.leads)}</span><span>Conversas {num(ampliada.conversas)}</span>
+              {ampliada.previa && <a href={ampliada.previa} target="_blank" rel="noreferrer">Ver o anúncio no Facebook ↗</a>}
+            </div>
+          </div>
         </div>
       )}
       <p className="muted" style={{ margin: 0 }}>Os números vêm do Meta na hora. Criar campanha e anúncio continua sendo feito no Gerenciador de Anúncios; aqui dá para acompanhar, pausar, ativar e mudar o orçamento por dia.</p>

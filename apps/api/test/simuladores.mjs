@@ -553,11 +553,20 @@ http
         if (r === 'me/businesses') return responder(res, 400, { error: { message: '(#100) Tried accessing nonexisting field (businesses)', code: 100 } });
         if (r === '5550001/owned_product_catalogs') return responder(res, 200, { data: [{ id: '880001', name: 'Catálogo Aritana' }] });
         if (r === 'act_999/campaigns') return responder(res, 200, { data: m.campanhas });
-        if (r === '120000001/adsets') return responder(res, 200, { data: [{ id: '130000001', name: 'Mulheres 25-45 ES', status: 'ACTIVE', effective_status: 'ACTIVE', daily_budget: '3000', campaign_id: '120000001' }] });
+        // Como o Meta: situação que não vale para o nível é recusada.
+        if (r === '120000001/adsets') {
+          if ((f.get('effective_status') ?? '').includes('ADSET_PAUSED')) return responder(res, 400, { error: { message: '(#100) Param effective_status[3] must be one of {ACTIVE, PAUSED, DELETED, CAMPAIGN_PAUSED, ARCHIVED, IN_PROCESS, WITH_ISSUES}', code: 100 } });
+          return responder(res, 200, { data: [{ id: '130000001', name: 'Mulheres 25-45 ES', status: 'ACTIVE', effective_status: 'ACTIVE', daily_budget: '3000', campaign_id: '120000001' }] });
+        }
+        if (r === '130000001/ads') return responder(res, 200, { data: [
+          { id: '140000001', name: 'Anúncio foto maleta', status: 'ACTIVE', effective_status: 'ACTIVE', adset_id: '130000001', campaign_id: '120000001', preview_shareable_link: 'https://fb.me/previa-140000001', creative: { id: '150000001', image_url: 'https://scontent.example/criativo-maleta.jpg', thumbnail_url: 'https://scontent.example/mini-maleta.jpg', object_type: 'PHOTO' } },
+          { id: '140000002', name: 'Anúncio vídeo', status: 'PAUSED', effective_status: 'PAUSED', adset_id: '130000001', campaign_id: '120000001', creative: { id: '150000002', thumbnail_url: 'https://scontent.example/mini-video.jpg', object_type: 'VIDEO' } },
+        ] });
         if (r === 'act_999/insights') {
           const nivel = f.get('level');
           m.ultimoPeriodo = f.get('time_range');
           if (nivel === 'campaign') return responder(res, 200, { data: [{ campaign_id: '120000001', campaign_name: 'Revendedoras novembro', spend: '150.00', impressions: '10000', reach: '8000', clicks: '260', inline_link_clicks: '200', actions: [{ action_type: 'lead', value: '10' }, { action_type: 'onsite_conversion.messaging_conversation_started_7d', value: '5' }] }, { campaign_id: '120000009', campaign_name: 'Campanha antiga apagada', spend: '20.00', impressions: '1000', clicks: '10' }] });
+          if (nivel === 'ad') return responder(res, 200, { data: [{ ad_id: '140000001', ad_name: 'Anúncio foto maleta', spend: '90.00', impressions: '6000', inline_link_clicks: '120' }, { ad_id: '140000002', ad_name: 'Anúncio vídeo', spend: '60.00', impressions: '4000', inline_link_clicks: '80' }] });
           return responder(res, 200, { data: [{ adset_id: '130000001', adset_name: 'Mulheres 25-45 ES', spend: '150.00', impressions: '10000', inline_link_clicks: '200' }] });
         }
         if (r === 'act_999/customaudiences') return responder(res, 200, { data: m.publicos });
