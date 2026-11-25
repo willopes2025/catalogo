@@ -4,7 +4,7 @@ import { api, lerSessao, pode } from '../../api';
 import { Link } from 'react-router-dom';
 import { Abas, Campo, Carregando, Erro, camposComErro } from '../../componentes/ui';
 import { Distribuicao } from './Distribuicao';
-import { NOME_TIPO_CANAL, NovoCampo, TIPOS_CAMPO, usarAtendentes, usarCampos, usarCanais, usarFunis, variavelDoCampo, type CampoDef, type Canal, type Template, type TipoCanal } from './comum';
+import { NOME_TIPO_CANAL, NovoCampo, TIPOS_CAMPO, usarAtendentes, usarCampos, usarUsuariosDoCrm, usarCanais, usarFunis, variavelDoCampo, type CampoDef, type Canal, type Template, type TipoCanal } from './comum';
 
 type Sub = 'numeros' | 'funis' | 'distribuicao' | 'campos' | 'templates' | 'respostas' | 'ia' | 'ramais';
 const sel = { padding: 7, borderRadius: 8, border: '1px solid var(--linha)', font: 'inherit' } as const;
@@ -123,7 +123,7 @@ function FormCanal({ tipo, canal, fechar, porToken: novoPorToken }: { tipo: Tipo
   // Evolution ligada pelo token de uma instância que já existe (em vez do QR code criado pelo sistema).
   const porToken = tipo === 'evolution' && (canal ? !!canal.config?.servidor : !!novoPorToken);
   const qc = useQueryClient();
-  const atendentes = usarAtendentes();
+  const atendentes = usarUsuariosDoCrm();
   const funis = usarFunis();
   const [f, setF] = useState({ nome: canal?.nome ?? '', config: { ...(canal?.config ?? {}) } as Record<string, string>, atendentes: canal?.atendentes ?? [], usuarioId: canal?.usuarioId ?? '', funilEntradaId: canal?.funilEntradaId ?? '', ativo: canal?.ativo ?? true });
   const salvar = useMutation({
@@ -172,14 +172,18 @@ function FormCanal({ tipo, canal, fechar, porToken: novoPorToken }: { tipo: Tipo
       </Campo>
       {tipo !== 'oficial' && (
         <Campo rotulo="Dono do número (opcional)" className="l2" ajuda="Celular de uma atendente">
-          <select value={f.usuarioId} onChange={(e) => setF({ ...f, usuarioId: e.target.value })}><option value="">Número da empresa</option>{atendentes.data?.map((a) => <option key={a.id} value={a.id}>{a.nome}</option>)}</select>
+          <select value={f.usuarioId} onChange={(e) => setF({ ...f, usuarioId: e.target.value })}><option value="">Número da empresa</option>{atendentes.data?.map((a) => <option key={a.id} value={a.id}>{a.nome} · {a.grupo}{a.semCrm ? ' (sem acesso ao CRM)' : ''}</option>)}</select>
         </Campo>
       )}
       <div className="l4">
         <label className="muted" style={{ fontSize: 13, fontWeight: 600 }}>Quem atende por este número (nenhum marcado = toda a equipe do CRM)</label>
         <div className="flex" style={{ gap: 12, flexWrap: 'wrap', marginTop: 4 }}>
-          {atendentes.data?.map((a) => <label key={a.id} className="check"><input type="checkbox" checked={f.atendentes.includes(a.id)} onChange={(e) => setF({ ...f, atendentes: e.target.checked ? [...f.atendentes, a.id] : f.atendentes.filter((x) => x !== a.id) })} /> {a.nome}</label>)}
+          {atendentes.data?.map((a) => <label key={a.id} className="check"><input type="checkbox" checked={f.atendentes.includes(a.id)} onChange={(e) => setF({ ...f, atendentes: e.target.checked ? [...f.atendentes, a.id] : f.atendentes.filter((x) => x !== a.id) })} /> {a.nome}{a.semCrm && <span className="muted" style={{ fontSize: 12 }}> (sem acesso ao CRM)</span>}</label>)}
         </div>
+        {(() => {
+          const sem = atendentes.data?.filter((a) => a.semCrm && (a.id === f.usuarioId || f.atendentes.includes(a.id))) ?? [];
+          return sem.length ? <div className="aviso" style={{ marginTop: 8 }}>{sem.map((a) => a.nome).join(', ')} ainda não {sem.length > 1 ? 'têm' : 'tem'} acesso ao CRM e não vai ver as conversas deste número. Dê a permissão "CRM › editar" ao grupo em Configurações › Grupos e permissões (ou mude a pessoa para um grupo que já tenha).</div> : null;
+        })()}
       </div>
       {canal && <label className="check l4"><input type="checkbox" checked={f.ativo} onChange={(e) => setF({ ...f, ativo: e.target.checked })} /> Número ativo</label>}
       {salvar.error && <div className="l4"><Erro erro={salvar.error} /></div>}

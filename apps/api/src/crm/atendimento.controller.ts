@@ -1186,9 +1186,12 @@ export class AtendimentoController {
   /** Atendentes que podem receber conversas (para transferir e para o rodízio dos gatilhos). */
   @Get('crm/atendentes')
   @Permissao('crm', 'ver')
-  async atendentes() {
-    const us = await this.db.execute<{ id: string; nome: string; permissoes: Record<string, string[]> }>(sql`select u.id, u.nome, g.permissoes from usuarios u join grupos g on g.id = u.grupo_id where u.ativo order by u.nome`);
-    return us.rows.filter((u) => u.permissoes['*'] || u.permissoes.crm?.includes('editar')).map((u) => ({ id: u.id, nome: u.nome }));
+  async atendentes(@Query('todos') todos?: string) {
+    const us = await this.db.execute<{ id: string; nome: string; grupo: string; permissoes: Record<string, string[]> }>(sql`select u.id, u.nome, g.nome as grupo, g.permissoes from usuarios u join grupos g on g.id = u.grupo_id where u.ativo order by u.nome`);
+    const atende = (u: { permissoes: Record<string, string[]> }) => !!(u.permissoes['*'] || u.permissoes.crm?.includes('editar'));
+    // ?todos=1: todo usuário ativo (para escolher o dono de um número), dizendo quem ainda não tem acesso ao CRM.
+    if (todos === '1') return us.rows.map((u) => ({ id: u.id, nome: u.nome, grupo: u.grupo, semCrm: !atende(u) }));
+    return us.rows.filter(atende).map((u) => ({ id: u.id, nome: u.nome }));
   }
 
   // ───────────── Templates e respostas rápidas ─────────────

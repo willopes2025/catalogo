@@ -14,6 +14,8 @@ export interface CampoDef { id: string; entidade: 'contato' | 'lead'; nome: stri
 
 export const usarFunis = () => useQuery({ queryKey: ['crm', 'funis'], queryFn: () => api<Funil[]>('/crm/funis') });
 export const usarAtendentes = () => useQuery({ queryKey: ['crm', 'atendentes'], queryFn: () => api<Atendente[]>('/crm/atendentes'), staleTime: 60_000 });
+/** Todos os usuários ativos, marcando quem ainda não tem acesso ao CRM (para escolher o dono e quem atende por um número). */
+export const usarUsuariosDoCrm = () => useQuery({ queryKey: ['crm', 'atendentes', 'todos'], queryFn: () => api<(Atendente & { grupo: string; semCrm: boolean })[]>('/crm/atendentes?todos=1'), staleTime: 60_000 });
 export const usarCanais = () => useQuery({ queryKey: ['crm', 'canais'], queryFn: () => api<Canal[]>('/crm/canais') });
 export const usarCampos = () => useQuery({ queryKey: ['crm', 'campos'], queryFn: () => api<CampoDef[]>('/crm/campos'), staleTime: 60_000 });
 export const usarContadores = (ativo = true) => useQuery({ queryKey: ['crm', 'contadores'], queryFn: () => api<{ fila: number; minhas: number; naoLidas: number; tarefasVencidas: number; mencoes: number }>('/crm/contadores'), refetchInterval: 15_000, enabled: ativo });
