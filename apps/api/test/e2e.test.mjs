@@ -4125,3 +4125,68 @@ test('indique e ganhe: link de cada um (equipe e consultora), convite, aprovaç�
   assert.ok(!(await ok('GET', '/indicacoes')).itens.some((i) => i.indicada === 'Luana Desligado Teste'));
   await ok('PUT', '/indicacoes/regras', regras0);
 });
+
+test('importar histórico do WhatsApp: servidor próprio pede o QR uma vez, grava só o período, sem fila; servidor de fora busca direto', async () => {
+  const seg = (dias) => Math.floor(Date.now() / 1000) - dias * 86400 - 60;
+  const dia = (dias) => new Date(Date.now() - 3 * 3600_000 - dias * 86400_000).toISOString().slice(0, 10);
+  const reg = (id, tel, texto, dias, fromMe = false, extra = {}) => ({ key: { remoteJid: `${tel}@s.whatsapp.net`, fromMe, id }, pushName: fromMe ? 'Loja' : 'Cliente Antiga Hist', message: { conversation: texto }, messageTimestamp: seg(dias), ...extra });
+  const c = await ok('POST', '/crm/canais', { nome: 'Número do histórico', tipo: 'evolution' });
+  const inst = c.config.instancia;
+  await fetch(`${SIM}/__evo/conectar?i=${encodeURIComponent(inst)}`);
+  // Oficial e Z-API não importam; período inválido é recusado.
+  assert.equal((await chamar('POST', `/crm/canais/${c.id}/historico`, { de: dia(5), ate: dia(10) })).status, 400);
+  assert.equal((await chamar('POST', `/crm/canais/${c.id}/historico`, { de: dia(5), ate: dia(-2) })).status, 400);
+  // Primeira vez no servidor próprio: liga o pedido de histórico, desconecta e espera o QR.
+  const imp = await ok('POST', `/crm/canais/${c.id}/historico`, { de: dia(15), ate: dia(0) });
+  assert.equal(imp.status, 'aguardando_qr');
+  const ver = await (await fetch(`${SIM}/__evo/ver?i=${encodeURIComponent(inst)}`)).json();
+  assert.deepEqual([ver.settings?.syncFullHistory, ver.estado], [true, 'close']);
+  assert.equal((await chamar('POST', `/crm/canais/${c.id}/historico`, { de: dia(3), ate: dia(0) })).status, 400, 'uma importação por vez');
+  await ok('POST', '/crm/importacoes/conferir');
+  assert.equal((await ok('GET', `/crm/canais/${c.id}/historico`))[0].status, 'aguardando_qr', 'sem ler o QR, continua esperando');
+  // Leu o QR: o celular manda o histórico (2 fora do período, 1 grupo, 4 dentro).
+  await fetch(`${SIM}/__evo/historico?i=${encodeURIComponent(inst)}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify([
+    reg('H1', '5527966610001', 'Oi, tem anel de prata?', 10),
+    reg('H2', '5527966610001', 'Temos sim! Te mando fotos.', 10, true, { messageTimestamp: seg(10) + 30 }),
+    reg('H3', '5527966610002', 'Quero ser revendedora', 4, false, { pushName: 'Outra Antiga Hist' }),
+    reg('H4', '5527966610002', '', 4, false, { message: { imageMessage: { mimetype: 'image/jpeg', caption: 'olha essa' } } }),
+    reg('H5', '5527966610003', 'Mensagem velha demais', 40),
+    reg('H6', '120363000000@g', 'grupo', 3, false, { key: { remoteJid: '120363000000@g.us', fromMe: false, id: 'H6' } }),
+  ]) });
+  await fetch(`${SIM}/__evo/conectar?i=${encodeURIComponent(inst)}`);
+  // Uma mensagem velha chegando pelo webhook durante a sincronização não vai para a fila.
+  const hook = (await recebidos()).filter((r) => r.caminho === '/evo/instance/create' && r.corpo.instanceName === inst).pop().corpo.webhook.url.replace('http://localhost:3100', '');
+  await ok('POST', '/crm/importacoes/conferir'); // conectou → recebendo
+  assert.equal((await ok('GET', `/crm/canais/${c.id}/historico`))[0].status, 'recebendo');
+  await fetch(API.replace(/\/api$/, '') + hook, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ event: 'messages.upsert', data: reg('H7', '5527966610004', 'mensagem antiga pelo webhook', 2) }) });
+  await ok('POST', '/crm/importacoes/conferir'); // rodada 1
+  await ok('POST', '/crm/importacoes/conferir'); // rodada 2 (última)
+  const [fim] = await ok('GET', `/crm/canais/${c.id}/historico`);
+  assert.equal(fim.status, 'concluida', JSON.stringify(fim));
+  assert.equal(fim.mensagens, 4, 'só as 4 do período, sem grupo e sem repetir nas rodadas');
+  const conversas = [...await ok('GET', '/crm/conversas?aba=resolvidas'), ...await ok('GET', '/crm/conversas?aba=fila')].filter((x) => x.canal === 'Número do histórico');
+  const a = conversas.find((x) => x.telefone === '5527966610001');
+  assert.ok(a, 'conversa importada');
+  assert.ok(!(await ok('GET', '/crm/conversas?aba=fila')).some((x) => ['5527966610001', '5527966610002', '5527966610004'].includes(x.telefone)), 'nada do histórico foi para a fila');
+  assert.ok(!conversas.some((x) => x.telefone === '5527966610003'), 'fora do período não entrou');
+  const msgs = await ok('GET', `/crm/conversas/${a.id}/mensagens`);
+  const lista = msgs.mensagens ?? msgs;
+  assert.deepEqual(lista.map((m) => [m.direcao, m.texto]), [['entrada', 'Oi, tem anel de prata?'], ['saida', 'Temos sim! Te mando fotos.']]);
+  const b = conversas.find((x) => x.telefone === '5527966610002');
+  const fotos = (await ok('GET', `/crm/conversas/${b.id}/mensagens`));
+  assert.ok((fotos.mensagens ?? fotos).some((m) => /olha essa \[foto do histórico\]/.test(m.texto ?? '')), 'mídia sem baixar vira aviso no texto');
+  assert.ok(conversas.some((x) => x.telefone === '5527966610004'), 'a do webhook ficou no histórico');
+  // Segunda vez: já tem o histórico guardado, busca direto, sem QR; não repete o que já entrou.
+  const d2 = await ok('POST', `/crm/canais/${c.id}/historico`, { de: dia(45), ate: dia(0) });
+  assert.equal(d2.status, 'importando');
+  let r2;
+  for (let i = 0; i < 20 && (r2 = (await ok('GET', `/crm/canais/${c.id}/historico`))[0]).status === 'importando'; i++) await new Promise((r) => setTimeout(r, 100));
+  assert.deepEqual([r2.status, r2.mensagens], ['concluida', 1], 'só a de 40 dias era nova');
+  assert.equal((await (await fetch(`${SIM}/__evo/ver?i=${encodeURIComponent(inst)}`)).json()).estado, 'open', 'não desconectou de novo');
+  // Cancelar uma que espera o QR (outro número).
+  const c2 = await ok('POST', '/crm/canais', { nome: 'Número cancela hist', tipo: 'evolution' });
+  await fetch(`${SIM}/__evo/conectar?i=${encodeURIComponent(c2.config.instancia)}`);
+  const i2 = await ok('POST', `/crm/canais/${c2.id}/historico`, { de: dia(5), ate: dia(0) });
+  assert.equal((await ok('POST', `/crm/importacoes/${i2.id}/cancelar`)).status, 'erro');
+  await ok('DELETE', `/crm/canais/${c2.id}`);
+});

@@ -63,6 +63,7 @@ function CartaoCanal({ canal: c, editar, destaque }: { canal: Canal; editar: () 
   const sit = useQuery({ queryKey: ['crm', 'canal', c.id, 'situacao'], queryFn: () => api<{ conectado: boolean; detalhe: string; qrcode?: string | null }>(`/crm/canais/${c.id}/situacao`), refetchInterval: (q) => (q.state.data && !q.state.data.conectado && c.tipo !== 'oficial' ? (c.tipo === 'evolution' ? 3000 : 5000) : 60_000) });
   const acao = useMutation({ mutationFn: (a: string) => api<any>(`/crm/canais/${c.id}/${a}`, { corpo: {} }), onSuccess: () => qc.invalidateQueries({ queryKey: ['crm'] }) });
   const [copiado, setCopiado] = useState(false);
+  const [historico, setHistorico] = useState(false);
   const excluir = useMutation({ mutationFn: () => api<{ apagado: boolean }>(`/crm/canais/${c.id}`, { metodo: 'DELETE' }), onSuccess: () => qc.invalidateQueries({ queryKey: ['crm'] }) });
   const confirmarExclusao = () =>
     window.confirm(
@@ -90,11 +91,13 @@ function CartaoCanal({ canal: c, editar, destaque }: { canal: Canal; editar: () 
             {c.tipo === 'oficial' && pode('crm', 'excluir') && <button className="botao claro pequeno" disabled={acao.isPending} onClick={() => acao.mutate('templates')}>Sincronizar templates</button>}
             {c.tipo !== 'oficial' && <button className="botao claro pequeno" title="Use se as mensagens recebidas pararam de chegar: manda o WhatsApp avisar o sistema neste endereço de novo" disabled={acao.isPending} onClick={() => acao.mutate('webhook')}>Reapontar webhook</button>}
             {c.tipo !== 'oficial' && sit.data?.conectado && <button className="botao claro pequeno" onClick={() => window.confirm('Desconectar este celular do sistema?') && acao.mutate('desconectar')}>Desconectar</button>}
+            {c.tipo === 'evolution' && <button className="botao claro pequeno" title="Trazer as conversas antigas deste número, pelo período que você escolher" onClick={() => setHistorico((v) => !v)}>{historico ? 'Fechar histórico' : 'Importar histórico'}</button>}
             <button className="botao claro pequeno" onClick={editar}>Editar</button>
             <button className="botao claro pequeno perigo" disabled={excluir.isPending} onClick={confirmarExclusao}>{excluir.isPending ? 'Excluindo…' : 'Excluir'}</button>
           </div>
         )}
       </div>
+      {historico && c.tipo === 'evolution' && <ImportarHistorico canal={c} />}
       {acao.data?.total !== undefined && <div className="aviso ok" style={{ marginTop: 8 }}>{acao.data.total} template(s) na Meta, {acao.data.aprovados} aprovado(s).</div>}
       {(acao.error || excluir.error) && <Erro erro={acao.error ?? excluir.error} />}
       {c.tipo !== 'oficial' && sit.data && !sit.data.conectado && sit.data.qrcode && (
@@ -113,6 +116,86 @@ function CartaoCanal({ canal: c, editar, destaque }: { canal: Canal; editar: () 
           Webhook: <code>{c.webhook}</code>{' '}
           <button className="botao claro pequeno" onClick={async () => { try { await navigator.clipboard.writeText(c.webhook!); setCopiado(true); } catch { window.prompt('Webhook:', c.webhook); } }}>{copiado ? 'Copiado' : 'Copiar'}</button>
           {c.tipo === 'oficial' && <div>No app da Meta (WhatsApp › Configuração), cole este endereço como URL de retorno e use como token de verificação o final do endereço (depois da última barra). Assine os campos "messages".</div>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+type Importacao = { id: string; de: string; ate: string; midias: boolean; status: 'aguardando_qr' | 'recebendo' | 'importando' | 'concluida' | 'erro'; mensagens: number; conversas: number; detalhe: string | null; criadoEm: string; concluidoEm: string | null; conectadoEm: string | null };
+const STATUS_IMPORTACAO: Record<Importacao['status'], [string, string]> = {
+  aguardando_qr: ['Aguardando ler o QR', 'alerta'],
+  recebendo: ['Recebendo do WhatsApp', 'alerta'],
+  importando: ['Importando', 'alerta'],
+  concluida: ['Concluída', 'ok'],
+  erro: ['Não concluída', 'erro'],
+};
+const diaBr = (d: string) => d.split('-').reverse().join('/');
+
+/** Importa as conversas antigas do número pelo período escolhido. */
+function ImportarHistorico({ canal: c }: { canal: Canal }) {
+  const qc = useQueryClient();
+  const proprio = !c.config?.servidor;
+  const hoje = new Date(Date.now() - 3 * 3600_000).toISOString().slice(0, 10);
+  const [de, setDe] = useState(new Date(Date.now() - 3 * 3600_000 - 15 * 86400_000).toISOString().slice(0, 10));
+  const [ate, setAte] = useState(hoje);
+  const [midias, setMidias] = useState(false);
+  const lista = useQuery({
+    queryKey: ['crm', 'canal', c.id, 'historico'],
+    queryFn: () => api<Importacao[]>(`/crm/canais/${c.id}/historico`),
+    refetchInterval: (q) => (q.state.data?.some((i) => !['concluida', 'erro'].includes(i.status)) ? 5000 : false),
+  });
+  const andamento = lista.data?.find((i) => !['concluida', 'erro'].includes(i.status));
+  // No servidor próprio, o WhatsApp só manda o histórico ao conectar: a primeira importação pede o QR de novo.
+  const precisaQr = proprio && !lista.data?.some((i) => i.status === 'concluida' && i.conectadoEm);
+  const importar = useMutation({
+    mutationFn: () => api<Importacao>(`/crm/canais/${c.id}/historico`, { corpo: { de, ate, midias } }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['crm', 'canal', c.id] }),
+  });
+  const conferir = useMutation({ mutationFn: () => api('/crm/importacoes/conferir', { corpo: {} }), onSuccess: () => qc.invalidateQueries({ queryKey: ['crm', 'canal', c.id] }) });
+  const cancelar = useMutation({ mutationFn: (id: string) => api(`/crm/importacoes/${id}/cancelar`, { corpo: {} }), onSuccess: () => qc.invalidateQueries({ queryKey: ['crm', 'canal', c.id] }) });
+  const comecar = () => {
+    if (precisaQr && !window.confirm('Para trazer as conversas antigas, o celular deste número vai ser desconectado e você lê o QR code de novo aqui mesmo, logo abaixo.\n\nEnquanto não ler, o número fica sem mandar e receber mensagens pelo sistema. Continuar?')) return;
+    importar.mutate();
+  };
+  return (
+    <div style={{ marginTop: 12, paddingTop: 12, borderTop: '1px solid var(--linha)' }} className="coluna">
+      <b>Importar histórico de conversas</b>
+      <div className="muted" style={{ fontSize: 13, lineHeight: 1.55 }}>
+        {proprio
+          ? precisaQr
+            ? 'O WhatsApp só entrega as conversas antigas no momento em que o celular conecta. Na primeira importação o sistema desconecta este número e mostra o QR code para ler de novo; nos 20 minutos seguintes ele grava as mensagens do período. Depois disso, outros períodos se importam sem QR.'
+            : 'O histórico deste número já foi recebido uma vez: a importação busca direto o período escolhido, sem QR code.'
+          : 'Busca as mensagens que o servidor Evolution deste número guardou no período. Se ele não estiver configurado para guardar o histórico, nada vem.'}{' '}
+        As conversas entram como resolvidas (não vão para a fila), sem criar card e sem acionar a IA. Mensagens que já estão no sistema não se repetem.
+      </div>
+      {!andamento && (
+        <div className="flex" style={{ gap: 10, flexWrap: 'wrap', alignItems: 'end' }}>
+          <Campo rotulo="De"><input id={`hist-de-${c.id}`} type="date" value={de} max={ate} onChange={(e) => setDe(e.target.value)} /></Campo>
+          <Campo rotulo="Até"><input id={`hist-ate-${c.id}`} type="date" value={ate} min={de} max={hoje} onChange={(e) => setAte(e.target.value)} /></Campo>
+          <label className="check" title="Mais lento e ocupa espaço no servidor. O WhatsApp costuma apagar as mídias antigas: algumas podem não vir."><input type="checkbox" checked={midias} onChange={(e) => setMidias(e.target.checked)} /> Baixar fotos, áudios e documentos</label>
+          <button className="botao pequeno" disabled={!de || !ate || importar.isPending} onClick={comecar}>{importar.isPending ? 'Começando…' : precisaQr ? 'Importar (vai pedir o QR)' : 'Importar'}</button>
+        </div>
+      )}
+      {importar.error && <Erro erro={importar.error} />}
+      {andamento?.status === 'aguardando_qr' && <div className="aviso">Leia o QR code que aparece neste cartão com o celular do número <b>{c.nome}</b> (WhatsApp › Aparelhos conectados › Conectar um aparelho). Se o QR não aparecer em alguns segundos, atualize a página.</div>}
+      {!!lista.data?.length && (
+        <div style={{ overflowX: 'auto' }}>
+          <table className="tabela">
+            <thead><tr><th>Período</th><th>Situação</th><th style={{ textAlign: 'right' }}>Mensagens</th><th style={{ textAlign: 'right' }}>Conversas</th><th>Detalhe</th><th /></tr></thead>
+            <tbody>
+              {lista.data.map((i) => (
+                <tr key={i.id}>
+                  <td style={{ whiteSpace: 'nowrap' }}>{diaBr(i.de)} a {diaBr(i.ate)}{i.midias ? ' · com mídias' : ''}</td>
+                  <td><span className={`etiqueta ${STATUS_IMPORTACAO[i.status][1]}`}>{STATUS_IMPORTACAO[i.status][0]}</span></td>
+                  <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{i.mensagens}</td>
+                  <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{i.status === 'concluida' ? i.conversas : '—'}</td>
+                  <td className="muted" style={{ fontSize: 12, maxWidth: 360 }}>{i.detalhe}</td>
+                  <td>{!['concluida', 'erro'].includes(i.status) && <div className="flex" style={{ gap: 6 }}><button className="botao claro pequeno" title="O sistema confere sozinho a cada minuto; este botão confere agora" disabled={conferir.isPending} onClick={() => conferir.mutate()}>{conferir.isPending ? 'Conferindo…' : 'Conferir agora'}</button><button className="botao claro pequeno" disabled={cancelar.isPending} onClick={() => cancelar.mutate(i.id)}>Cancelar</button></div>}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       )}
     </div>

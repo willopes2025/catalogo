@@ -4,7 +4,7 @@ import { and, desc, eq, gte, inArray, isNull, sql } from 'drizzle-orm';
 import { DB, type Db } from '../comum/db.module';
 import { SegredosService } from '../segredos/segredos.service';
 import { ArquivosService } from '../arquivos/arquivos.service';
-import { crmCanais, crmContatos, crmConversas, crmDisparoDestinos, crmMensagens, crmTemplates } from '../db/schema';
+import { crmCanais, crmContatos, crmConversas, crmDisparoDestinos, crmImportacoes, crmMensagens, crmTemplates } from '../db/schema';
 import { CrmService } from './crm.service';
 import { TranscricaoService } from './transcricao.service';
 import { PEDIU_SAIR, preencherTexto, primeiroNome, variaveisDosCampos } from './telefone';
@@ -539,6 +539,15 @@ export class CanaisService implements OnModuleInit {
   private async entrada(c: Canal, con: Conexao, m: MensagemEntrada) {
     const [dup] = await this.db.select({ id: crmMensagens.id }).from(crmMensagens).where(eq(crmMensagens.idExterno, m.idExterno)).limit(1);
     if (dup) return;
+    // Número recebendo o histórico (acabou de ler o QR para importar): mensagem antiga só entra no histórico,
+    // sem voltar para a fila, sem card e sem IA.
+    if (m.quando.getTime() < Date.now() - 30 * 60_000) {
+      const [sinc] = await this.db.select({ id: crmImportacoes.id }).from(crmImportacoes).where(and(eq(crmImportacoes.canalId, c.id), inArray(crmImportacoes.status, ['aguardando_qr', 'recebendo']))).limit(1);
+      if (sinc) {
+        await this.gravarDoHistorico(c, con, m, false);
+        return;
+      }
+    }
     const contato = await this.crm.garantirContato({ telefone: m.telefone, nome: m.minha ? null : m.nome });
     const cv = await this.garantirConversa(contato.id, c.id);
     let midia: string | null = null;
@@ -610,6 +619,52 @@ export class CanaisService implements OnModuleInit {
     await this.crm.tocarInteracao(contato.id);
     for (const l of leads) this.crm.emitir({ tipo: 'mensagem_recebida', leadId: l.id, texto: texto ?? '' });
     this.crm.emitir({ tipo: 'conversa_entrada', conversaId: cv.id });
+  }
+
+  /**
+   * Grava uma mensagem antiga (importação do histórico): fica na conversa para consulta, sem mexer na fila,
+   * sem contar como não lida, sem criar card e sem acionar IA ou gatilhos. Devolve null se já existia.
+   */
+  async gravarDoHistorico(c: Canal, con: Conexao, m: MensagemEntrada, baixarMidias: boolean) {
+    const [dup] = await this.db.select({ id: crmMensagens.id }).from(crmMensagens).where(eq(crmMensagens.idExterno, m.idExterno)).limit(1);
+    if (dup) return null;
+    const contato = await this.crm.garantirContato({ telefone: m.telefone, nome: m.minha ? null : m.nome });
+    const [ja] = await this.db.select().from(crmConversas).where(and(eq(crmConversas.contatoId, contato.id), eq(crmConversas.canalId, c.id)));
+    const cv = ja ?? (await this.garantirConversa(contato.id, c.id, 'resolvida'));
+    let midia: string | null = null;
+    let texto = m.texto;
+    if (m.midia && baixarMidias) {
+      try {
+        const b = await con.baixarMidia(m.midia.ref);
+        if (b.conteudo.length > 25_000_000) throw new Error('arquivo grande demais');
+        midia = await this.arquivos.salvarMidia(b.conteudo, m.midia.mime ?? b.mime);
+      } catch {
+        texto = [texto, '[mídia antiga não disponível]'].filter(Boolean).join(' ');
+      }
+    } else if (m.midia) {
+      const nome = { imagem: 'foto', audio: 'áudio', video: 'vídeo', documento: 'documento' }[m.tipo as string] ?? 'arquivo';
+      texto = [texto, `[${nome} do histórico${m.midia.nome ? `: ${m.midia.nome}` : ''}]`].filter(Boolean).join(' ');
+    }
+    const citada = m.citaIdExterno ? await this.mensagemDoCanal(c.id, m.citaIdExterno) : null;
+    await this.db.insert(crmMensagens).values({
+      citadaId: citada && citada.conversaId === cv.id ? citada.id : null,
+      conversaId: cv.id,
+      direcao: m.minha ? 'saida' : 'entrada',
+      tipo: midia || !m.midia ? m.tipo : 'texto',
+      texto,
+      midia,
+      midiaNome: midia ? (m.midia?.nome ?? null) : null,
+      status: m.minha ? 'enviada' : 'recebida',
+      idExterno: m.idExterno,
+      criadoEm: m.quando,
+    });
+    // A conversa só mostra esta como "última" se ela for mais nova do que a que já estava lá.
+    const resumo = (texto ?? `[${m.tipo}]`).slice(0, 200);
+    await this.db
+      .update(crmConversas)
+      .set({ ultimaMensagem: resumo, ultimaMensagemEm: m.quando, ...(m.minha ? {} : { ultimaEntradaEm: m.quando }) })
+      .where(and(eq(crmConversas.id, cv.id), sql`(${crmConversas.ultimaMensagemEm} is null or ${crmConversas.ultimaMensagemEm} < ${m.quando})`));
+    return { conversaNova: !ja, conversaId: cv.id };
   }
 
   private async status(s: StatusEntrada) {

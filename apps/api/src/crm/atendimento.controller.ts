@@ -36,6 +36,7 @@ import {
 import { ESPECIALISTAS_SUGERIDOS, duplicarEspecialista } from './especialistas';
 import { CrmService } from './crm.service';
 import { CanaisService } from './canais.service';
+import { HistoricoWhatsappService } from './historico.service';
 import { TranscricaoService } from './transcricao.service';
 import { AgenteService } from './agente.service';
 import { ErroIa, IaService } from '../ia/ia.service';
@@ -90,6 +91,7 @@ export class AtendimentoController {
     private readonly auditoria: AuditoriaService,
     private readonly segredos: SegredosService,
     private readonly transcricao: TranscricaoService,
+    private readonly historico: HistoricoWhatsappService,
   ) {}
 
   // ───────────── Funis e etapas ─────────────
@@ -1181,6 +1183,38 @@ export class AtendimentoController {
   @Permissao('configuracoes', 'editar')
   desconectar(@Param('id', ParseUUIDPipe) id: string) {
     return this.canais.desconectar(id);
+  }
+
+  /** Importações do histórico deste número (as últimas 10). */
+  @Get('crm/canais/:id/historico')
+  @Permissao('configuracoes', 'ver')
+  historicoCanal(@Param('id', ParseUUIDPipe) id: string) {
+    return this.historico.listar(id);
+  }
+
+  /** Importa o histórico de conversas do período (no servidor próprio, a primeira vez pede o QR de novo). */
+  @Post('crm/canais/:id/historico')
+  @Permissao('configuracoes', 'editar')
+  async importarHistorico(@Param('id', ParseUUIDPipe) id: string, @Body() body: unknown, @Usuario() u: UsuarioLogado) {
+    const dia = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Data inválida.');
+    const d = validar(z.object({ de: dia, ate: dia, midias: z.boolean().default(false) }), body);
+    const r = await this.historico.iniciar(id, d, u.id);
+    await this.auditoria.registrar({ usuarioId: u.id, acao: 'importar_historico', entidade: 'crm_canais', entidadeId: id, dados: d });
+    return r;
+  }
+
+  /** Confere na hora se o celular já conectou e roda a importação (o sistema também faz isso sozinho, de minuto em minuto). */
+  @Post('crm/importacoes/conferir')
+  @Permissao('configuracoes', 'editar')
+  async conferirImportacoes() {
+    await this.historico.acompanhar();
+    return { ok: true };
+  }
+
+  @Post('crm/importacoes/:id/cancelar')
+  @Permissao('configuracoes', 'editar')
+  cancelarImportacao(@Param('id', ParseUUIDPipe) id: string) {
+    return this.historico.cancelar(id);
   }
 
   /** Atendentes que podem receber conversas (para transferir e para o rodízio dos gatilhos). */

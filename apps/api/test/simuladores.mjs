@@ -179,6 +179,12 @@ http
       return responder(res, 200, { ok: !!i });
     }
     if (url.pathname === '/__evo/apagar') { evo.delete(url.searchParams.get('i')); return responder(res, 200, { ok: true }); }
+    // Histórico que o servidor guardou (no real, vem do celular ao ler o QR com syncFullHistory ligado).
+    if (url.pathname === '/__evo/historico') {
+      const i = evo.get(url.searchParams.get('i')) ?? (url.searchParams.get('i') === 'loja-centro' ? (evo.set('loja-centro', { estado: 'open', webhook: null }), evo.get('loja-centro')) : null);
+      if (i) i.historico = corpo;
+      return responder(res, 200, { ok: !!i });
+    }
     // ───── Firebase (FCM v1): token da conta de serviço e envio ─────
     if (url.pathname === '/fcm/token' && req.method === 'POST') {
       const f = new URLSearchParams(txt);
@@ -264,6 +270,17 @@ http
       if (r === 'instance/delete') { evo.delete(partes[2]); return responder(res, 200, { status: 'SUCCESS' }); }
       if (url.pathname === '/evo/__existe') return responder(res, 200, { existe: evo.has(url.searchParams.get('i')) });
       if (r === 'webhook/set') { inst.webhook = corpo.webhook; return responder(res, 201, { webhook: corpo.webhook }); }
+      if (r === 'settings/set') { inst.settings = corpo; return responder(res, 201, { settings: corpo }); }
+      if (r === 'chat/findMessages') {
+        // Como o v2: filtro por data (ISO), mais novas primeiro, paginado.
+        const ts = corpo?.where?.messageTimestamp ?? {};
+        const de = ts.gte ? Date.parse(ts.gte) / 1000 : 0;
+        const ate = ts.lte ? Date.parse(ts.lte) / 1000 : Infinity;
+        const todas = (inst.historico ?? []).filter((m) => m.messageTimestamp >= de && m.messageTimestamp <= ate).sort((a, b) => b.messageTimestamp - a.messageTimestamp);
+        const porPag = corpo.offset ?? 50;
+        const pag = corpo.page ?? 1;
+        return responder(res, 201, { messages: { total: todas.length, pages: Math.ceil(todas.length / porPag), currentPage: pag, records: todas.slice((pag - 1) * porPag, pag * porPag) } });
+      }
       if (r === 'message/sendReaction') return responder(res, 201, { key: corpo.key, status: 'PENDING' });
       if (r === 'chat/deleteMessageForEveryone') return responder(res, 201, { key: { id: corpo.id }, status: 'PENDING' });
       if (r === 'message/sendText' || r === 'message/sendMedia' || r === 'message/sendWhatsAppAudio') {

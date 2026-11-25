@@ -2337,3 +2337,30 @@ export const indicacoes = pgTable(
   },
   (t) => ({ porIndicador: index('indicacoes_indicador_idx').on(t.indicadorId, t.status) }),
 );
+
+/**
+ * Importação do histórico de conversas de um número de WhatsApp (Evolution), por período.
+ * No servidor próprio, a primeira vez pede para ler o QR de novo (o WhatsApp só manda o histórico ao conectar).
+ */
+export const crmImportacoes = pgTable(
+  'crm_importacoes',
+  {
+    id: id(),
+    canalId: uuid('canal_id').notNull().references(() => crmCanais.id, { onDelete: 'cascade' }),
+    de: date('de').notNull(),
+    ate: date('ate').notNull(),
+    midias: boolean('midias').notNull().default(false),
+    /** aguardando_qr | recebendo | importando | concluida | erro */
+    status: text('status').notNull().default('importando'),
+    /** Quando o celular conectou de novo (o histórico chega aos poucos nos minutos seguintes). */
+    conectadoEm: timestamp('conectado_em', { withTimezone: true }),
+    rodadas: integer('rodadas').notNull().default(0),
+    conversas: integer('conversas').notNull().default(0),
+    mensagens: integer('mensagens').notNull().default(0),
+    detalhe: text('detalhe'),
+    criadoPor: uuid('criado_por').references(() => usuarios.id, { onDelete: 'set null' }),
+    criadoEm: criadoEm(),
+    concluidoEm: timestamp('concluido_em', { withTimezone: true }),
+  },
+  (t) => ({ porCanal: index('crm_importacoes_canal_idx').on(t.canalId, t.status) }),
+);

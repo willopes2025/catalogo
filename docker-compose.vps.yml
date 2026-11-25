@@ -57,13 +57,14 @@ services:
       DATABASE_CONNECTION_URI: postgresql://aritana:${DB_PASSWORD}@db:5432/evolution?schema=public
       DATABASE_CONNECTION_CLIENT_NAME: aritana
       DATABASE_SAVE_DATA_INSTANCE: "true"
-      # As conversas ficam no banco do sistema; o servidor de WhatsApp não guarda cópia.
+      # As conversas ficam no banco do sistema; o servidor de WhatsApp só guarda o histórico que o celular manda ao
+      # conectar (para o botão "Importar histórico" buscar por período), não as mensagens do dia a dia.
       DATABASE_SAVE_DATA_NEW_MESSAGE: "false"
       DATABASE_SAVE_MESSAGE_UPDATE: "false"
       DATABASE_SAVE_DATA_CONTACTS: "false"
       DATABASE_SAVE_DATA_CHATS: "false"
       DATABASE_SAVE_DATA_LABELS: "false"
-      DATABASE_SAVE_DATA_HISTORIC: "false"
+      DATABASE_SAVE_DATA_HISTORIC: "true"
       CACHE_REDIS_ENABLED: "false"
       CACHE_LOCAL_ENABLED: "true"
       WEBHOOK_GLOBAL_ENABLED: "false"

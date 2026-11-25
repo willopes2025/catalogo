@@ -262,6 +262,44 @@ export class ConexaoEvolution implements Conexao {
     }
   }
 
+  /** Estado da conexão no servidor: open | connecting | close. */
+  async estado() {
+    return (await this.chamar<{ instance?: { state?: string } }>(`instance/connectionState/${this.i}`)).instance?.state ?? 'close';
+  }
+
+  /** Passa a pedir o histórico ao WhatsApp na próxima vez que o celular conectar (ler o QR). */
+  async pedirHistoricoAoConectar() {
+    await this.chamar(`settings/set/${this.i}`, {
+      method: 'POST',
+      body: JSON.stringify({ rejectCall: false, msgCall: '', groupsIgnore: true, alwaysOnline: false, readMessages: false, readStatus: false, syncFullHistory: true }),
+    });
+  }
+
+  /**
+   * Mensagens que o servidor guardou entre duas datas, página por página (as mais novas primeiro).
+   * Devolve já no formato das mensagens recebidas; grupos e status ficam de fora.
+   */
+  async *mensagensGuardadas(de: Date, ate: Date) {
+    const porPagina = 250;
+    for (let pagina = 1; pagina <= 400; pagina++) {
+      const r = await this.chamar<Record<string, any>>(`chat/findMessages/${this.i}`, {
+        method: 'POST',
+        body: JSON.stringify({ where: { messageTimestamp: { gte: de.toISOString(), lte: ate.toISOString() } }, page: pagina, offset: porPagina }),
+      });
+      const bloco = r.messages ?? r;
+      const registros: Record<string, any>[] = Array.isArray(bloco?.records) ? bloco.records : Array.isArray(bloco) ? bloco : [];
+      if (!registros.length) return;
+      // Confere o período aqui também (servidor antigo pode ignorar o filtro de data).
+      const dentro = registros.filter((d) => {
+        const t = Number(d.messageTimestamp ?? 0) * 1000;
+        return t >= de.getTime() && t <= ate.getTime();
+      });
+      yield this.ler({ event: 'messages.upsert', data: dentro }).mensagens;
+      const total = Number(bloco?.pages ?? 0);
+      if ((total && pagina >= total) || registros.length < porPagina) return;
+    }
+  }
+
   /** Desliga o número do sistema (no celular, some de "Aparelhos conectados"). Ler o QR de novo reconecta. */
   async desconectar() {
     await this.chamar(`instance/logout/${this.i}`, { method: 'DELETE' });

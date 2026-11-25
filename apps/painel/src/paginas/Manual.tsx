@@ -278,6 +278,7 @@ const SECOES: Secao[] = [
     ],
     dicas: [
       'Mensagens não chegam? Em CRM › Configurar › Números de WhatsApp, cada número mostra o "último aviso do WhatsApp para o sistema". Se estiver vazio ou antigo, clique em "Reapontar webhook".',
+      'Conversas antigas: em CRM › Configurar › Números de WhatsApp, clique em "Importar histórico" no número, escolha o período e importe. No número por QR code, a primeira vez pede para ler o QR de novo (o WhatsApp só entrega o histórico ao conectar); depois, outros períodos vêm sem QR. As conversas entram resolvidas, sem ir para a fila.',
       '"Só não lidas" filtra a lista. A conversa fixada fica sempre em primeiro.',
       'No celular, os botões de cada mensagem ficam sempre visíveis embaixo do balão.',
     ],
