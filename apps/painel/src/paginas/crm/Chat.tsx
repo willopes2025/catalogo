@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, lerSessao, pode } from '../../api';
 import { Campo, Carregando, Erro } from '../../componentes/ui';
+import { EscolherMensagem, MensagemDaTarefa, corpoMensagem, mensagemPronta, mensagemVazia, type TarefaComMensagem } from './TarefaMensagem';
 import { ha, ligar, meuId, telefoneBonito, useMidia, useRelogio, usarAtendentes, usarFunis, type Template } from './comum';
 
 interface Mensagem { id: string; direcao: 'entrada' | 'saida' | 'interna'; tipo: string; texto: string | null; midia: string | null; midiaNome: string | null; templateNome: string | null; status: string; erro: string | null; autor: string | null; automatica: boolean; criadoEm: string; ia: boolean; transcricao: string | null; transcricaoStatus: 'pendente' | 'feita' | 'falhou' | null; transcricaoErro: string | null; reacoes: { de: 'contato' | 'equipe'; emoji: string }[]; apagada: boolean; noWhatsApp: boolean; citada: { id: string; direcao: string; tipo: string; texto: string | null } | null }
@@ -67,7 +68,7 @@ function NotasTarefas({ modo, leadId, contato }: { modo: 'notas' | 'tarefas'; le
   const qc = useQueryClient();
   const editar = pode('crm', 'editar');
   const funis = usarFunis();
-  const lead = useQuery({ queryKey: ['crm', 'lead', leadId], queryFn: () => api<{ eventos: { id: string; tipo: string; texto: string; autor: string | null; criadoEm: string }[]; tarefas: { id: string; titulo: string; venceEm: string; feitaEm: string | null; responsavel: string | null }[] }>(`/crm/leads/${leadId}`), enabled: !!leadId });
+  const lead = useQuery({ queryKey: ['crm', 'lead', leadId], queryFn: () => api<{ eventos: { id: string; tipo: string; texto: string; autor: string | null; criadoEm: string }[]; tarefas: (TarefaComMensagem & { titulo: string; responsavel: string | null })[] }>(`/crm/leads/${leadId}`), enabled: !!leadId });
   const recarregar = () => qc.invalidateQueries({ queryKey: ['crm'] });
   const [funilId, setFunilId] = useState('');
   const criarCard = useMutation({ mutationFn: () => api('/crm/leads', { corpo: { funilId: funilId || funis.data?.[0]?.id, nome: contato.nome.length >= 2 ? contato.nome : contato.telefone, telefone: contato.telefone } }), onSuccess: recarregar });
@@ -75,7 +76,8 @@ function NotasTarefas({ modo, leadId, contato }: { modo: 'notas' | 'tarefas'; le
   const anotar = useMutation({ mutationFn: () => api(`/crm/leads/${leadId}/notas`, { corpo: { texto: nota } }), onSuccess: () => { setNota(''); recarregar(); } });
   const amanha = () => { const d = new Date(Date.now() + 86400_000); d.setHours(9, 0, 0, 0); return new Date(d.getTime() - d.getTimezoneOffset() * 60_000).toISOString().slice(0, 16); };
   const [tarefa, setTarefa] = useState({ titulo: '', venceEm: amanha() });
-  const criarTarefa = useMutation({ mutationFn: () => api(`/crm/leads/${leadId}/tarefas`, { corpo: { titulo: tarefa.titulo, venceEm: new Date(tarefa.venceEm).toISOString() } }), onSuccess: () => { setTarefa({ titulo: '', venceEm: amanha() }); recarregar(); } });
+  const [msgTarefa, setMsgTarefa] = useState(mensagemVazia());
+  const criarTarefa = useMutation({ mutationFn: () => api(`/crm/leads/${leadId}/tarefas`, { corpo: { titulo: tarefa.titulo, venceEm: new Date(tarefa.venceEm).toISOString(), mensagem: corpoMensagem(msgTarefa) } }), onSuccess: () => { setTarefa({ titulo: '', venceEm: amanha() }); setMsgTarefa(mensagemVazia()); recarregar(); } });
   const concluir = useMutation({ mutationFn: (v: { id: string; feita: boolean }) => api(`/crm/tarefas/${v.id}`, { metodo: 'PATCH', corpo: { feita: v.feita } }), onSuccess: recarregar });
   const campo = { padding: '7px 9px', border: '1px solid var(--linha)', borderRadius: 8, font: 'inherit', background: '#fff', minWidth: 0 } as const;
 
@@ -115,10 +117,11 @@ function NotasTarefas({ modo, leadId, contato }: { modo: 'notas' | 'tarefas'; le
       ) : (
         <>
           {editar && (
-            <form className="flex" style={{ gap: 6, flexWrap: 'wrap', alignItems: 'flex-end' }} onSubmit={(e) => { e.preventDefault(); if (tarefa.titulo.trim().length >= 2 && tarefa.venceEm) criarTarefa.mutate(); }}>
+            <form className="flex" style={{ gap: 6, flexWrap: 'wrap', alignItems: 'flex-end' }} onSubmit={(e) => { e.preventDefault(); if (tarefa.titulo.trim().length >= 2 && tarefa.venceEm && mensagemPronta(msgTarefa)) criarTarefa.mutate(); }}>
               <input aria-label="Nova tarefa" placeholder="O que fazer? Ex.: ligar para confirmar" value={tarefa.titulo} maxLength={200} onChange={(e) => setTarefa({ ...tarefa, titulo: e.target.value })} style={{ ...campo, flex: 1, minWidth: 180 }} />
               <input aria-label="Para quando" type="datetime-local" value={tarefa.venceEm} onChange={(e) => setTarefa({ ...tarefa, venceEm: e.target.value })} style={campo} />
-              <button className="botao pequeno" disabled={tarefa.titulo.trim().length < 2 || !tarefa.venceEm || criarTarefa.isPending}>Criar tarefa</button>
+              <EscolherMensagem valor={msgTarefa} mudar={setMsgTarefa} />
+              <button className="botao pequeno" disabled={tarefa.titulo.trim().length < 2 || !tarefa.venceEm || !mensagemPronta(msgTarefa) || criarTarefa.isPending}>Criar tarefa</button>
             </form>
           )}
           {(criarTarefa.error || concluir.error) && <Erro erro={criarTarefa.error ?? concluir.error} />}
@@ -129,6 +132,7 @@ function NotasTarefas({ modo, leadId, contato }: { modo: 'notas' | 'tarefas'; le
               <span style={{ flex: 1 }}>
                 <span style={{ textDecoration: t.feitaEm ? 'line-through' : undefined }}>{t.titulo}</span>
                 <span className="muted" style={{ display: 'block', fontSize: 12, color: !t.feitaEm && new Date(t.venceEm) < new Date() ? 'var(--erro)' : undefined }}>{t.feitaEm ? `feita em ${quando(t.feitaEm)}` : `${new Date(t.venceEm) < new Date() ? 'venceu em' : 'para'} ${quando(t.venceEm)}`}{t.responsavel ? ` · ${t.responsavel}` : ''}</span>
+                <MensagemDaTarefa t={t} podeEnviar={editar} />
               </span>
             </label>
           ))}

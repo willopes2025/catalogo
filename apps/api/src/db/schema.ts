@@ -1144,8 +1144,21 @@ export const crmTarefas = pgTable(
     feitaEm: timestamp('feita_em', { withTimezone: true }),
     criadoPor: uuid('criado_por').references(() => usuarios.id, { onDelete: 'set null' }),
     criadoEm: criadoEm(),
+    /** Mensagem de WhatsApp ligada à tarefa: texto | template | resposta (resposta rápida). */
+    mensagemTipo: text('mensagem_tipo'),
+    mensagemTexto: text('mensagem_texto'),
+    templateId: uuid('template_id'),
+    respostaId: uuid('resposta_id'),
+    /** Número que manda (vazio = o da última conversa com a pessoa). */
+    canalId: uuid('canal_id'),
+    /** automatico: o sistema manda no horário da tarefa | lembrete: fica pronta para mandar com um clique. */
+    envio: text('envio'),
+    /** pendente | enviando | enviada | falhou */
+    mensagemStatus: text('mensagem_status'),
+    mensagemErro: text('mensagem_erro'),
+    mensagemEnviadaEm: timestamp('mensagem_enviada_em', { withTimezone: true }),
   },
-  (t) => ({ abertas: index('crm_tarefas_abertas_idx').on(t.responsavelId, t.venceEm) }),
+  (t) => ({ abertas: index('crm_tarefas_abertas_idx').on(t.responsavelId, t.venceEm), envios: index('crm_tarefas_envio_idx').on(t.mensagemStatus, t.venceEm) }),
 );
 
 /** Números de WhatsApp ligados ao CRM: oficial (API Cloud da Meta) ou por QR code (Z-API). */

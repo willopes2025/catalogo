@@ -309,6 +309,13 @@
       "when": 1795635006360,
       "tag": "0043_respostas_com_midia",
       "breakpoints": true
+    },
+    {
+      "idx": 44,
+      "version": "7",
+      "when": 1795636999258,
+      "tag": "0044_tarefas_com_mensagem",
+      "breakpoints": true
     }
   ]
 }

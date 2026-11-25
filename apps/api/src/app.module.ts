@@ -77,6 +77,7 @@ import { AtendimentoController } from './crm/atendimento.controller';
 import { CrmService } from './crm/crm.service';
 import { CanaisService } from './crm/canais.service';
 import { HistoricoWhatsappService } from './crm/historico.service';
+import { TarefasMensagemService } from './crm/tarefas-mensagem.service';
 import { TranscricaoService } from './crm/transcricao.service';
 import { FerramentasAgenteService } from './crm/ferramentas-agente.service';
 import { AprendizadoService } from './crm/aprendizado.service';
@@ -166,6 +167,7 @@ if (!segredo || (process.env.NODE_ENV === 'production' && segredo.length < 32)) 
     MetaService,
     CanaisService,
     HistoricoWhatsappService,
+    TarefasMensagemService,
     TranscricaoService,
     FerramentasAgenteService,
     AprendizadoService,

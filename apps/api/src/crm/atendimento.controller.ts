@@ -37,6 +37,7 @@ import { ESPECIALISTAS_SUGERIDOS, duplicarEspecialista } from './especialistas';
 import { CrmService } from './crm.service';
 import { CanaisService } from './canais.service';
 import { HistoricoWhatsappService } from './historico.service';
+import { TarefasMensagemService } from './tarefas-mensagem.service';
 import { TranscricaoService } from './transcricao.service';
 import { AgenteService } from './agente.service';
 import { ErroIa, IaService } from '../ia/ia.service';
@@ -92,6 +93,7 @@ export class AtendimentoController {
     private readonly segredos: SegredosService,
     private readonly transcricao: TranscricaoService,
     private readonly historico: HistoricoWhatsappService,
+    private readonly tarefasMensagem: TarefasMensagemService,
   ) {}
 
   // ───────────── Funis e etapas ─────────────
@@ -266,7 +268,12 @@ export class AtendimentoController {
         .orderBy(desc(crmEventos.criadoEm))
         .limit(300),
       this.db
-        .select({ id: crmTarefas.id, titulo: crmTarefas.titulo, venceEm: crmTarefas.venceEm, feitaEm: crmTarefas.feitaEm, responsavelId: crmTarefas.responsavelId, responsavel: usuarios.nome })
+        .select({
+          id: crmTarefas.id, titulo: crmTarefas.titulo, venceEm: crmTarefas.venceEm, feitaEm: crmTarefas.feitaEm, responsavelId: crmTarefas.responsavelId, responsavel: usuarios.nome,
+          mensagemTipo: crmTarefas.mensagemTipo, mensagemTexto: crmTarefas.mensagemTexto, envio: crmTarefas.envio, mensagemStatus: crmTarefas.mensagemStatus, mensagemErro: crmTarefas.mensagemErro, mensagemEnviadaEm: crmTarefas.mensagemEnviadaEm,
+          mensagemNome: sql<string | null>`coalesce((select '/' || r.atalho from crm_respostas_rapidas r where r.id = ${crmTarefas.respostaId}), (select t.nome from crm_templates t where t.id = ${crmTarefas.templateId}))`,
+          canal: sql<string | null>`(select c.nome from crm_canais c where c.id = ${crmTarefas.canalId})`,
+        })
         .from(crmTarefas)
         .leftJoin(usuarios, eq(usuarios.id, crmTarefas.responsavelId))
         .where(eq(crmTarefas.leadId, id))
@@ -351,10 +358,50 @@ export class AtendimentoController {
   @Post('crm/leads/:id/tarefas')
   @Permissao('crm', 'editar')
   async criarTarefa(@Usuario() u: UsuarioLogado, @Param('id', ParseUUIDPipe) id: string, @Body() body: unknown) {
-    const d = validar(z.object({ titulo: z.string().trim().min(2).max(200), venceEm: z.string().datetime({ offset: true }).or(z.string().regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/)), responsavelId: uuid.nullable().optional() }), body);
-    const [t] = await this.db.insert(crmTarefas).values({ leadId: id, titulo: d.titulo, venceEm: new Date(d.venceEm), responsavelId: d.responsavelId ?? u.id, criadoPor: u.id }).returning();
-    await this.crm.evento(id, 'tarefa', `Tarefa: ${d.titulo}.`, u.id);
+    const d = validar(
+      z.object({
+        titulo: z.string().trim().min(2).max(200),
+        venceEm: z.string().datetime({ offset: true }).or(z.string().regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/)),
+        responsavelId: uuid.nullable().optional(),
+        // Mensagem de WhatsApp da tarefa (opcional): template, resposta rápida ou texto escrito na hora.
+        mensagem: z
+          .object({
+            tipo: z.enum(['texto', 'template', 'resposta']),
+            texto: z.string().trim().max(4096).nullable().optional(),
+            templateId: uuid.nullable().optional(),
+            respostaId: uuid.nullable().optional(),
+            canalId: uuid.nullable().optional(),
+            envio: z.enum(['automatico', 'lembrete']).default('lembrete'),
+          })
+          .nullable()
+          .optional(),
+      }),
+      body,
+    );
+    const m = d.mensagem;
+    if (m) await this.tarefasMensagem.validar(m);
+    const [t] = await this.db
+      .insert(crmTarefas)
+      .values({
+        leadId: id, titulo: d.titulo, venceEm: new Date(d.venceEm), responsavelId: d.responsavelId ?? u.id, criadoPor: u.id,
+        ...(m ? { mensagemTipo: m.tipo, mensagemTexto: m.tipo === 'texto' ? m.texto : null, templateId: m.tipo === 'template' ? m.templateId : null, respostaId: m.tipo === 'resposta' ? m.respostaId : null, canalId: m.canalId ?? null, envio: m.envio, mensagemStatus: 'pendente' } : {}),
+      })
+      .returning();
+    await this.crm.evento(id, 'tarefa', `Tarefa: ${d.titulo}.${m ? (m.envio === 'automatico' ? ' Mensagem de WhatsApp agendada para o horário da tarefa.' : ' Com mensagem de WhatsApp pronta para enviar.') : ''}`, u.id);
     return t;
+  }
+
+  /** Manda agora a mensagem de WhatsApp da tarefa (e conclui a tarefa). */
+  @Post('crm/tarefas/:id/enviar')
+  @Permissao('crm', 'editar')
+  async enviarMensagemTarefa(@Usuario() u: UsuarioLogado, @Param('id', ParseUUIDPipe) id: string) {
+    const [t] = await this.db.select({ leadId: crmTarefas.leadId, canalId: crmTarefas.canalId }).from(crmTarefas).where(eq(crmTarefas.id, id));
+    if (!t) throw new NotFoundException('Tarefa não encontrada.');
+    if (t.canalId) {
+      const canal = await this.canais.obter(t.canalId);
+      if (!this.canais.podeAtender(canal, u.id, gestor(u))) throw new ForbiddenException('Você não atende por este número.');
+    }
+    return this.tarefasMensagem.enviar(id, u.id);
   }
 
   @Patch('crm/tarefas/:id')

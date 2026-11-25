@@ -10,6 +10,7 @@ import { Chat } from './Chat';
 import { Aprovar, Motivo } from './Funil';
 import { ha, ligar, NovoCampo, telefoneBonito, usarAtendentes, usarCampos, usarCanais, usarFunis, ValorCampo, type Etapa } from './comum';
 import './crm.css';
+import { EscolherMensagem, MensagemDaTarefa, corpoMensagem, mensagemPronta, mensagemVazia } from './TarefaMensagem';
 
 const ICONES: Record<string, string> = { nota: '📝', etapa: '➜', campo: '✎', tarefa: '☑', gatilho: '⚡', sistema: '•', ligacao: '📞' };
 const ROTULO_UTM: Record<string, string> = { utm_source: 'Origem', utm_medium: 'Meio', utm_campaign: 'Campanha', utm_content: 'Conteúdo', utm_term: 'Termo', fbclid: 'Clique Meta (fbclid)', gclid: 'Clique Google (gclid)', pagina: 'Página', anuncio_id: 'Anúncio (id)', anuncio_titulo: 'Anúncio', anuncio_texto: 'Texto do anúncio', ctwa_clid: 'Clique para WhatsApp (id)', canal: 'Número', anuncio_tipo: 'Tipo de anúncio' };
@@ -33,6 +34,7 @@ export function LeadCard() {
   const [etiqueta, setEtiqueta] = useState('');
   const [nota, setNota] = useState('');
   const [tarefa, setTarefa] = useState({ titulo: '', venceEm: '', responsavelId: '' });
+  const [msgTarefa, setMsgTarefa] = useState(mensagemVazia());
   const [canalNovo, setCanalNovo] = useState('');
   const editar = pode('crm', 'editar');
   const gestor = pode('crm', 'excluir');
@@ -55,8 +57,8 @@ export function LeadCard() {
   const patchContato = useMutation({ mutationFn: (corpo: Record<string, unknown>) => api(`/crm/contatos/${l.contatoId}`, { metodo: 'PATCH', corpo }), onSuccess: atualizar });
   const anotar = useMutation({ mutationFn: () => api(`/crm/leads/${id}/notas`, { corpo: { texto: nota } }), onSuccess: () => { setNota(''); atualizar(); } });
   const criarTarefa = useMutation({
-    mutationFn: () => api(`/crm/leads/${id}/tarefas`, { corpo: { titulo: tarefa.titulo, venceEm: new Date(tarefa.venceEm).toISOString(), responsavelId: tarefa.responsavelId || null } }),
-    onSuccess: () => { setTarefa({ titulo: '', venceEm: '', responsavelId: '' }); atualizar(); },
+    mutationFn: () => api(`/crm/leads/${id}/tarefas`, { corpo: { titulo: tarefa.titulo, venceEm: new Date(tarefa.venceEm).toISOString(), responsavelId: tarefa.responsavelId || null, mensagem: corpoMensagem(msgTarefa) } }),
+    onSuccess: () => { setTarefa({ titulo: '', venceEm: '', responsavelId: '' }); setMsgTarefa(mensagemVazia()); atualizar(); },
   });
   const marcar = useMutation({ mutationFn: ({ tid, feita }: { tid: string; feita: boolean }) => api(`/crm/tarefas/${tid}`, { metodo: 'PATCH', corpo: { feita } }), onSuccess: atualizar });
   const iniciar = useMutation({
@@ -268,7 +270,8 @@ export function LeadCard() {
                     <option value="">Eu</option>
                     {atendentes.data?.map((a) => <option key={a.id} value={a.id}>{a.nome}</option>)}
                   </select>
-                  <button className="botao pequeno" disabled={!tarefa.titulo.trim() || !tarefa.venceEm || criarTarefa.isPending} onClick={() => criarTarefa.mutate()}>Adicionar</button>
+                  <EscolherMensagem valor={msgTarefa} mudar={setMsgTarefa} />
+                  <button className="botao pequeno" disabled={!tarefa.titulo.trim() || !tarefa.venceEm || !mensagemPronta(msgTarefa) || criarTarefa.isPending} onClick={() => criarTarefa.mutate()}>Adicionar</button>
                 </div>
               )}
               {criarTarefa.error && <Erro erro={criarTarefa.error} />}
@@ -277,10 +280,11 @@ export function LeadCard() {
                 const vencida = !t.feitaEm && new Date(t.venceEm) < new Date();
                 return (
                   <label key={t.id} className="evento" style={{ cursor: 'pointer', textDecoration: t.feitaEm ? 'line-through' : undefined, opacity: t.feitaEm ? 0.6 : 1 }}>
-                    <input type="checkbox" checked={!!t.feitaEm} disabled={!editar} onChange={(e) => marcar.mutate({ tid: t.id, feita: e.target.checked })} />
-                    <div style={{ flex: 1 }}>
+                    <input type="checkbox" checked={!!t.feitaEm} disabled={!editar} onChange={(e) => marcar.mutate({ tid: t.id, feita: e.target.checked })} style={{ width: 'auto', flex: 'none', alignSelf: 'flex-start', marginTop: 3 }} />
+                    <div style={{ flex: 1, minWidth: 0 }}>
                       <div>{t.titulo}</div>
                       <div className="muted" style={{ fontSize: 12, color: vencida ? 'var(--erro)' : undefined }}>{vencida ? 'Vencida · ' : ''}{new Date(t.venceEm).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' })} · {t.responsavel ?? 'sem responsável'}</div>
+                      <MensagemDaTarefa t={t} podeEnviar={editar} />
                     </div>
                   </label>
                 );

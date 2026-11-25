@@ -4226,3 +4226,56 @@ test('respostas rápidas com foto, vídeo ou áudio', async () => {
   await ok('DELETE', `/crm/respostas/${r.id}`);
   await ok('DELETE', `/crm/respostas/${so.id}`);
 });
+
+test('tarefa com mensagem de WhatsApp: texto automático no horário, resposta rápida com foto por um clique, template', async () => {
+  const c = await ok('POST', '/crm/canais', { nome: 'Número das tarefas', tipo: 'evolution' });
+  await fetch(`${SIM}/__evo/conectar?i=${encodeURIComponent(c.config.instancia)}`);
+  const funil = (await ok('GET', '/crm/funis'))[0];
+  const card = await ok('POST', '/crm/leads', { funilId: funil.id, nome: 'Marta Tarefa Zap', telefone: '27966630001' });
+  const envios = async (tipo) => (await recebidos()).filter((r) => r.caminho === `/evo/message/${tipo}/${c.config.instancia}`);
+  // Sem texto, resposta ou template: recusa.
+  assert.equal((await chamar('POST', `/crm/leads/${card.id}/tarefas`, { titulo: 'Sem mensagem', venceEm: new Date().toISOString(), mensagem: { tipo: 'texto', texto: '', canalId: c.id, envio: 'automatico' } })).status, 400);
+  assert.equal((await chamar('POST', `/crm/leads/${card.id}/tarefas`, { titulo: 'Sem resposta', venceEm: new Date().toISOString(), mensagem: { tipo: 'resposta', canalId: c.id, envio: 'lembrete' } })).status, 400);
+  // 1) Texto automático: ainda não venceu → não manda; venceu → o motor manda sozinho e conclui a tarefa.
+  const futura = await ok('POST', `/crm/leads/${card.id}/tarefas`, { titulo: 'Lembrar do acerto', venceEm: new Date(Date.now() + 3600_000).toISOString(), mensagem: { tipo: 'texto', texto: 'Oi {{primeiro_nome}}, seu acerto é amanhã!', canalId: c.id, envio: 'automatico' } });
+  const agora = await ok('POST', `/crm/leads/${card.id}/tarefas`, { titulo: 'Avisar agora', venceEm: new Date(Date.now() - 60_000).toISOString(), mensagem: { tipo: 'texto', texto: 'Oi {{primeiro_nome}}, chegou peça nova!', canalId: c.id, envio: 'automatico' } });
+  const antes = (await envios('sendText')).length;
+  await ok('POST', '/crm/processar');
+  const txt = (await envios('sendText')).slice(antes);
+  assert.deepEqual(txt.map((e) => e.corpo.text), ['Oi Marta, chegou peça nova!'], 'só a que venceu, com o nome preenchido');
+  let lead = await ok('GET', `/crm/leads/${card.id}`);
+  const t1 = lead.tarefas.find((t) => t.id === agora.id);
+  assert.deepEqual([t1.mensagemStatus, !!t1.feitaEm], ['enviada', true]);
+  assert.equal(lead.tarefas.find((t) => t.id === futura.id).mensagemStatus, 'pendente');
+  await ok('POST', '/crm/processar');
+  assert.equal((await envios('sendText')).length, antes + 1, 'não manda duas vezes');
+  // A conversa não foi para ninguém nem para a fila (envio automático).
+  // 2) Resposta rápida com foto, "só lembrar": nada sai sozinho; "Enviar agora" manda a foto com a legenda.
+  const png = Buffer.from('89504e470d0a1a0a0000000d4948445200000001000000010806000000', 'hex').toString('base64');
+  const r = await ok('POST', '/crm/respostas', { atalho: 'tarefa-foto', texto: 'Olha a novidade, {{primeiro_nome}}!', midia: { nome: 'novidade.png', mime: 'image/png', base64: png } });
+  const lembrete = await ok('POST', `/crm/leads/${card.id}/tarefas`, { titulo: 'Mandar foto', venceEm: new Date(Date.now() - 60_000).toISOString(), mensagem: { tipo: 'resposta', respostaId: r.id, envio: 'lembrete' } });
+  const antesMidia = (await envios('sendMedia')).length;
+  await ok('POST', '/crm/processar');
+  assert.equal((await envios('sendMedia')).length, antesMidia, 'lembrete não sai sozinho');
+  await ok('POST', `/crm/tarefas/${lembrete.id}/enviar`);
+  const foto = (await envios('sendMedia')).pop();
+  assert.deepEqual([foto.corpo.mediatype, foto.corpo.caption, foto.corpo.fileName], ['image', 'Olha a novidade, Marta!', 'novidade.png']);
+  assert.equal((await chamar('POST', `/crm/tarefas/${lembrete.id}/enviar`)).status, 400, 'já enviada');
+  // Sem número escolhido: sai pelo da última conversa (este).
+  // 3) Template livre automático.
+  const tpl = await ok('POST', '/crm/templates', { nome: 'Tarefa template', texto: 'Oi {{primeiro_nome}}, tudo certo para hoje?' });
+  await ok('POST', `/crm/leads/${card.id}/tarefas`, { titulo: 'Template', venceEm: new Date(Date.now() - 60_000).toISOString(), mensagem: { tipo: 'template', templateId: tpl.id, envio: 'automatico' } });
+  await ok('POST', '/crm/processar');
+  assert.equal((await envios('sendText')).pop().corpo.text, 'Oi Marta, tudo certo para hoje?');
+  // Falha (número desconectado): fica registrada e dá para tentar de novo.
+  await ok('POST', `/crm/canais/${c.id}/desconectar`);
+  const falha = await ok('POST', `/crm/leads/${card.id}/tarefas`, { titulo: 'Vai falhar', venceEm: new Date(Date.now() - 60_000).toISOString(), mensagem: { tipo: 'texto', texto: 'teste', canalId: c.id, envio: 'automatico' } });
+  await ok('POST', '/crm/processar');
+  lead = await ok('GET', `/crm/leads/${card.id}`);
+  const tf = lead.tarefas.find((t) => t.id === falha.id);
+  assert.equal(tf.mensagemStatus, 'falhou');
+  assert.ok(tf.mensagemErro);
+  assert.equal(tf.feitaEm, null, 'tarefa continua aberta');
+  await ok('DELETE', `/crm/respostas/${r.id}`);
+  await ok('DELETE', `/crm/canais/${c.id}`);
+});
