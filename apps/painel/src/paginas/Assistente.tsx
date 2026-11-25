@@ -359,7 +359,7 @@ function Chat({ id, estado, aoApagar }: { id: string; estado: Estado; aoApagar: 
           <div key={x.m.id} className={`fala ${x.m.papel === 'user' ? 'minha' : 'dele'}${x.m.origem === 'passo' ? ' passo' : ''}`}>
             {x.m.anexos?.length > 0 && <div className="assistente-anexos-msg">{x.m.anexos.map((a) => <AnexoNaMensagem key={a.id} a={a} />)}</div>}
             {x.m.origem === 'voz' && <span className="muted" title="Falado">🎤 </span>}
-            {x.m.papel === 'assistant' && digitando.has(x.m.id) ? <Digitado texto={x.m.texto} aoAvancar={acompanhar} aoTerminar={() => terminouDeDigitar(x.m.id)} /> : x.m.texto}
+            {x.m.papel === 'assistant' && digitando.has(x.m.id) ? <Digitado texto={x.m.texto} aoAvancar={acompanhar} aoTerminar={() => terminouDeDigitar(x.m.id)} /> : x.m.papel === 'assistant' ? <TextoFormatado texto={x.m.texto} /> : x.m.texto}
             {x.m.papel === 'assistant' && x.m.origem !== 'passo' && !digitando.has(x.m.id) && <button className="assistente-falar" title="Ouvir" onClick={() => void falar(x.m.fala ?? x.m.texto, estado.vozResposta)}>🔊</button>}
           </div>
         ) : (
@@ -420,6 +420,16 @@ function Chat({ id, estado, aoApagar }: { id: string; estado: Estado; aoApagar: 
  * em pedacinhos, com cursor piscando. Respostas longas aceleram para não passar de ~4 s.
  * Clique na mensagem para mostrar tudo de uma vez.
  */
+/** Mostra o negrito (**assim**) e o itálico (*assim*) da resposta, sem aparecer os asteriscos. */
+function TextoFormatado({ texto }: { texto: string }) {
+  const partes = texto.split(/(\*\*[^*\n]+\*\*|\*[^*\n]+\*)/g);
+  return (
+    <>
+      {partes.map((p, i) => (/^\*\*[^*\n]+\*\*$/.test(p) ? <b key={i}>{p.slice(2, -2)}</b> : /^\*[^*\n]+\*$/.test(p) ? <i key={i}>{p.slice(1, -1)}</i> : p.replace(/^#{1,4}\s+/gm, '')))}
+    </>
+  );
+}
+
 function Digitado({ texto, aoAvancar, aoTerminar }: { texto: string; aoAvancar: () => void; aoTerminar: () => void }) {
   const [n, setN] = useState(0);
   const avancar = useRef(aoAvancar);
@@ -453,7 +463,7 @@ function Digitado({ texto, aoAvancar, aoTerminar }: { texto: string; aoAvancar: 
   }, [texto]);
   return (
     <span className="assistente-digitado" onClick={() => terminar.current()} title="Clique para mostrar tudo">
-      {texto.slice(0, n)}
+      <TextoFormatado texto={texto.slice(0, n)} />
       <span className="assistente-cursor" aria-hidden="true" />
     </span>
   );

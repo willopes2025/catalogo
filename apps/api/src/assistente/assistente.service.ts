@@ -32,7 +32,7 @@ const CHAVE = 'assistente';
 /** Rodadas de ferramenta por pedido (evita o assistente entrar em loop). */
 const MAX_RODADAS = 10;
 /** Tamanho máximo do resultado de uma ferramenta devolvido ao Claude. */
-const MAX_RESULTADO = 40_000;
+const MAX_RESULTADO = 100_000;
 /** "pode", "sim, pode mandar", "confirmo"… dito com uma ação esperando confirmação. */
 export const CONFIRMA = /^\s*(sim|pode|pode sim|pode mandar|pode enviar|pode fazer|manda|envia|confirmo|confirma|confirmado|ok|isso|beleza|fechado)\b[\s\S]{0,30}$/i;
 export const CANCELA = /^\s*(n[aã]o|cancela|cancelar|cancele|para|pare|deixa|esquece)\b[\s\S]{0,30}$/i;
@@ -384,7 +384,8 @@ export class AssistenteService implements OnModuleInit, OnModuleDestroy {
         '4. CONFIGURAR ou DESENVOLVER: escreva um plano curto (passos numerados), confirme com a pessoa e registre com registrar_pedido, com a especificação completa (quem usa, regras, exemplos, como saber que ficou pronto).',
         '5. Pedido grande: divida em etapas. Enquanto usa ferramentas, no máximo uma frase curta de andamento (ou nada); não adiante números nem conclusões antes do resultado.',
         '6. UMA resposta final, sem repetir: depois das ferramentas, escreva a resposta completa uma única vez. Não repita o que já disse nas frases de andamento, não repita a pergunta da pessoa e não resuma duas vezes a mesma coisa.',
-        '7. Conversa sobre o negócio e os resultados: busque os números (consultar_dados cobre vendas por produto/vendedor/loja, estoque, maletas, acertos, rede, candidatas, funis do CRM, tarefas, agenda, comissões, garantia, notas, marketing, pontos, pedidos do catálogo, acordos e caixas; resumo_negocio, resumo_vendas, consultar_financeiro para o que vence, venceu ou foi recebido em qualquer período, consultar_inadimplentes, maletas_atrasadas…) e analise como um gestor parceiro: o que melhorou, o que piorou, o que provavelmente explica e uma ou duas ações práticas. Se a pessoa não disser o período, use o mês atual até hoje comparado ao mês anterior e diga isso.',
+        '7. Seja específico e completo: nomes, valores, datas e o próximo passo concreto (qual botão, qual tela, o que você pode fazer agora). Nada de resposta genérica. Não peça desculpas pela demora nem comente que "a consulta veio cortada": se faltou dado, consulte de novo com filtro (ex.: por faixa de valor ou de atraso) até ter o necessário.',
+        '8. Conversa sobre o negócio e os resultados: busque os números (consultar_dados cobre vendas por produto/vendedor/loja, estoque, maletas, acertos, rede, candidatas, funis do CRM, tarefas, agenda, comissões, garantia, notas, marketing, pontos, pedidos do catálogo, acordos e caixas; resumo_negocio, resumo_vendas, consultar_financeiro para o que vence, venceu ou foi recebido em qualquer período, consultar_inadimplentes, maletas_atrasadas…) e analise como um gestor parceiro: o que melhorou, o que piorou, o que provavelmente explica e uma ou duas ações práticas. Se a pessoa não disser o período, use o mês atual até hoje comparado ao mês anterior e diga isso.',
       ].join('\n'),
       [
         'REGRAS:',
@@ -430,11 +431,33 @@ export class AssistenteService implements OnModuleInit, OnModuleDestroy {
       const [ultimaFala] = await this.db.select({ origem: assistenteMensagens.origem }).from(assistenteMensagens).where(and(eq(assistenteMensagens.sessaoId, sessaoId), eq(assistenteMensagens.papel, 'user'), inArray(assistenteMensagens.origem, ['texto', 'voz']))).orderBy(desc(assistenteMensagens.criadoEm)).limit(1);
       const sistema = await this.sistema(u, automatico, !rotina && ultimaFala?.origem === 'voz');
       const ferramentas = this.ferramentas.definicoes(u);
+      let vazias = 0;
+      let cortes = 0;
       for (let rodada = 0; rodada < MAX_RODADAS; rodada++) {
-        const r = await this.ia.comFerramentas({ recurso: 'assistente', sistema, mensagens: await this.historico(sessaoId), ferramentas, usuarioId: u.id });
+        const r = await this.ia.comFerramentas({ recurso: 'assistente', sistema, mensagens: await this.historico(sessaoId), ferramentas, usuarioId: u.id, maxTokens: 8000 });
+        // Passou do limite de tamanho: o pedido de ferramenta pode ter vindo pela metade. Guarda o texto e pede para continuar.
+        if (r.parada === 'max_tokens') {
+          const texto = r.content.filter((b) => b.type === 'text');
+          if (texto.length) await this.gravar(sessaoId, 'assistant', texto);
+          if (cortes++ < 2) {
+            await this.gravar(sessaoId, 'user', [{ type: 'text', text: '[Sistema: a sua resposta passou do limite de tamanho e foi cortada. Continue exatamente de onde parou, sem repetir o que já disse, e seja mais enxuto. Se precisa de muitos dados, divida em partes e ofereça mandar o resto por e-mail ou planilha.]' }], 'sistema', null);
+            continue;
+          }
+          return;
+        }
         const usos = r.content.filter((b): b is Extract<BlocoFerramenta, { type: 'tool_use' }> => b.type === 'tool_use');
+        const temTexto = r.content.some((b) => b.type === 'text' && (b as { text: string }).text.trim());
+        // Resposta vazia (nem texto nem ferramenta): pede de novo uma vez, em vez de mostrar "…".
+        if (!usos.length && !temTexto) {
+          if (vazias++ < 1) {
+            await this.gravar(sessaoId, 'user', [{ type: 'text', text: '[Sistema: a sua última resposta veio vazia. Responda agora à pessoa, completo, com base no que você já consultou.]' }], 'sistema', null);
+            continue;
+          }
+          await this.gravar(sessaoId, 'assistant', [{ type: 'text', text: 'Não consegui montar a resposta agora. Pode repetir o pedido?' }]);
+          return;
+        }
         // Fala que vem junto com ferramentas é só andamento ("deixa eu ver…"): fica marcada como passo (a tela mostra discreta e a voz não lê).
-        await this.gravar(sessaoId, 'assistant', r.content.length ? r.content : [{ type: 'text', text: '…' }], usos.length ? 'passo' : null);
+        await this.gravar(sessaoId, 'assistant', r.content, usos.length ? 'passo' : null);
         if (!usos.length) return;
         const resultados: BlocoFerramenta[] = [];
         for (const uso of usos) resultados.push(await this.usar(u, sessaoId, uso, rotina, automatico, pode));
