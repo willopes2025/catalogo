@@ -209,9 +209,11 @@ function FormCanal({ tipo, canal, fechar, porToken: novoPorToken }: { tipo: Tipo
   const atendentes = usarUsuariosDoCrm();
   const funis = usarFunis();
   const [f, setF] = useState({ nome: canal?.nome ?? '', config: { ...(canal?.config ?? {}) } as Record<string, string>, atendentes: canal?.atendentes ?? [], usuarioId: canal?.usuarioId ?? '', funilEntradaId: canal?.funilEntradaId ?? '', ativo: canal?.ativo ?? true });
+  const [envio, setEnvio] = useState({ min: String((canal?.envioIntervaloMinS ?? 180) / 60).replace('.', ','), max: String((canal?.envioIntervaloMaxS ?? 360) / 60).replace('.', ','), inicio: canal?.envioInicio ?? '08:00', fim: canal?.envioFim ?? '18:00', dias: canal?.envioDias ?? [1, 2, 3, 4, 5, 6] });
+  const seg = (t: string) => Math.round(Number((t || '0').replace(',', '.')) * 60);
   const salvar = useMutation({
     mutationFn: () => {
-      const corpo = { nome: f.nome, config: f.config, atendentes: f.atendentes, usuarioId: f.usuarioId || null, funilEntradaId: f.funilEntradaId || null, ...(canal ? { ativo: f.ativo } : { tipo }) };
+      const corpo = { nome: f.nome, config: f.config, atendentes: f.atendentes, usuarioId: f.usuarioId || null, funilEntradaId: f.funilEntradaId || null, ...(canal ? { ativo: f.ativo, envioIntervaloMinS: seg(envio.min), envioIntervaloMaxS: seg(envio.max), envioInicio: envio.inicio, envioFim: envio.fim, envioDias: envio.dias } : { tipo }) };
       return canal ? api<{ id: string }>(`/crm/canais/${canal.id}`, { metodo: 'PATCH', corpo }) : api<{ id: string }>('/crm/canais', { corpo });
     },
     onSuccess: (r) => {
@@ -268,7 +270,22 @@ function FormCanal({ tipo, canal, fechar, porToken: novoPorToken }: { tipo: Tipo
           return sem.length ? <div className="aviso" style={{ marginTop: 8 }}>{sem.map((a) => a.nome).join(', ')} ainda não {sem.length > 1 ? 'têm' : 'tem'} acesso ao CRM e não vai ver as conversas deste número. Dê a permissão "CRM › editar" ao grupo em Configurações › Grupos e permissões (ou mude a pessoa para um grupo que já tenha).</div> : null;
         })()}
       </div>
-      {canal && <label className="check l4"><input type="checkbox" checked={f.ativo} onChange={(e) => setF({ ...f, ativo: e.target.checked })} /> Número ativo</label>}
+      {canal && (
+        <>
+          <div className="secao" style={{ gridColumn: '1 / -1' }}>Envio em massa (envio em lote e trilha de cobrança)</div>
+          <p className="muted l4" style={{ margin: 0 }}>As mensagens saem uma por vez, com uma espera sorteada entre o mínimo e o máximo, e só nos dias e horários marcados. O que não sair hoje continua no próximo dia permitido. Conversas normais do chat não seguem esta regra.</p>
+          <Campo rotulo="Intervalo mínimo (minutos)"><input inputMode="decimal" value={envio.min} onChange={(e) => setEnvio({ ...envio, min: e.target.value })} /></Campo>
+          <Campo rotulo="Intervalo máximo (minutos)"><input inputMode="decimal" value={envio.max} onChange={(e) => setEnvio({ ...envio, max: e.target.value })} /></Campo>
+          <Campo rotulo="Das"><input type="time" value={envio.inicio} onChange={(e) => setEnvio({ ...envio, inicio: e.target.value })} /></Campo>
+          <Campo rotulo="Até"><input type="time" value={envio.fim} onChange={(e) => setEnvio({ ...envio, fim: e.target.value })} /></Campo>
+          <div className="l4 flex" style={{ gap: 12, flexWrap: 'wrap' }}>
+            {['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'].map((d, i) => (
+              <label key={d} className="check"><input type="checkbox" checked={envio.dias.includes(i)} onChange={(e) => setEnvio({ ...envio, dias: e.target.checked ? [...envio.dias, i].sort() : envio.dias.filter((x) => x !== i) })} /> {d}</label>
+            ))}
+          </div>
+          <label className="check l4"><input type="checkbox" checked={f.ativo} onChange={(e) => setF({ ...f, ativo: e.target.checked })} /> Número ativo</label>
+        </>
+      )}
       {salvar.error && <div className="l4"><Erro erro={salvar.error} /></div>}
       <div className="flex l4">
         <button className="botao" disabled={!f.nome.trim() || salvar.isPending || (porToken && !canal && !(f.config.servidor?.trim() && f.config.instancia?.trim() && f.config.token?.trim()))} onClick={() => salvar.mutate()}>{salvar.isPending ? 'Preparando…' : porToken ? (canal ? 'Salvar' : 'Conferir e conectar') : tipo === 'evolution' && !canal ? 'Salvar e mostrar o QR code' : 'Salvar'}</button>
@@ -584,9 +601,9 @@ function Ramais() {
 
 // ───────────── Agente de IA ─────────────
 
-interface Especialista { id: string; funcao: string; nome: string; quando: string; instrucoes: string; conhecimento: string; ativo: boolean; ordem: number }
+interface Especialista { id: string; funcao: string; nome: string; quando: string; instrucoes: string; conhecimento: string; ativo: boolean; ordem: number; canais?: string[] }
 interface OpcaoVoz { id: string; nome: string }
-interface ConfigAgente { ativo: boolean; canais: string[]; instrucoes: string; conhecimento: string; maxRespostas: number; nome: string; maxTransferencias: number; ligada: boolean; especialistas: Especialista[]; respostaAudio: 'nunca' | 'espelhar' | 'sempre'; vozProvedor: 'automatica' | 'elevenlabs' | 'openai'; vozElevenlabs: string; vozOpenai: string; audioComTexto: boolean; ferramentas: { segundaVia: boolean; promessa: boolean; promessaMaxDias: number; estoque: boolean; candidatura: boolean }; memoriaClientes: boolean; voz?: { disponivel: 'elevenlabs' | 'openai' | null; elevenlabs: boolean; openai: boolean; opcoes: { elevenlabs: OpcaoVoz[]; openai: OpcaoVoz[] } } }
+interface ConfigAgente { ativo: boolean; canais: string[]; instrucoes: string; conhecimento: string; maxRespostas: number; nome: string; maxTransferencias: number; ligada: boolean; especialistas: Especialista[]; respostaAudio: 'nunca' | 'espelhar' | 'sempre'; vozProvedor: 'automatica' | 'elevenlabs' | 'openai'; vozElevenlabs: string; vozOpenai: string; audioComTexto: boolean; ferramentas: { segundaVia: boolean; promessa: boolean; promessaMaxDias: number; estoque: boolean; candidatura: boolean; comprovante: boolean; acordo: boolean; fecharAcordo: boolean }; memoriaClientes: boolean; voz?: { disponivel: 'elevenlabs' | 'openai' | null; elevenlabs: boolean; openai: boolean; opcoes: { elevenlabs: OpcaoVoz[]; openai: OpcaoVoz[] } } }
 
 /** O agente que atende no WhatsApp enquanto ninguém da equipe pegou a conversa. */
 function AgenteIa() {
@@ -629,9 +646,9 @@ function AgenteIa() {
           <input type="number" min={1} max={50} disabled={!admin} value={f.maxRespostas} onChange={(e) => setF({ ...f, maxRespostas: Math.max(1, Math.min(50, Number(e.target.value) || 1)) })} />
         </Campo>
         <div className="secao" style={{ gridColumn: '1 / -1' }}>O que ela pode fazer sozinha</div>
-        <p className="muted l4" style={{ margin: 0 }}>Vale só para quem está escrevendo: as parcelas são as do cadastro ligado àquele número. Ela não dá desconto, não muda valor nem vencimento e não fecha venda. Tudo que ela faz fica anotado na conversa.</p>
-        {([['segundaVia', 'Dizer as parcelas em aberto e mandar a 2ª via (Pix ou boleto)'], ['promessa', 'Anotar a promessa de pagamento na Cobrança'], ['estoque', 'Consultar peça, preço e se há em estoque'], ['candidatura', 'Registrar quem quer ser revendedora no recrutamento']] as const).map(([k, rotulo]) => (
-          <label key={k} className="check l4"><input type="checkbox" disabled={!admin} checked={f.ferramentas?.[k] ?? true} onChange={(e) => setF({ ...f, ferramentas: { ...f.ferramentas, [k]: e.target.checked } })} /> {rotulo}</label>
+        <p className="muted l4" style={{ margin: 0 }}>Vale só para quem está escrevendo: as parcelas são as do cadastro ligado àquele número. Desconto e parcelamento só dentro das regras de Cobrança › Configurar; quem tem processo judicial ativo vai direto para a equipe. Ela não muda valor nem vencimento e não fecha venda. Tudo que ela faz fica anotado na conversa.</p>
+        {([['segundaVia', 'Dizer as parcelas em aberto com o valor atualizado e mandar a 2ª via ou um Pix novo (vencida sai com multa e juros)'], ['promessa', 'Anotar a promessa de pagamento na Cobrança'], ['comprovante', 'Receber o comprovante: conferir valor, data e nome e deixar para a equipe dar baixa (Cobrança › Comprovantes)'], ['acordo', 'Propor acordo dentro das regras da Cobrança (à vista com o desconto máximo do cobrador, ou parcelado até o máximo de parcelas)'], ['fecharAcordo', 'Fechar sozinha o acordo que a pessoa aceitou (desligado: anota a proposta e passa para a equipe fechar)'], ['estoque', 'Consultar peça, preço e se há em estoque'], ['candidatura', 'Registrar quem quer ser revendedora no recrutamento']] as const).map(([k, rotulo]) => (
+          <label key={k} className="check l4"><input type="checkbox" disabled={!admin || (k === 'fecharAcordo' && !f.ferramentas?.acordo)} checked={f.ferramentas?.[k] ?? k !== 'fecharAcordo'} onChange={(e) => setF({ ...f, ferramentas: { ...f.ferramentas, [k]: e.target.checked } })} /> {rotulo}</label>
         ))}
         <Campo rotulo="Promessa: até quantos dias à frente" className="l2" ajuda="Prazo maior que isso ela passa para a equipe.">
           <input type="number" min={1} max={60} disabled={!admin || !f.ferramentas?.promessa} value={f.ferramentas?.promessaMaxDias ?? 10} onChange={(e) => setF({ ...f, ferramentas: { ...f.ferramentas, promessaMaxDias: Math.max(1, Math.min(60, Number(e.target.value) || 1)) } })} />
@@ -727,11 +744,12 @@ function AudioDoAgente({ f, setF, admin }: { f: ConfigAgente; setF: (c: ConfigAg
 /** Especialistas: a recepção lê a conversa e passa para o do assunto. */
 function Especialistas({ lista, admin }: { lista: Especialista[]; admin: boolean }) {
   const qc = useQueryClient();
+  const canais = usarCanais();
   const [editar, setEditar] = useState<Partial<Especialista> | null>(null);
   const atualizar = () => qc.invalidateQueries({ queryKey: ['crm', 'ia-agente'] });
   const sugeridos = useMutation({ mutationFn: () => api('/crm/ia-agentes/sugeridos', { corpo: {} }), onSuccess: atualizar });
   const salvar = useMutation({
-    mutationFn: (e: Partial<Especialista>) => api(e.id ? `/crm/ia-agentes/${e.id}` : '/crm/ia-agentes', { metodo: e.id ? 'PATCH' : 'POST', corpo: { funcao: e.funcao, nome: e.nome, quando: e.quando, instrucoes: e.instrucoes ?? '', conhecimento: e.conhecimento ?? '', ativo: e.ativo ?? true, ordem: Number(e.ordem) || 0 } }),
+    mutationFn: (e: Partial<Especialista>) => api(e.id ? `/crm/ia-agentes/${e.id}` : '/crm/ia-agentes', { metodo: e.id ? 'PATCH' : 'POST', corpo: { funcao: e.funcao, nome: e.nome, quando: e.quando, instrucoes: e.instrucoes ?? '', conhecimento: e.conhecimento ?? '', ativo: e.ativo ?? true, ordem: Number(e.ordem) || 0, canais: e.canais ?? [] } }),
     onSuccess: () => { setEditar(null); atualizar(); },
   });
   const ligar = useMutation({ mutationFn: (e: Especialista) => api(`/crm/ia-agentes/${e.id}`, { metodo: 'PATCH', corpo: { ativo: !e.ativo } }), onSuccess: atualizar });
@@ -761,7 +779,7 @@ function Especialistas({ lista, admin }: { lista: Especialista[]; admin: boolean
           <tbody>
             {lista.map((e) => (
               <tr key={e.id} style={e.ativo ? undefined : { opacity: 0.55 }}>
-                <td><b>{e.nome}</b><div className="muted" style={{ fontSize: 12 }}>{e.funcao}{e.ativo ? '' : ' · desligado'}</div></td>
+                <td><b>{e.nome}</b><div className="muted" style={{ fontSize: 12 }}>{e.funcao}{e.ativo ? '' : ' · desligado'}{e.canais?.length ? ` · só em ${e.canais.map((id) => canais.data?.find((c) => c.id === id)?.nome ?? '?').join(', ')}` : ''}</div></td>
                 <td style={{ fontSize: 13 }}>{e.quando}</td>
                 <td style={{ whiteSpace: 'nowrap' }}>
                   {admin && <button className="botao claro pequeno" onClick={() => setEditar(e)}>Editar</button>}{' '}
@@ -785,6 +803,13 @@ function Especialistas({ lista, admin }: { lista: Especialista[]; admin: boolean
               <Campo rotulo="Quando a recepção passa para ele" erro={erros.quando} className="l4" ajuda="O assunto, com exemplos. É o que a recepção lê para decidir."><textarea rows={3} maxLength={600} value={editar.quando ?? ''} onChange={(ev) => setEditar({ ...editar, quando: ev.target.value })} placeholder="Ex.: troca, defeito ou garantia de peça já comprada." /></Campo>
               <Campo rotulo="Como atender este assunto" className="l4"><textarea rows={5} maxLength={6000} value={editar.instrucoes ?? ''} onChange={(ev) => setEditar({ ...editar, instrucoes: ev.target.value })} /></Campo>
               <Campo rotulo="O que ele precisa saber deste assunto" className="l4" ajuda="Só o que é deste assunto (o conhecimento geral já vai junto)."><textarea rows={6} maxLength={20000} value={editar.conhecimento ?? ''} onChange={(ev) => setEditar({ ...editar, conhecimento: ev.target.value })} /></Campo>
+              <div className="l4">
+                <label className="muted" style={{ fontSize: 13, fontWeight: 600 }}>Atende em quais números (nenhum marcado = todos)</label>
+                <div className="flex" style={{ gap: 12, flexWrap: 'wrap', marginTop: 4 }}>
+                  {canais.data?.map((c) => <label key={c.id} className="check"><input type="checkbox" checked={(editar.canais ?? []).includes(c.id)} onChange={(ev) => setEditar({ ...editar, canais: ev.target.checked ? [...(editar.canais ?? []), c.id] : (editar.canais ?? []).filter((x) => x !== c.id) })} /> {c.nome}</label>)}
+                </div>
+                <span className="muted" style={{ fontSize: 12 }}>Se for o único especialista de um número, atende direto, sem passar pela recepção.</span>
+              </div>
               <label className="check l4"><input type="checkbox" checked={editar.ativo ?? true} onChange={(ev) => setEditar({ ...editar, ativo: ev.target.checked })} /> Ligado</label>
             </div>
             {salvar.error && <Erro erro={salvar.error} />}

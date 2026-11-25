@@ -81,3 +81,55 @@ export function textoXlsx(conteudo: Buffer) {
   });
   return saida.join('\n\n').trim();
 }
+
+/** Linhas da primeira aba de um .xlsx (todas as linhas, células como texto). */
+export function linhasXlsx(conteudo: Buffer): string[][] {
+  const z = unzipSync(new Uint8Array(conteudo), { filter: (f) => f.name === 'xl/sharedStrings.xml' || /^xl\/worksheets\/sheet\d+\.xml$/.test(f.name) });
+  const compartilhadas = z['xl/sharedStrings.xml'] ? [...strFromU8(z['xl/sharedStrings.xml']).matchAll(/<si>([\s\S]*?)<\/si>/g)].map((m) => desescapar([...m[1].matchAll(/<t[^>]*>([\s\S]*?)<\/t>/g)].map((t) => t[1]).join(''))) : [];
+  const aba = Object.keys(z).filter((n) => n.startsWith('xl/worksheets/')).sort((a, b) => Number(a.match(/\d+/)![0]) - Number(b.match(/\d+/)![0]))[0];
+  if (!aba) return [];
+  const linhas: string[][] = [];
+  for (const l of strFromU8(z[aba]).matchAll(/<row[^>]*>([\s\S]*?)<\/row>/g)) {
+    const cel: string[] = [];
+    for (const c of l[1].matchAll(/<c ([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g)) {
+      const ref = /r="([A-Z]+\d+)"/.exec(c[1])?.[1];
+      const tipo = /t="(\w+)"/.exec(c[1])?.[1];
+      const bruto = c[2] ? (/<v>([\s\S]*?)<\/v>/.exec(c[2])?.[1] ?? /<t[^>]*>([\s\S]*?)<\/t>/.exec(c[2])?.[1] ?? '') : '';
+      const col = ref ? indiceColuna(ref) : cel.length;
+      while (cel.length < col) cel.push('');
+      cel[col] = (tipo === 's' ? (compartilhadas[Number(bruto)] ?? '') : desescapar(bruto)).trim();
+    }
+    if (cel.some((x) => x !== '')) linhas.push(cel);
+  }
+  return linhas;
+}
+
+/** Linhas de um CSV (separador ";" ou ",", com aspas). */
+export function linhasCsv(texto: string): string[][] {
+  const t = texto.replace(/^﻿/, '');
+  const primeira = t.split(/\r?\n/)[0] ?? '';
+  const sep = (primeira.match(/;/g)?.length ?? 0) >= (primeira.match(/,/g)?.length ?? 0) ? ';' : ',';
+  const linhas: string[][] = [];
+  let cel = '';
+  let linha: string[] = [];
+  let aspas = false;
+  for (let i = 0; i < t.length; i++) {
+    const ch = t[i];
+    if (aspas) {
+      if (ch === '"' && t[i + 1] === '"') (cel += '"'), i++;
+      else if (ch === '"') aspas = false;
+      else cel += ch;
+    } else if (ch === '"') aspas = true;
+    else if (ch === sep) linha.push(cel.trim()), (cel = '');
+    else if (ch === '\n' || ch === '\r') {
+      if (ch === '\r' && t[i + 1] === '\n') i++;
+      linha.push(cel.trim());
+      if (linha.some((x) => x !== '')) linhas.push(linha);
+      linha = [];
+      cel = '';
+    } else cel += ch;
+  }
+  linha.push(cel.trim());
+  if (linha.some((x) => x !== '')) linhas.push(linha);
+  return linhas;
+}

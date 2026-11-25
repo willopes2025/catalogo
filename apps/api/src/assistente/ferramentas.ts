@@ -25,6 +25,7 @@ import { csv, descreverAgenda, proximaDaRotina, type Agenda } from './rotinas';
 import { CONJUNTOS, catalogoConjuntos, montarConsulta } from './dados';
 import { AgendaService, TIPOS_COMPROMISSO } from '../agenda/agenda.service';
 import { CrmService } from '../crm/crm.service';
+import { FilaEnvioService, previsaoTermino } from '../crm/fila-envio.service';
 
 /**
  * leitura: consulta, executa na hora.
@@ -38,6 +39,8 @@ export interface Contexto {
   sessaoId: string;
   /** Avança o progresso das ações em segundo plano (envio em lote). */
   progresso?: (feitos: number, total: number, falhas: number) => Promise<void>;
+  /** Ação do assistente que está executando (o envio em lote mostra o andamento no cartão dela). */
+  acaoId?: string;
   /** Execução automática de uma rotina (ninguém acompanhando): e-mails para os endereços autorizados saem sem confirmação. */
   rotina?: { id: string; emails: string[]; aprovacao?: string };
   /** Quem está falando pode ligar a aprovação automática (regra da empresa em Assistente › Configurar). */
@@ -76,6 +79,16 @@ const diasEntre = (de: string, ate: string) => Math.round((Date.parse(`${ate}T12
 /** Dívida: a receber, em aberto ou protestado, que não é de cartão. */
 const ehDivida = () => and(eq(titulos.tipo, 'receber'), inArray(titulos.status, ['aberto', 'protestado']), sql`coalesce(${titulos.formaPagamento}, '') not in ('debito', 'credito')`);
 
+const hora = (d: Date) => d.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo', weekday: 'short', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+const NOMES_DIAS = ['dom', 'seg', 'ter', 'qua', 'qui', 'sex', 'sáb'];
+const minutos = (s: number) => (s % 60 ? `${(s / 60).toFixed(1).replace('.', ',')}` : String(s / 60));
+/** Frase do ritmo do envio em massa do número, com a previsão de término. */
+export function ritmoDoNumero(c: { envioIntervaloMinS: number; envioIntervaloMaxS: number; envioInicio: string; envioFim: string; envioDias: number[]; proximoEnvioEm?: Date | null }, quantas: number) {
+  const fim = previsaoTermino(c, quantas, c.proximoEnvioEm ?? null);
+  const dias = c.envioDias.length === 7 ? 'todos os dias' : c.envioDias.map((d) => NOMES_DIAS[d]).join(', ');
+  return `Sai uma mensagem a cada ${minutos(c.envioIntervaloMinS)} a ${minutos(c.envioIntervaloMaxS)} min, das ${c.envioInicio} às ${c.envioFim} (${dias}).${fim ? ` Previsão de término: ${hora(fim)}.` : ''}`;
+}
+
 /** Variáveis que o envio em lote preenche sozinho em cada mensagem. */
 export const VARIAVEIS_LOTE = ['nome', 'primeiro_nome', 'valor_em_aberto', 'valor_atualizado', 'maior_atraso', 'parcelas_vencidas', 'empresa'] as const;
 
@@ -98,6 +111,7 @@ export class FerramentasAssistente {
     private readonly arquivos: ArquivosService,
     private readonly agenda: AgendaService,
     private readonly crm: CrmService,
+    private readonly fila: FilaEnvioService,
   ) {
     this.lista = [
       this.consultarInadimplentes(),
@@ -807,7 +821,7 @@ export class FerramentasAssistente {
     return {
       nome: 'enviar_whatsapp_em_lote',
       descricao:
-        'Envia a mesma mensagem (com as variáveis preenchidas por pessoa) para várias pessoas pelo WhatsApp. O envio roda em segundo plano, espaçado para o número não ser bloqueado, e mostra o progresso na tela. Ex.: cobrança de inadimplentes, aviso de acerto, campanha para revendedoras.',
+        'Envia a mesma mensagem (com as variáveis preenchidas por pessoa) para várias pessoas pelo WhatsApp. Entra na fila de envio do número: sai uma mensagem por vez, com o intervalo e o horário configurados no número (para não ser bloqueado); dá para pausar, retomar e cancelar na tela. Ex.: cobrança de inadimplentes, aviso de acerto, campanha para revendedoras.',
       schema: this.loteSchema,
       risco: 'confirmar',
       segundoPlano: true,
@@ -818,10 +832,8 @@ export class FerramentasAssistente {
           e.canalId = l.canal.id;
           const validos = l.itens.filter((i) => !i.problema).length;
           if (!validos) return { resumo: '', impedimento: 'Nenhuma das pessoas tem telefone válido (ou estão fora da carteira de quem pediu).' };
-          const intervalo = this.intervaloLote();
-          const minutos = Math.max(1, Math.round((validos * intervalo) / 60));
           return {
-            resumo: `Enviar para ${validos} pessoa(s) pelo número "${l.canal.nome}"${l.tpl ? ` com o template "${l.tpl.nome}"` : ''}. Uma mensagem a cada ~${intervalo}s: leva cerca de ${minutos} min.${l.itens.length - validos ? ` ${l.itens.length - validos} ficam de fora (veja o motivo na lista).` : ''}${l.faltando ? ` ${l.faltando} id(s) não encontrado(s).` : ''}`,
+            resumo: `Enviar para ${validos} pessoa(s) pelo número "${l.canal.nome}"${l.tpl ? ` com o template "${l.tpl.nome}"` : ''}. ${ritmoDoNumero(l.canal, validos)}${l.itens.length - validos ? ` ${l.itens.length - validos} ficam de fora (veja o motivo na lista).` : ''}${l.faltando ? ` ${l.faltando} id(s) não encontrado(s).` : ''}`,
             previa: l.itens,
           };
         } catch (err) {
@@ -831,31 +843,20 @@ export class FerramentasAssistente {
       executar: async (e, ctx) => {
         const l = await this.montarLote(e, ctx);
         const validos = l.itens.filter((i) => !i.problema);
-        const intervalo = this.intervaloLote();
-        const falhas: { nome: string; erro: string }[] = l.itens.filter((i) => i.problema).map((i) => ({ nome: i.nome, erro: i.problema! }));
-        let enviados = 0;
-        await ctx.progresso?.(0, validos.length, 0);
-        for (const [n, i] of validos.entries()) {
-          if (n > 0) await new Promise((r) => setTimeout(r, Math.round(intervalo * 1000 * (0.75 + Math.random() * 0.5))));
-          try {
-            await this.canais.enviarParaTelefone({ canalId: l.canal.id, telefone: i.telefone!, nome: i.nome, texto: i.texto, templateId: l.tpl?.id ?? null });
-            enviados++;
-            if (e.registrarNaCobranca !== false && l.dividas.has(i.pessoaId)) await this.cobranca.registrarContato(await this.cobranca.escopo(ctx.usuario), ctx.usuario, i.pessoaId, { tipo: 'whatsapp', texto: `Mensagem enviada pelo assistente:\n${i.texto}` }).catch(() => undefined);
-          } catch (err) {
-            falhas.push({ nome: i.nome, erro: (err as Error).message.slice(0, 200) });
-          }
-          await ctx.progresso?.(n + 1, validos.length, falhas.length - (l.itens.length - validos.length));
-        }
-        await this.auditoria.registrar({ usuarioId: ctx.usuario.id, acao: 'assistente_whatsapp_lote', entidade: 'crm_canal', entidadeId: l.canal.id, dados: { enviados, falhas: falhas.length } });
-        return { enviados, naoEnviados: falhas.length, falhas };
+        if (!validos.length) throw new BadRequestException('Nenhuma das pessoas tem telefone válido.');
+        const lote = await this.fila.criarLote({
+          canalId: l.canal.id,
+          origem: 'assistente',
+          titulo: `Envio pelo assistente (${validos.length} pessoa(s))`,
+          criadoPor: ctx.usuario.id,
+          acaoId: ctx.acaoId ?? null,
+          itens: validos.map((i) => ({ pessoaId: i.pessoaId, nome: i.nome, telefone: i.telefone!, texto: i.texto, templateId: l.tpl?.id ?? null, dados: { registrarCobranca: e.registrarNaCobranca !== false && l.dividas.has(i.pessoaId), usuarioId: ctx.usuario.id } })),
+        });
+        await this.auditoria.registrar({ usuarioId: ctx.usuario.id, acao: 'assistente_whatsapp_lote', entidade: 'envio_lote', entidadeId: lote.id, dados: { canalId: l.canal.id, pessoas: validos.length } });
+        const foraDaLista = l.itens.filter((i) => i.problema).map((i) => ({ nome: i.nome, erro: i.problema! }));
+        return { fila: lote.id, naFila: validos.length, ritmo: ritmoDoNumero(l.canal, validos.length), foraDaLista };
       },
     };
-  }
-
-  /** Segundos entre uma mensagem e outra no envio em lote. */
-  intervaloLote() {
-    const n = Number(this.segredos.v('ASSISTENTE_INTERVALO_LOTE_S') ?? 20);
-    return Number.isFinite(n) ? Math.min(300, Math.max(3, n)) : 20;
   }
 
   private emitirSegundaVia(): Ferramenta {

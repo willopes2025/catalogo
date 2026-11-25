@@ -337,6 +337,8 @@ test('Assertiva sem credenciais avisa em vez de falhar', async () => {
 // ───────────── Semana 3 ─────────────
 
 const SIM = 'http://localhost:3199';
+/** Envio em massa a qualquer hora, com 1 segundo entre as mensagens (o mínimo do teste). */
+const LIBERADO = { envioIntervaloMinS: 1, envioIntervaloMaxS: 1, envioInicio: '00:00', envioFim: '24:00', envioDias: [0, 1, 2, 3, 4, 5, 6] };
 const recebidos = async () => (await fetch(SIM + '/__recebidos')).json();
 
 test('empresas com CNPJ para as notas', async () => {
@@ -1940,12 +1942,12 @@ test('multiagentes: recepção pergunta e escolhe o especialista, troca quando o
 
   // Especialistas sugeridos; não duplica se pedir de novo.
   const lista = await ok('POST', '/crm/ia-agentes/sugeridos');
-  assert.deepEqual(lista.map((a) => a.funcao), ['vendas', 'recrutamento', 'revendedora']);
-  assert.equal((await ok('POST', '/crm/ia-agentes/sugeridos')).length, 3);
+  assert.deepEqual(lista.map((a) => [a.funcao, a.ativo]), [['vendas', true], ['recrutamento', true], ['revendedora', true], ['cobranca', false]], 'o de Cobrança já vem criado, desligado (sem número do Financeiro)');
+  assert.equal((await ok('POST', '/crm/ia-agentes/sugeridos')).length, 4);
   assert.equal((await chamar('POST', '/crm/ia-agentes', { funcao: 'vendas', nome: 'Outro', quando: 'Duplicado de propósito' })).status, 400);
   assert.equal((await chamar('POST', '/crm/ia-agentes', { funcao: 'Pós Venda', nome: 'Pós', quando: 'Chave com espaço e maiúscula' })).status, 400);
   const pos = await ok('POST', '/crm/ia-agentes', { funcao: 'posvenda', nome: 'Pós-venda', quando: 'Troca, defeito ou garantia de peça comprada.', ativo: false });
-  assert.equal((await ok('GET', '/crm/ia-agente')).especialistas.length, 4);
+  assert.equal((await ok('GET', '/crm/ia-agente')).especialistas.length, 5);
   await ok('PUT', '/crm/ia-agente', { ativo: true, canais: [c.id], instrucoes: '', conhecimento: 'Vendemos semijoias.', maxRespostas: 8, nome: 'Ari', maxTransferencias: 2 });
 
   // 1) Só "oi": a recepção pergunta (com o modelo barato).
@@ -1989,9 +1991,9 @@ test('multiagentes: recepção pergunta e escolhe o especialista, troca quando o
 
   await ok('PATCH', `/crm/ia-agentes/${pos.id}`, { ativo: true, quando: 'Troca, defeito ou garantia de peça já comprada.' });
   await ok('DELETE', `/crm/ia-agentes/${pos.id}`);
-  assert.equal((await ok('GET', '/crm/ia-agente')).especialistas.length, 3);
+  assert.equal((await ok('GET', '/crm/ia-agente')).especialistas.length, 4);
   await ok('PUT', '/crm/ia-agente', { ativo: false, canais: [], instrucoes: '', conhecimento: '', maxRespostas: 10 });
-  for (const a of lista) await ok('DELETE', `/crm/ia-agentes/${a.id}`);
+  for (const a of lista.filter((x) => x.funcao !== 'cobranca')) await ok('DELETE', `/crm/ia-agentes/${a.id}`);
   await ok('DELETE', `/crm/canais/${c.id}`);
 });
 
@@ -2802,7 +2804,7 @@ test('cobrança: carteira, terceirizada vê só a dela, contato e promessa, 2ª 
   };
   const emp = (await ok('GET', '/empresas'))[0];
   const cfg0 = await ok('GET', '/cobranca/config');
-  assert.equal(cfg0.regua.passos.length, 5, 'régua padrão: 3 dias antes, no dia, 3, 10 e 30 depois');
+  assert.deepEqual(cfg0.regua.passos.map((p) => [p.dias, p.acao]), [[1, 'mensagem'], [15, 'mensagem'], [30, 'mensagem'], [60, 'tarefa'], [90, 'tarefa']], 'trilha padrão: lembrete, 2º aviso, acordo, tarefa do Financeiro e decisão da gestão');
   await ok('PUT', '/cobranca/config', { ...cfg0, multaPb: 200, jurosMesPb: 100, diasCarencia: 0, descontoMaxPb: 1000, descontoMaxGestorPb: 5000, parcelasMax: 6, regua: { ...cfg0.regua, ativa: false } });
   assert.equal((await chamar('PUT', '/cobranca/config', { ...cfg0, multaPb: 5000 })).status, 400, 'multa acima de 10% é recusada');
   const endereco = { cep: '29101010', logradouro: 'Avenida Champagnat', numero: '100', bairro: 'Centro', cidade: 'Vila Velha', uf: 'ES' };
@@ -2898,23 +2900,30 @@ test('cobrança: carteira, terceirizada vê só a dela, contato e promessa, 2ª 
   assert.equal(volta.acordos[0].status, 'cancelado');
   assert.equal((await ok('GET', `/cobranca/acordos/${ac.acordo.id}`)).parcelas.filter((p) => p.status === 'cancelado').length, 2);
 
-  // Régua: prévia junta por pessoa e preenche o texto; envio pelo WhatsApp, uma vez só por passo.
+  // Trilha: prévia junta por pessoa e preenche o texto; a mensagem entra na fila do número, uma vez só por etapa.
   const canal = await ok('POST', '/crm/canais', { nome: 'Cobrança', tipo: 'evolution', config: { servidor: `${SIM}/evofora`, instancia: 'loja-centro', token: 'token-da-instancia-fora' } });
+  // Hoje fora dos dias de envio do número: a fila espera (o teste olha o que entrou nela).
+  await ok('PATCH', `/crm/canais/${canal.id}`, { envioDias: [(new Date(Date.now() - 3 * 3600_000).getUTCDay() + 1) % 7] });
   const passos = [{ dias: 5, canal: 'whatsapp', texto: 'Oi {primeiro_nome}, a parcela de {valor} venceu há {dias} dias. Hoje fica {valor_atualizado}. {link}' }];
-  assert.equal((await chamar('PUT', '/cobranca/config', { ...cfg0, regua: { ativa: true, canalId: null, passos } })).status, 400, 'régua por WhatsApp sem número');
+  assert.equal((await chamar('PUT', '/cobranca/config', { ...cfg0, regua: { ativa: true, canalId: null, passos } })).status, 400, 'trilha por WhatsApp sem número');
+  assert.equal((await chamar('PUT', '/cobranca/config', { ...cfg0, regua: { ativa: true, canalId: canal.id, passos: [...passos, { dias: 60, acao: 'tarefa', texto: 'Ligar para {nome}' }] } })).status, 400, 'tarefa sem quem recebe');
   await ok('PUT', '/cobranca/config', { ...cfg0, multaPb: 200, jurosMesPb: 100, diasCarencia: 0, regua: { ativa: true, canalId: canal.id, passos } });
   const previa = (await ok('GET', '/cobranca/regua/previa')).previa.find((p) => p.pessoaId === b.id);
   assert.equal(previa.texto.split(' Hoje')[0], 'Oi Bruna, a parcela de R$ 100,00 venceu há 5 dias.');
   assert.match(previa.texto, /R\$ 102,17/);
   await ok('POST', `/cobranca/devedores/${a.id}/pausar`, { pausada: true, motivo: 'Em negociação' });
   const r1 = await ok('POST', '/cobranca/regua/rodar');
-  assert.ok(r1.enviados >= 1);
-  const msg = (await recebidos()).filter((r) => r.caminho === '/evofora/message/sendText/loja-centro').pop();
-  assert.match(JSON.stringify(msg.corpo), /Oi Bruna/);
-  assert.match(JSON.stringify(msg.corpo), /asaas\.com/, 'o boleto foi emitido antes e foi junto');
+  assert.ok(r1.naFila >= 1);
+  assert.equal(r1.foraDaTrilha['cobrança pausada'], 1, 'a Ana (pausada) ficou fora');
+  const loteR = (await ok('GET', '/envios?status=andamento')).find((l) => l.origem === 'trilha' && l.canalId === canal.id);
+  const itemB = (await ok('GET', `/envios/${loteR.id}`)).itens.find((i) => i.pessoaId === b.id);
+  assert.match(itemB.texto, /^Oi Bruna/);
+  assert.match(itemB.texto, /asaas\.com/, 'o boleto foi emitido antes e vai junto');
   const r2 = await ok('POST', '/cobranca/regua/rodar');
-  assert.ok(!r2.previa.some((p) => p.pessoaId === b.id), 'não manda o mesmo passo duas vezes');
-  assert.ok((await ok('GET', `/cobranca/devedores/${b.id}`)).contatos.some((c) => c.tipo === 'regua'));
+  assert.ok(!r2.previa.some((p) => p.pessoaId === b.id), 'não põe a mesma etapa duas vezes');
+  // Cancelado o envio, a etapa fica livre para sair numa próxima rodada.
+  await ok('POST', `/envios/${loteR.id}/cancelar`);
+  assert.ok((await ok('GET', '/cobranca/regua/previa')).previa.some((p) => p.pessoaId === b.id));
   await ok('PUT', '/cobranca/config', { ...cfg0, multaPb: 200, jurosMesPb: 100, diasCarencia: 0, regua: { ...cfg0.regua, ativa: false } });
   ctx.cobranca = { a, b, tb, terc };
 });
@@ -3017,6 +3026,8 @@ test('Assistente: consulta inadimplentes, prepara envio em lote, confirma por vo
   // Um número por QR code ativo para enviar.
   const canais = await ok('GET', '/crm/canais');
   if (!canais.some((c) => c.tipo === 'qrcode' && c.ativo && !c.excluidoEm)) await ok('POST', '/crm/canais', { nome: 'QR do assistente', tipo: 'qrcode', config: { instancia: 'I1', token: 'T1', clientToken: 'CT1' } });
+  // Envio em lote sai pela fila do número: no teste, a qualquer hora e com 1 segundo entre mensagens.
+  for (const c of await ok('GET', '/crm/canais')) if (c.ativo) await ok('PATCH', `/crm/canais/${c.id}`, LIBERADO);
   const esperar = async (id, cond) => {
     for (let i = 0; i < 80; i++) {
       const s = await ok('GET', `/assistente/sessoes/${id}`);
@@ -3052,16 +3063,18 @@ test('Assistente: consulta inadimplentes, prepara envio em lote, confirma por vo
   }
   const oficialNum = nums.find((n) => n.tipo === 'oficial');
   if (oficialNum) assert.equal((await chamar('POST', `/assistente/acoes/${lote.id}/numero`, { canalId: oficialNum.id })).status, 400, 'oficial sem template não serve para texto livre');
-  const antes = (await sim()).filter((r) => r.caminho.includes('/send-text')).length;
+  // Sai pelo número que a Ária escolheu (Z-API ou Evolution).
+  const saidas = async () => (await sim()).filter((r) => r.caminho.includes('/send-text') || r.caminho.includes('/sendText/'));
+  const antes = (await saidas()).length;
   // "pode mandar" por voz vale como o botão.
   await ok('POST', `/assistente/sessoes/${s.id}/mensagens`, { texto: 'pode mandar', origem: 'voz' });
   v = await esperar(s.id, (x) => x.acoes.find((a) => a.id === lote.id).status === 'concluida' && /^Terminei/.test(x.mensagens.at(-1).texto));
   const feito = v.acoes.find((a) => a.id === lote.id);
   assert.equal(feito.resultado.enviados, 1);
   assert.deepEqual(feito.progresso, { feitos: 1, total: 1, falhas: 0 });
-  const envios = (await sim()).filter((r) => r.caminho.includes('/send-text'));
+  const envios = await saidas();
   assert.equal(envios.length, antes + 1);
-  assert.match(envios.at(-1).corpo.message, /Oi, Zuleica!/);
+  assert.match(envios.at(-1).corpo.message ?? envios.at(-1).corpo.text, /Oi, Zuleica!/);
   assert.equal((await chamar('POST', `/assistente/acoes/${lote.id}/confirmar`)).status, 409, 'confirmar de novo não envia duas vezes');
   // Conversa sobre resultados.
   await ok('POST', `/assistente/sessoes/${s.id}/mensagens`, { texto: 'como foi o mês?' });
@@ -3665,7 +3678,7 @@ test('ferramentas do agente de IA: reconhece o número, parcelas, 2ª via, prome
   await ok('POST', '/financeiro/titulos', { empresaId: emp.id, tipo: 'receber', pessoaId: dev.id, descricao: 'Parcela futura Fernanda', valor: 8000, vencimento: dia(20) });
   await ok('PUT', '/integracoes/ia', { valores: { ANTHROPIC_API_KEY: 'chave-claude-teste' } });
   const cfg = await ok('GET', '/crm/ia-agente');
-  assert.deepEqual(cfg.ferramentas, { segundaVia: true, promessa: true, promessaMaxDias: 10, estoque: true, candidatura: true });
+  assert.deepEqual(cfg.ferramentas, { segundaVia: true, promessa: true, promessaMaxDias: 10, estoque: true, candidatura: true, comprovante: true, acordo: true, fecharAcordo: false });
   const base = { ativo: true, canais: [c.id], instrucoes: '', conhecimento: 'Vendemos semijoias.', maxRespostas: 30, nome: '', maxTransferencias: 2 };
   // Sem especialistas neste teste: o agente geral atende direto.
   const ligados = cfg.especialistas.filter((e) => e.ativo);
@@ -3678,20 +3691,22 @@ test('ferramentas do agente de IA: reconhece o número, parcelas, 2ª via, prome
   await chegar('Oi, quanto eu devo?');
   await espera();
   let m = await msgs(tel);
-  assert.match(m.at(-1).texto, /Parcelas em aberto \(2, total R\$\s200,00\)/);
-  assert.match(m.at(-1).texto, /1\. Parcela vencida Fernanda .*\(VENCIDA\) · R\$\s120,00/);
+  assert.match(m.at(-1).texto, /Parcelas em aberto \(2, total hoje R\$\s20\d,\d\d\)/);
+  assert.match(m.at(-1).texto, /1\. Parcela vencida Fernanda · vence .* · R\$\s120,00 \(VENCIDA; com multa e juros hoje: R\$\s12\d,\d\d\)/);
   const sistema = (await recebidos()).filter((r) => r.caminho === '/claude/v1/messages' && String(r.corpo.system).includes('FERRAMENTAS:')).pop().corpo.system;
   assert.match(sistema, /Este número é de Fernanda Ferramenta Teste, cliente cadastrada/);
-  assert.match(sistema, /contestação de dívida, pedido de desconto ou de parcelamento/);
+  assert.match(sistema, /contestação de dívida, assunto de processo, advogado ou justiça/);
 
   // 2) 2ª via: consulta, gera a cobrança no Asaas e manda o link; a equipe vê o recado.
   await chegar('Me manda a segunda via por favor');
   await espera(1300);
   m = await msgs(tel);
   assert.match(m.at(-1).texto, /Link de pagamento da parcela 1 \(Parcela vencida Fernanda.*https:\/\/sandbox\.asaas\.com\/i\/pay_\d+/);
-  assert.ok(m.some((x) => x.direcao === 'interna' && x.texto.startsWith('🤖 A IA enviou a 2ª via de "Parcela vencida Fernanda"')));
+  assert.ok(m.some((x) => x.direcao === 'interna' && x.texto.startsWith('🤖 A IA enviou um Pix de "Parcela vencida Fernanda"')));
+  assert.match(m.at(-1).texto, /já com multa e juros/, 'vencida: cobrança nova para hoje com multa e juros');
   const cobrou = (await recebidos()).filter((r) => r.caminho === '/asaas/payments' && r.corpo?.description === 'Parcela vencida Fernanda').pop();
-  assert.deepEqual([cobrou.corpo.billingType, cobrou.corpo.value], ['PIX', 120], 'a cobrança saiu no Asaas, pelo valor do título');
+  assert.equal(cobrou.corpo.billingType, 'PIX');
+  assert.ok(cobrou.corpo.value > 120 && cobrou.corpo.value < 130, 'a cobrança saiu no Asaas com multa e juros');
 
   // 3) Promessa dentro do prazo entra na Cobrança; fora do prazo é recusada e vai para a equipe.
   await chegar(`Eu pago dia ${dia(5)}`);
@@ -3738,7 +3753,7 @@ test('ferramentas do agente de IA: reconhece o número, parcelas, 2ª via, prome
   assert.match(m.filter((x) => x.direcao === 'interna').at(-1).texto, /A IA usou ferramentas demais/);
 
   // 6) Desligadas: a IA nem fica sabendo que existem.
-  await ok('PUT', '/crm/ia-agente', { ...base, ferramentas: { segundaVia: false, promessa: false, promessaMaxDias: 10, estoque: false, candidatura: false } });
+  await ok('PUT', '/crm/ia-agente', { ...base, ferramentas: { segundaVia: false, promessa: false, promessaMaxDias: 10, estoque: false, candidatura: false, comprovante: false, acordo: false, fecharAcordo: false } });
   await chegarDe('5527988776604')('Oi, quanto eu devo?');
   await espera();
   const ultimo = (await recebidos()).filter((r) => r.caminho === '/claude/v1/messages').pop().corpo.system;
@@ -4363,4 +4378,159 @@ test('tarefa com mensagem de WhatsApp: texto automático no horário, resposta r
   assert.equal(tf.feitaEm, null, 'tarefa continua aberta');
   await ok('DELETE', `/crm/respostas/${r.id}`);
   await ok('DELETE', `/crm/canais/${c.id}`);
+});
+
+test('cobrança pelo WhatsApp: fila com intervalo e horário do número, trilha automática e agente de cobrança no Financeiro', async () => {
+  await ok('PUT', '/integracoes/ia', { valores: { ANTHROPIC_API_KEY: 'chave-claude-teste' } });
+  const agora = () => new Date(Date.now() - 3 * 3600_000);
+  const dia = (n) => new Date(agora().getTime() + n * 86400_000).toISOString().slice(0, 10);
+  const cpf = (base) => {
+    const d = String(base).padStart(9, '0').split('').map(Number);
+    for (const n of [10, 11]) d.push(((d.reduce((s, x, i) => s + x * (n - i), 0) * 10) % 11) % 10);
+    return d.join('');
+  };
+  const esperar = async (cond, ms = 60_000, oque = 'a condição') => {
+    for (const fim = Date.now() + ms; Date.now() < fim; await new Promise((r) => setTimeout(r, 250))) {
+      const v = await cond();
+      if (v) return v;
+    }
+    assert.fail(`não aconteceu a tempo: ${oque}`);
+  };
+  const eu = await ok('GET', '/auth/eu');
+  const emp = (await ok('GET', '/empresas'))[0];
+
+  // Número Financeiro: intervalo e horário próprios; hoje fica fora dos dias permitidos.
+  const fin = await ok('POST', '/crm/canais', { nome: 'Financeiro', tipo: 'evolution', config: { servidor: `${SIM}/evofora`, instancia: 'loja-centro', token: 'token-da-instancia-fora' } });
+  assert.deepEqual([fin.envioIntervaloMinS, fin.envioIntervaloMaxS, fin.envioInicio, fin.envioFim], [180, 360, '08:00', '18:00'], 'padrão: 3 a 6 minutos, das 8h às 18h');
+  assert.equal((await chamar('PATCH', `/crm/canais/${fin.id}`, { envioIntervaloMinS: 5, envioIntervaloMaxS: 2 })).status, 400, 'máximo menor que o mínimo');
+  assert.equal((await chamar('PATCH', `/crm/canais/${fin.id}`, { envioInicio: '18:00', envioFim: '08:00' })).status, 400, 'horário invertido');
+  const amanha = (agora().getUTCDay() + 1) % 7;
+  await ok('PATCH', `/crm/canais/${fin.id}`, { ...LIBERADO, envioIntervaloMinS: 1, envioIntervaloMaxS: 2, envioDias: [amanha] });
+
+  // Devedores: 15 dias, 15 dias com processo ativo, 20 dias que paga antes de a mensagem sair, 65 dias (vira tarefa).
+  const devedor = async (nome, n, dias) => {
+    const p = await ok('POST', '/pessoas', { tipo: 'cliente', nome, documento: cpf(700000000 + n), telefone1: `2799333${String(n).padStart(4, '0')}` });
+    const [t] = await ok('POST', '/financeiro/titulos', { empresaId: emp.id, tipo: 'receber', pessoaId: p.id, descricao: `Parcela de ${nome.split(' ')[0]}`, valor: 10000, vencimento: dia(-dias), formaPagamento: 'boleto' });
+    return { p, t, fone: `552799333${String(n).padStart(4, '0')}` };
+  };
+  const quinze = await devedor('Quinze Silva Trilha', 15, 15);
+  const proc = await devedor('Processo Souza Trilha', 16, 15);
+  const paga = await devedor('Paga Lima Trilha', 20, 20);
+  const sessenta = await devedor('Sessenta Rocha Trilha', 65, 65);
+  await ok('POST', `/cobranca/devedores/${proc.p.id}/processos`, { numero: '5001234-55.2026.8.08.0035', situacao: 'ativo' });
+  assert.equal((await ok('GET', `/cobranca/devedores/${proc.p.id}`)).processos[0].situacao, 'ativo');
+
+  const cfg0 = await ok('GET', '/cobranca/config');
+  const passos = cfg0.regua.passos.map((p) => (p.acao === 'tarefa' ? { ...p, responsavelId: eu.id } : p));
+  await ok('PUT', '/cobranca/config', { ...cfg0, regua: { ativa: true, canalId: fin.id, passos } });
+  const r = await ok('POST', '/cobranca/regua/rodar');
+  assert.ok(r.foraDaTrilha['tem processo judicial ativo'] >= 1, 'quem tem processo ativo fica fora');
+  assert.ok(r.tarefas >= 1);
+  const tarefas = await ok('GET', '/mesa/tarefas');
+  assert.ok(tarefas.some((t) => t.titulo === 'Cobrança: Sessenta Rocha Trilha (Contato do Financeiro)'), 'etapa de 60 dias virou tarefa');
+  const lote = (await ok('GET', '/envios?status=andamento')).find((l) => l.origem === 'trilha' && l.canalId === fin.id);
+  assert.equal(lote.agoraNoHorario, false);
+  assert.ok(new Date(lote.previsaoFim) > new Date(), 'previsão de término no próximo dia permitido');
+  let det = await ok('GET', `/envios/${lote.id}`);
+  const doItem = (pessoa) => det.itens.find((i) => i.pessoaId === pessoa.p.id);
+  assert.match(doItem(quinze).texto, /^Olá, Quinze\. Ainda não identificamos o pagamento de R\$\s?100,00/, 'etapa de 15 dias: segundo aviso');
+  assert.equal(doItem(proc), undefined, 'o do processo não entrou na fila');
+  await new Promise((r2) => setTimeout(r2, 800));
+  assert.equal((await ok('GET', `/envios/${lote.id}`)).enviados, 0, 'fora do dia permitido, nada sai');
+
+  // Paga antes de a mensagem sair: sai da trilha (a mensagem é pulada).
+  await ok('POST', `/financeiro/titulos/${paga.t.id}/baixar`, {});
+  // Pausado, nada sai mesmo dentro do horário; retomado, as mensagens saem uma a uma.
+  const pausado = await ok('POST', `/envios/${lote.id}/pausar`);
+  assert.equal(pausado.status, 'pausado');
+  await ok('PATCH', `/crm/canais/${fin.id}`, { envioDias: [0, 1, 2, 3, 4, 5, 6] });
+  await new Promise((r2) => setTimeout(r2, 2000));
+  assert.equal((await ok('GET', `/envios/${lote.id}`)).enviados, 0, 'pausado não manda');
+  assert.equal((await ok('POST', `/envios/${lote.id}/retomar`)).status, 'ativo');
+  det = await esperar(async () => {
+    const x = await ok('GET', `/envios/${lote.id}`);
+    return ['enviado', 'falhou'].includes(x.itens.find((i) => i.pessoaId === quinze.p.id)?.status) && x.itens.find((i) => i.pessoaId === paga.p.id)?.status === 'pulado' ? x : null;
+  }, 120_000, 'a mensagem do devedor de 15 dias sair');
+  assert.equal(doItem(quinze).status, 'enviado');
+  assert.match(doItem(paga).erro, /pagou/);
+  const saidas = (await recebidos()).filter((x) => x.caminho === '/evofora/message/sendText/loja-centro' && JSON.stringify(x.corpo).includes(quinze.fone));
+  assert.match(JSON.stringify(saidas.at(-1).corpo), /Ainda não identificamos/);
+  // Uma por vez, com o intervalo do número.
+  const horas = det.itens.filter((i) => i.status === 'enviado').map((i) => Date.parse(i.enviadoEm)).sort((x, y) => x - y);
+  for (let i = 1; i < horas.length; i++) assert.ok(horas[i] - horas[i - 1] >= 900, `intervalo de ${horas[i] - horas[i - 1]} ms entre mensagens`);
+  const fichaQ = await ok('GET', `/cobranca/devedores/${quinze.p.id}`);
+  assert.ok(fichaQ.contatos.some((c) => c.tipo === 'regua' && c.texto.startsWith('Trilha de cobrança (Segundo aviso), por WhatsApp')), 'registrado no histórico de cobrança');
+  assert.equal((await ok('GET', `/cobranca/devedores/${proc.p.id}`)).trilha.fora, 'tem processo judicial ativo');
+  if ((await ok('GET', `/envios/${lote.id}`)).status === 'ativo') await ok('POST', `/envios/${lote.id}/cancelar`);
+  assert.equal((await chamar('POST', `/envios/${lote.id}/pausar`)).status, 400, 'envio terminado não pausa');
+  await ok('PUT', '/cobranca/config', { ...cfg0, regua: { ...cfg0.regua, ativa: false } });
+
+  // Planilha da advogada: acha pelo CPF, cria e atualiza; quem não tem cadastro volta na lista.
+  const csv = `Devedor;CPF;Nº do processo;Situação\nSessenta Rocha Trilha;${cpf(700000065)};0009999-11.2026.8.08.0035;Em andamento\nProcesso Souza Trilha;${cpf(700000016)};5001234-55.2026.8.08.0035;Arquivado\nNinguém;000.000.000-00;123;ativo\n`;
+  const sim1 = await ok('POST', '/cobranca/processos/importar', { nome: 'advogada.csv', base64: Buffer.from(csv).toString('base64'), simular: true });
+  assert.deepEqual([sim1.linhas, sim1.ativos, sim1.arquivados, sim1.naoEncontrados.length], [3, 1, 1, 1]);
+  assert.equal((await ok('GET', `/cobranca/devedores/${sessenta.p.id}`)).processos.length, 0, 'conferir não grava');
+  const imp = await ok('POST', '/cobranca/processos/importar', { nome: 'advogada.csv', base64: Buffer.from(csv).toString('base64') });
+  assert.deepEqual([imp.criados, imp.atualizados], [1, 1]);
+  assert.equal((await ok('GET', `/cobranca/devedores/${proc.p.id}`)).trilha.fora, null, 'processo arquivado: volta para a trilha');
+  assert.equal((await ok('GET', `/cobranca/devedores/${sessenta.p.id}`)).trilha.fora, 'tem processo judicial ativo');
+
+  // Agente: atende só no Financeiro, com o especialista de Cobrança.
+  const cfgA = await ok('GET', '/crm/ia-agente');
+  const esp = cfgA.especialistas.find((e) => e.funcao === 'cobranca');
+  assert.ok(esp, 'o especialista de Cobrança vem pronto');
+  await ok('PATCH', `/crm/ia-agentes/${esp.id}`, { ativo: true, canais: [fin.id] });
+  const { voz, ligada, especialistas, ...semExtras } = cfgA;
+  await ok('PUT', '/crm/ia-agente', { ...semExtras, ativo: true, canais: [fin.id], maxRespostas: 20, respostaAudio: 'nunca', ferramentas: { ...cfgA.ferramentas, segundaVia: true, promessa: true, comprovante: true, acordo: true, fecharAcordo: false } });
+  const hook = new URL((await ok('GET', '/crm/canais')).find((c) => c.id === fin.id).webhook).pathname;
+  let n = 0;
+  const escrever = async (fone, nome, texto) => {
+    await fetch(API.replace(/\/api$/, '') + hook, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ event: 'messages.upsert', instance: 'loja-centro', data: { key: { remoteJid: `${fone}@s.whatsapp.net`, fromMe: false, id: `COB${Date.now()}${++n}` }, pushName: nome, message: { conversation: texto }, messageTimestamp: Math.floor(Date.now() / 1000) } }) });
+  };
+  const respostaPara = async (fone, depoisDe, re) =>
+    esperar(async () => (await recebidos()).filter((x) => x.caminho === '/evofora/message/sendText/loja-centro' && JSON.stringify(x.corpo).includes(fone)).slice(depoisDe).find((x) => re.test(JSON.stringify(x.corpo))), 20_000, `resposta ${re}`);
+  const enviadosPara = async (fone) => (await recebidos()).filter((x) => x.caminho === '/evofora/message/sendText/loja-centro' && JSON.stringify(x.corpo).includes(fone)).length;
+
+  // Pede o Pix: recebe o link com o valor atualizado.
+  let base = await enviadosPara(quinze.fone);
+  await escrever(quinze.fone, 'Quinze', 'Oi, vi a mensagem. Quero pagar, me manda o pix');
+  const pix = await respostaPara(quinze.fone, base, /Link de pagamento/);
+  assert.match(JSON.stringify(pix.corpo), /já com multa e juros/);
+  assert.match(JSON.stringify(pix.corpo), /asaas/);
+  // Promete pagar: fica registrado na ficha.
+  base = await enviadosPara(quinze.fone);
+  await escrever(quinze.fone, 'Quinze', `Vou deixar pago dia ${dia(3)}`);
+  await respostaPara(quinze.fone, base, /Promessa anotada/);
+  const fichaP = await ok('GET', `/cobranca/devedores/${quinze.p.id}`);
+  assert.ok(fichaP.contatos.some((c) => c.promessaStatus === 'aberta' && c.promessaData === dia(3)), 'promessa na ficha');
+  // Manda o comprovante: a IA confere e deixa para a equipe dar baixa.
+  const atual = fichaP.titulos[0].atualizado;
+  base = await enviadosPara(quinze.fone);
+  await escrever(quinze.fone, 'Quinze', `segue o comprovante de ${(atual / 100).toFixed(2).replace('.', ',')} pago por Quinze Silva em ${dia(0)}`);
+  await respostaPara(quinze.fone, base, /Comprovante registrado e conferido/);
+  const comp = (await ok('GET', '/cobranca/comprovantes')).find((c) => c.pessoaId === quinze.p.id);
+  assert.deepEqual([comp.valor, comp.conferencia.valor, comp.conferencia.data, comp.conferencia.nome, comp.status], [atual, true, true, true, 'pendente']);
+  assert.equal(comp.titulos[0].id, quinze.t.id);
+  await ok('POST', `/cobranca/comprovantes/${comp.id}/resolver`, { status: 'baixado' });
+  assert.equal((await ok('GET', '/cobranca/comprovantes?status=baixado')).find((c) => c.id === comp.id).status, 'baixado');
+  // Pede para parcelar: proposta dentro das regras; aceitou: fica anotado e vai para a equipe fechar.
+  base = await enviadosPara(quinze.fone);
+  await escrever(quinze.fone, 'Quinze', 'na verdade queria parcelar em 2x');
+  await respostaPara(quinze.fone, base, /Proposta \(dentro das regras\)/);
+  base = await enviadosPara(quinze.fone);
+  await escrever(quinze.fone, 'Quinze', 'aceito');
+  await respostaPara(quinze.fone, base, /equipe vai confirmar/);
+  assert.ok((await ok('GET', `/cobranca/devedores/${quinze.p.id}`)).contatos.some((c) => /Proposta de acordo aceita/.test(c.texto)));
+  const cvQ = (await ok('GET', '/crm/conversas?aba=fila')).find((x) => x.telefone === quinze.fone);
+  assert.ok(cvQ, 'depois de aceitar, a conversa fica na fila para a equipe');
+
+  // Quem tem processo ativo: a IA não cobra e passa para a equipe.
+  base = await enviadosPara(sessenta.fone);
+  await escrever(sessenta.fone, 'Sessenta', 'me manda o pix por favor');
+  await respostaPara(sessenta.fone, base, /equipe/);
+  assert.ok(!(await recebidos()).some((x) => JSON.stringify(x.corpo).includes(sessenta.fone) && /Link de pagamento/.test(JSON.stringify(x.corpo))), 'sem link de pagamento para quem tem processo');
+
+  // Volta como estava.
+  await ok('PATCH', `/crm/ia-agentes/${esp.id}`, { ativo: false, canais: [] });
+  await ok('PUT', '/crm/ia-agente', semExtras);
 });

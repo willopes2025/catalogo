@@ -8,7 +8,7 @@ export interface Funil { id: string; nome: string; tipo: string; ordem: number; 
 export interface Atendente { id: string; nome: string }
 export type TipoCanal = 'oficial' | 'qrcode' | 'evolution';
 export const NOME_TIPO_CANAL: Record<TipoCanal, string> = { oficial: 'Oficial (Meta)', evolution: 'QR code (Evolution)', qrcode: 'QR code (Z-API)' };
-export interface Canal { id: string; nome: string; tipo: TipoCanal; numero: string | null; ativo: boolean; config?: Record<string, string>; webhook?: string; atendentes?: string[]; usuarioId?: string | null; funilEntradaId?: string | null; ultimoWebhookEm?: string | null }
+export interface Canal { id: string; nome: string; tipo: TipoCanal; numero: string | null; ativo: boolean; config?: Record<string, string>; webhook?: string; atendentes?: string[]; usuarioId?: string | null; funilEntradaId?: string | null; ultimoWebhookEm?: string | null; envioIntervaloMinS?: number; envioIntervaloMaxS?: number; envioInicio?: string; envioFim?: string; envioDias?: number[] }
 export interface Template { id: string; canalId: string | null; nome: string; tipo: 'meta' | 'livre'; texto: string; status: string; variaveis: string[]; categoria: string | null; idioma: string }
 export interface CampoDef { id: string; entidade: 'contato' | 'lead'; nome: string; tipo: string; opcoes: string[]; funilId: string | null; ordem: number; noQuadro?: boolean }
 

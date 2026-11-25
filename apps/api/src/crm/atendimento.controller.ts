@@ -47,6 +47,8 @@ import { AutomacaoService } from './automacao.service';
 /** Lista como array do Postgres (o sql`` do Drizzle expande arrays em vários parâmetros). */
 const arr = (xs: string[], tipo = 'uuid') => sql`array[${sql.join(xs.map((x) => sql`${x}`), sql`, `)}]::${sql.raw(tipo)}[]`;
 const gestor = (u: UsuarioLogado) => temPermissao(u.permissoes, 'crm', 'excluir');
+/** Menor espera aceita entre mensagens do envio em massa (protege o número de bloqueio). */
+const INTERVALO_MINIMO_S = Math.max(1, Number(process.env.ENVIO_INTERVALO_MINIMO_S ?? 30));
 const uuid = z.string().uuid();
 const etiquetas = z.array(z.string().trim().min(1).max(40)).max(30);
 export const TIPOS_CAMPO = ['texto', 'textao', 'numero', 'moeda', 'data', 'lista', 'multipla', 'telefone', 'email', 'url', 'sim_nao'] as const;
@@ -708,7 +710,16 @@ export class AtendimentoController {
         vozOpenai: z.enum(VOZES_OPENAI.map((v) => v.id) as [string, ...string[]]).default(atual.vozOpenai),
         audioComTexto: z.boolean().default(atual.audioComTexto),
         ferramentas: z
-          .object({ segundaVia: z.boolean(), promessa: z.boolean(), promessaMaxDias: z.number().int().min(1).max(60), estoque: z.boolean(), candidatura: z.boolean() })
+          .object({
+            segundaVia: z.boolean(),
+            promessa: z.boolean(),
+            promessaMaxDias: z.number().int().min(1).max(60),
+            estoque: z.boolean(),
+            candidatura: z.boolean(),
+            comprovante: z.boolean().default(atual.ferramentas.comprovante),
+            acordo: z.boolean().default(atual.ferramentas.acordo),
+            fecharAcordo: z.boolean().default(atual.ferramentas.fecharAcordo),
+          })
           .default(atual.ferramentas),
         memoriaClientes: z.boolean().default(atual.memoriaClientes),
       }),
@@ -746,6 +757,8 @@ export class AtendimentoController {
     conhecimento: z.string().max(20000).default(''),
     ativo: z.boolean().default(true),
     ordem: z.number().int().min(0).max(100).default(0),
+    /** Números em que atende (vazio = todos). */
+    canais: z.array(z.string().uuid()).max(50).default([]),
   });
 
   @Post('crm/ia-agentes')
@@ -1197,9 +1210,21 @@ export class AtendimentoController {
         atendentes: z.array(uuid).optional(),
         funilEntradaId: uuid.nullable().optional(),
         ativo: z.boolean().optional(),
+        // Envio em massa: intervalo sorteado entre o mínimo e o máximo (segundos) e horário permitido.
+        envioIntervaloMinS: z.number().int().min(INTERVALO_MINIMO_S, `O intervalo não pode ser menor que ${INTERVALO_MINIMO_S} segundos`).max(7200).optional(),
+        envioIntervaloMaxS: z.number().int().min(INTERVALO_MINIMO_S, `O intervalo não pode ser menor que ${INTERVALO_MINIMO_S} segundos`).max(7200, 'O intervalo máximo é de 2 horas').optional(),
+        envioInicio: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'Horário no formato HH:MM').optional(),
+        envioFim: z.string().regex(/^(([01]\d|2[0-3]):[0-5]\d|24:00)$/, 'Horário no formato HH:MM').optional(),
+        envioDias: z.array(z.number().int().min(0).max(6)).min(1, 'Marque pelo menos um dia').max(7).optional(),
       }),
       body,
     );
+    const atual = await this.canais.obter(id);
+    const min = d.envioIntervaloMinS ?? atual.envioIntervaloMinS;
+    const max = d.envioIntervaloMaxS ?? atual.envioIntervaloMaxS;
+    if (max < min) throw new BadRequestException('O intervalo máximo precisa ser maior ou igual ao mínimo.');
+    if ((d.envioFim ?? atual.envioFim) <= (d.envioInicio ?? atual.envioInicio)) throw new BadRequestException('O horário final do envio precisa ser depois do inicial.');
+    if (d.envioDias) d.envioDias = [...new Set(d.envioDias)].sort();
     const c = await this.canais.atualizar(id, d);
     await this.auditoria.registrar({ usuarioId: u.id, acao: 'editar', entidade: 'crm_canal', entidadeId: id, dados: { campos: Object.keys(d) } });
     return c;

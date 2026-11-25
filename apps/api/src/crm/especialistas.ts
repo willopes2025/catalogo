@@ -7,9 +7,28 @@ export async function duplicarEspecialista(db: Db, o: typeof iaAgentes.$inferSel
   let funcao = novo.funcao ?? `${o.funcao}_copia`.slice(0, 30);
   if (novo.funcao && existentes.has(funcao)) throw new Error(`Já existe um especialista com a chave "${funcao}".`);
   for (let n = 2; existentes.has(funcao); n++) funcao = `${o.funcao.slice(0, 22)}_copia${n}`;
-  const [a] = await db.insert(iaAgentes).values({ funcao, nome: (novo.nome ?? `${o.nome} (cópia)`).slice(0, 60), quando: o.quando, instrucoes: o.instrucoes, conhecimento: o.conhecimento, ativo: false, ordem: o.ordem + 1 }).returning();
+  const [a] = await db.insert(iaAgentes).values({ funcao, nome: (novo.nome ?? `${o.nome} (cópia)`).slice(0, 60), quando: o.quando, instrucoes: o.instrucoes, conhecimento: o.conhecimento, ativo: false, ordem: o.ordem + 1, canais: o.canais }).returning();
   return a;
 }
+
+/** Especialista de cobrança (para ligar só no número do Financeiro). */
+export const ESPECIALISTA_COBRANCA = {
+  funcao: 'cobranca',
+  nome: 'Cobrança',
+  ordem: 4,
+  quando: 'Quem responde a uma mensagem de cobrança ou fala de parcela em aberto, boleto, Pix, 2ª via, comprovante de pagamento, atraso, promessa de pagamento ou acordo.',
+  instrucoes: [
+    'Você dá continuidade à cobrança com educação e firmeza, sem ameaçar e sem constranger. O objetivo é a pessoa pagar ou combinar uma data.',
+    '1. Antes de falar de valores, use "consultar_parcelas". Diga o valor atualizado (com multa e juros) e quais parcelas estão vencidas, sem despejar tudo de uma vez.',
+    '2. Para pagar, ofereça o Pix (mais rápido) ou o boleto com "segunda_via" e mande o link do jeito que vier.',
+    '3. Se a pessoa disser quando vai pagar, registre com "registrar_promessa" e confirme a data com ela.',
+    '4. Se mandar o comprovante, leia valor, data e nome na foto e use "registrar_comprovante". Agradeça e diga que a equipe dá a baixa; nunca diga que já foi baixado.',
+    '5. Se pedir para negociar, parcelar ou desconto, use "simular_acordo" e ofereça só o que voltar. Se ela aceitar, use "aceitar_acordo".',
+    '6. Passe para a equipe quando a pessoa contestar a dívida, disser que já pagou sem comprovante, falar de processo, advogado ou justiça, ficar irritada, pedir para falar com alguém, ou pedir algo fora das regras.',
+    'Nunca fale da dívida com outra pessoa que não seja a dona do cadastro: se quem escreve disser que não é ela, peça desculpas e passe para a equipe.',
+  ].join('\n'),
+  conhecimento: '',
+};
 
 /** Especialistas sugeridos para começar (a equipe edita, desliga ou cria outros). */
 export const ESPECIALISTAS_SUGERIDOS = [
@@ -40,4 +59,5 @@ export const ESPECIALISTAS_SUGERIDOS = [
       'Trate como parceira da empresa. Use o que o sistema sabe dela (maleta, data do acerto, parcelas) para responder sem perguntar o que já se sabe. Dúvidas de como vender e de como funciona o acerto você responde; pedido de nova maleta, troca de peças, mudança de limite e qualquer valor a pagar você passa para a equipe com o motivo.',
     conhecimento: '',
   },
+  ESPECIALISTA_COBRANCA,
 ];

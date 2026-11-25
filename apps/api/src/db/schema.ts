@@ -1184,8 +1184,74 @@ export const crmCanais = pgTable('crm_canais', {
   excluidoEm: timestamp('excluido_em', { withTimezone: true }),
   /** Última vez que o WhatsApp avisou o sistema de alguma coisa por este número (para conferir se as mensagens estão chegando). */
   ultimoWebhookEm: timestamp('ultimo_webhook_em', { withTimezone: true }),
+  /** Envio em massa (lotes e trilha de cobrança): espera sorteada entre o mínimo e o máximo, em segundos, entre uma mensagem e outra. */
+  envioIntervaloMinS: integer('envio_intervalo_min_s').notNull().default(180),
+  envioIntervaloMaxS: integer('envio_intervalo_max_s').notNull().default(360),
+  /** Horário em que o envio em massa pode sair (Brasília, HH:MM) e dias da semana (0 = domingo). */
+  envioInicio: text('envio_inicio').notNull().default('08:00'),
+  envioFim: text('envio_fim').notNull().default('18:00'),
+  envioDias: jsonb('envio_dias').$type<number[]>().notNull().default([1, 2, 3, 4, 5, 6]),
+  /** Quando a próxima mensagem do envio em massa pode sair por este número. */
+  proximoEnvioEm: timestamp('proximo_envio_em', { withTimezone: true }),
   criadoEm: criadoEm(),
 });
+
+/**
+ * Envio em massa pelo WhatsApp (assistente, trilha de cobrança): as mensagens saem uma a uma, espaçadas
+ * pelo intervalo do número e só no horário permitido. Dá para pausar, retomar e cancelar.
+ */
+export const envioLotes = pgTable(
+  'envio_lotes',
+  {
+    id: id(),
+    canalId: uuid('canal_id')
+      .notNull()
+      .references(() => crmCanais.id, { onDelete: 'cascade' }),
+    /** assistente | trilha | manual */
+    origem: text('origem').notNull(),
+    titulo: text('titulo').notNull(),
+    /** ativo | pausado | cancelado | concluido */
+    status: text('status').notNull().default('ativo'),
+    total: integer('total').notNull().default(0),
+    enviados: integer('enviados').notNull().default(0),
+    falhas: integer('falhas').notNull().default(0),
+    /** Saíram da fila sem enviar (pagou, entrou em acordo, cancelado…). */
+    pulados: integer('pulados').notNull().default(0),
+    criadoPor: uuid('criado_por').references(() => usuarios.id, { onDelete: 'set null' }),
+    /** Ação do assistente que criou o lote (o cartão mostra o andamento e o aviso de fim vai na conversa). */
+    acaoId: uuid('acao_id'),
+    /** Por que parou sozinho (ex.: falhas seguidas, número desconectado). */
+    aviso: text('aviso'),
+    /** Última mensagem que saiu deste lote (os lotes do mesmo número revezam). */
+    ultimoEnvioEm: timestamp('ultimo_envio_em', { withTimezone: true }),
+    criadoEm: criadoEm(),
+    concluidoEm: timestamp('concluido_em', { withTimezone: true }),
+  },
+  (t) => ({ porStatus: index('envio_lotes_status_idx').on(t.status, t.canalId) }),
+);
+
+export const envioItens = pgTable(
+  'envio_itens',
+  {
+    id: id(),
+    loteId: uuid('lote_id')
+      .notNull()
+      .references(() => envioLotes.id, { onDelete: 'cascade' }),
+    ordem: integer('ordem').notNull(),
+    pessoaId: uuid('pessoa_id').references(() => pessoas.id, { onDelete: 'set null' }),
+    nome: text('nome').notNull(),
+    telefone: text('telefone').notNull(),
+    texto: text('texto').notNull(),
+    templateId: uuid('template_id'),
+    /** pendente | enviando | enviado | falhou | pulado | cancelado */
+    status: text('status').notNull().default('pendente'),
+    erro: text('erro'),
+    /** O que fazer ao enviar: registrar na cobrança (usuarioId), títulos e etapa da trilha. */
+    dados: jsonb('dados').$type<{ registrarCobranca?: boolean; usuarioId?: string | null; tituloIds?: string[]; passo?: number; etapa?: string }>().notNull().default({}),
+    enviadoEm: timestamp('enviado_em', { withTimezone: true }),
+  },
+  (t) => ({ fila: index('envio_itens_fila_idx').on(t.loteId, t.status, t.ordem) }),
+);
 
 export const crmConversas = pgTable(
   'crm_conversas',
@@ -1920,12 +1986,62 @@ export const cobrancaEnvios = pgTable(
     /** Dias em relação ao vencimento do passo da régua (-3, 0, 5…). */
     passo: integer('passo').notNull(),
     canal: text('canal').notNull(),
-    /** enviado | falhou | sem_contato */
+    /** na_fila | enviado | falhou | sem_contato | pulado | tarefa */
     resultado: text('resultado').notNull(),
     detalhe: text('detalhe'),
     criadoEm: criadoEm(),
   },
   (t) => ({ unico: uniqueIndex('cobranca_envios_titulo_passo_idx').on(t.tituloId, t.passo) }),
+);
+
+/** Processos judiciais de cobrança (cadastrados na ficha ou importados da planilha da advogada). Processo ativo tira a pessoa da trilha. */
+export const processosJudiciais = pgTable(
+  'processos_judiciais',
+  {
+    id: id(),
+    pessoaId: uuid('pessoa_id')
+      .notNull()
+      .references(() => pessoas.id, { onDelete: 'cascade' }),
+    numero: text('numero').notNull(),
+    /** ativo | arquivado */
+    situacao: text('situacao').notNull().default('ativo'),
+    observacao: text('observacao'),
+    /** manual | planilha */
+    origem: text('origem').notNull().default('manual'),
+    usuarioId: uuid('usuario_id').references(() => usuarios.id, { onDelete: 'set null' }),
+    criadoEm: criadoEm(),
+    atualizadoEm: timestamp('atualizado_em', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({ unico: uniqueIndex('processos_judiciais_numero_idx').on(t.pessoaId, t.numero), porPessoa: index('processos_judiciais_pessoa_idx').on(t.pessoaId, t.situacao) }),
+);
+
+/** Comprovante de pagamento recebido pelo WhatsApp: a IA confere valor, data e nome e a equipe dá a baixa. */
+export const cobrancaComprovantes = pgTable(
+  'cobranca_comprovantes',
+  {
+    id: id(),
+    pessoaId: uuid('pessoa_id')
+      .notNull()
+      .references(() => pessoas.id, { onDelete: 'cascade' }),
+    conversaId: uuid('conversa_id').references(() => crmConversas.id, { onDelete: 'set null' }),
+    /** Arquivo da foto do comprovante (mídia da conversa). */
+    midia: text('midia'),
+    /** O que a IA leu no comprovante. */
+    valor: integer('valor'),
+    data: date('data'),
+    pagador: text('pagador'),
+    /** Parcelas a que o pagamento parece se referir. */
+    tituloIds: jsonb('titulo_ids').$type<string[]>().notNull().default([]),
+    /** Conferência: o valor bate com alguma parcela/total, a data é recente e o nome bate com o cadastro. */
+    conferencia: jsonb('conferencia').$type<{ valor: boolean; data: boolean; nome: boolean; observacao?: string }>().notNull().default({ valor: false, data: false, nome: false }),
+    /** pendente | baixado | recusado */
+    status: text('status').notNull().default('pendente'),
+    resolvidoPor: uuid('resolvido_por').references(() => usuarios.id, { onDelete: 'set null' }),
+    resolvidoEm: timestamp('resolvido_em', { withTimezone: true }),
+    observacao: text('observacao'),
+    criadoEm: criadoEm(),
+  },
+  (t) => ({ porStatus: index('cobranca_comprovantes_status_idx').on(t.status, t.criadoEm) }),
 );
 
 /** Arquivos trocados com a CRA (remessa, desistência, autorização de cancelamento, confirmação, retorno). */
@@ -1997,6 +2113,8 @@ export const iaAgentes = pgTable('ia_agentes', {
   conhecimento: text('conhecimento').notNull().default(''),
   ativo: boolean('ativo').notNull().default(true),
   ordem: integer('ordem').notNull().default(0),
+  /** Números em que este especialista atende (vazio = todos). */
+  canais: jsonb('canais').$type<string[]>().notNull().default([]),
   criadoEm: criadoEm(),
   atualizadoEm: timestamp('atualizado_em', { withTimezone: true }).notNull().defaultNow(),
 });

@@ -17,10 +17,18 @@
 .cob-parcelas { font-variant-numeric: tabular-nums; }
 .cob-passo { display: grid; grid-template-columns: 120px 130px minmax(0, 1fr) auto; gap: 8px; align-items: start; padding: 10px 0; border-bottom: 1px solid var(--linha); }
 .cob-passo textarea { min-height: 76px; }
+.cob-etapa { padding: 12px 0; border-bottom: 1px solid var(--linha); }
+.cob-etapa-topo { display: grid; grid-template-columns: 120px minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr) auto; gap: 8px; align-items: start; }
+.cob-etapa textarea { min-height: 76px; }
+.cob-comprovante { display: grid; grid-template-columns: 120px minmax(0, 1fr); gap: 12px; }
+.cob-comprovante img { width: 120px; height: 120px; object-fit: cover; border-radius: 8px; border: 1px solid var(--linha); }
+.cob-sem-foto { width: 120px; height: 120px; display: grid; place-items: center; border: 1px dashed var(--linha); border-radius: 8px; }
 .cob-xml { white-space: pre-wrap; overflow-wrap: anywhere; font-family: ui-monospace, monospace; font-size: 12px; max-height: 60vh; overflow: auto; background: var(--creme); padding: 10px; border-radius: 8px; }
 @media (max-width: 1100px) {
   .cob-ficha { grid-template-columns: 1fr; }
   .cob-faixas { grid-template-columns: repeat(2, 1fr); }
   .cob-passo { grid-template-columns: 1fr 1fr; }
   .cob-passo textarea { grid-column: span 2; }
+  .cob-etapa-topo { grid-template-columns: 1fr 1fr; }
+  .cob-comprovante { grid-template-columns: 1fr; }
 }

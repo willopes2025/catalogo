@@ -5,6 +5,7 @@ import { temPermissao, type UsuarioLogado } from '../comum/auth';
 import { assistenteAcoes, assistenteAnexos, assistenteMensagens, assistenteRotinas, assistenteSessoes, configuracoes, empresas, grupos, usuarios, crmTemplates } from '../db/schema';
 import { ErroIa, IaService, TAGS_VOZ, semTagsDeVoz, type BlocoFerramenta, type MensagemFerramentas } from '../ia/ia.service';
 import { FerramentasAssistente, type Contexto } from './ferramentas';
+import { FilaEnvioService } from '../crm/fila-envio.service';
 import { descreverAgenda, proximaDaRotina } from './rotinas';
 import { readFile } from 'node:fs/promises';
 import { ArquivosService } from '../arquivos/arquivos.service';
@@ -53,12 +54,25 @@ export class AssistenteService implements OnModuleInit, OnModuleDestroy {
     private readonly ia: IaService,
     private readonly ferramentas: FerramentasAssistente,
     private readonly arquivos: ArquivosService,
+    private readonly fila: FilaEnvioService,
   ) {}
 
-  /** O servidor reiniciou: nada está mais rodando. */
+  /** O servidor reiniciou: nada está mais rodando (menos os envios em lote, que ficam na fila do banco). */
   async onModuleInit() {
     await this.db.update(assistenteSessoes).set({ ocupada: false }).where(eq(assistenteSessoes.ocupada, true)).catch(() => undefined);
-    await this.db.update(assistenteAcoes).set({ status: 'erro', erro: 'O sistema foi reiniciado no meio da execução. Confira o que já foi feito antes de repetir.', concluidaEm: new Date() }).where(eq(assistenteAcoes.status, 'executando')).catch(() => undefined);
+    await this.db.update(assistenteAcoes).set({ status: 'erro', erro: 'O sistema foi reiniciado no meio da execução. Confira o que já foi feito antes de repetir.', concluidaEm: new Date() }).where(and(eq(assistenteAcoes.status, 'executando'), sql`not coalesce(${assistenteAcoes.resultado} ? 'fila', false)`)).catch(() => undefined);
+    // Fim de um envio em lote: fecha o cartão e avisa na conversa.
+    this.fila.quandoTerminar('assistente', async (l) => {
+      if (!l.acaoId) return;
+      const [a] = await this.db.select().from(assistenteAcoes).where(eq(assistenteAcoes.id, l.acaoId));
+      if (!a) return;
+      const antes = ((a.resultado ?? {}) as { foraDaLista?: { nome: string; erro: string }[] }).foraDaLista ?? [];
+      const falhas = [...antes, ...(await this.fila.falhas(l.id)).map((f) => ({ nome: f.nome, erro: f.erro ?? (f.status === 'pulado' ? 'pulada' : 'erro') }))];
+      const resultado = { fila: l.id, enviados: l.enviados, naoEnviados: falhas.length, falhas };
+      await this.db.update(assistenteAcoes).set({ status: l.status === 'cancelado' ? 'cancelada' : 'concluida', resultado, progresso: { feitos: l.enviados + l.falhas + l.pulados, total: l.total, falhas: l.falhas }, concluidaEm: new Date() }).where(eq(assistenteAcoes.id, a.id));
+      await this.gravar(a.sessaoId, 'assistant', [{ type: 'text', text: l.status === 'cancelado' ? `Envio cancelado: ${l.enviados} mensagem(ns) já tinham saído; as outras ficaram sem enviar.` : resumoFinal(resultado) }]);
+      await this.db.update(assistenteSessoes).set({ atualizadoEm: new Date() }).where(eq(assistenteSessoes.id, a.sessaoId)).catch(() => undefined);
+    });
     // Rotinas agendadas: confere a cada minuto o que está na hora.
     if (process.env.ASSISTENTE_ROTINAS !== '0') {
       this.relogio = setInterval(() => void this.rodarDevidas().catch((e) => this.log.warn(`Rotinas: ${(e as Error).message}`)), 60_000);
@@ -591,7 +605,7 @@ export class AssistenteService implements OnModuleInit, OnModuleDestroy {
     if (!porVoz) await this.gravar(a.sessaoId, 'user', [{ type: 'text', text: `[Confirmou no botão: ${a.resumo ?? a.ferramenta}]` }], 'sistema', null);
     const ctx: Contexto = { usuario: u, sessaoId: a.sessaoId, podeAutomatico: this.podeAutomatico(u, await this.config()) };
     if (f.segundoPlano) {
-      await this.gravar(a.sessaoId, 'assistant', [{ type: 'text', text: 'Combinado, comecei. Você acompanha o andamento no cartão; quando terminar eu aviso aqui.' }]);
+      if (a.ferramenta !== 'enviar_whatsapp_em_lote') await this.gravar(a.sessaoId, 'assistant', [{ type: 'text', text: 'Combinado, comecei. Você acompanha o andamento no cartão; quando terminar eu aviso aqui.' }]);
       this.emSegundoPlano(a, f, u);
       return { ok: true, segundoPlano: true };
     }
@@ -616,6 +630,7 @@ export class AssistenteService implements OnModuleInit, OnModuleDestroy {
     const ctx: Contexto = {
       usuario: u,
       sessaoId: a.sessaoId,
+      acaoId: a.id,
       progresso: async (feitos, total, falhas) => {
         await this.db.update(assistenteAcoes).set({ progresso: { feitos, total, falhas } }).where(eq(assistenteAcoes.id, a.id));
       },
@@ -623,6 +638,13 @@ export class AssistenteService implements OnModuleInit, OnModuleDestroy {
     void (async () => {
       try {
         const r = await f.executar(a.entrada, ctx);
+        // Entrou na fila de envio: o cartão acompanha o lote e o aviso de fim vem quando a fila terminar.
+        const naFila = r && typeof r === 'object' && 'fila' in r ? (r as { fila: string; naFila: number; ritmo: string; foraDaLista: unknown[] }) : null;
+        if (naFila) {
+          await this.db.update(assistenteAcoes).set({ resultado: naFila as object, progresso: { feitos: 0, total: naFila.naFila, falhas: 0 } }).where(eq(assistenteAcoes.id, a.id));
+          await this.gravar(a.sessaoId, 'assistant', [{ type: 'text', text: `Coloquei ${naFila.naFila} mensagem(ns) na fila de envio. ${naFila.ritmo} Você acompanha, pausa ou cancela no cartão; quando terminar eu aviso aqui.` }]);
+          return;
+        }
         await this.db.update(assistenteAcoes).set({ status: 'concluida', resultado: (r ?? null) as object | null, concluidaEm: new Date() }).where(eq(assistenteAcoes.id, a.id));
         await this.gravar(a.sessaoId, 'assistant', [{ type: 'text', text: resumoFinal(r) }]);
       } catch (e) {

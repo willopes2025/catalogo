@@ -6,12 +6,22 @@ import { configuracoes } from '../db/schema';
 import { ConfiguracoesService } from '../configuracoes/configuracoes.service';
 
 export interface PassoRegua {
-  /** Dias em relação ao vencimento: negativo = antes, 0 = no dia, positivo = depois. */
+  /**
+   * A partir de quantos dias do vencimento a etapa vale: negativo = antes, 0 = no dia, positivo = depois.
+   * Vale até a etapa seguinte; cada pessoa recebe a etapa do seu maior atraso, uma vez.
+   */
   dias: number;
+  /** mensagem: manda WhatsApp ou e-mail | tarefa: vira tarefa na Mesa de quem for escolhido. */
+  acao?: 'mensagem' | 'tarefa';
+  /** Nome curto da etapa (aparece no histórico e na tela). */
+  nome?: string;
   canal: 'whatsapp' | 'email';
+  /** Mensagem (ou, na tarefa, o que a pessoa da equipe precisa fazer). */
   texto: string;
   /** No WhatsApp oficial (Meta), fora da janela de 24 h só vai com template aprovado. */
   templateId?: string | null;
+  /** Quem recebe a tarefa. */
+  responsavelId?: string | null;
 }
 
 export interface ConfigCobranca extends RegrasEncargos {
@@ -22,13 +32,37 @@ export interface ConfigCobranca extends RegrasEncargos {
   parcelasMax: number;
   /** Parcela do acordo atrasada há mais que isto: o acordo quebra e a dívida original volta. */
   diasQuebraAcordo: number;
-  regua: { ativa: boolean; canalId: string | null; passos: PassoRegua[] };
+  /** Trilha de cobrança (versao 2: cada pessoa segue as etapas pelo maior atraso). */
+  regua: { ativa: boolean; canalId: string | null; passos: PassoRegua[]; versao?: number };
   protesto: { diasMinimos: number; especie: string };
 }
 
-const TEXTO_ANTES = 'Olá, {primeiro_nome}! Passando para lembrar que a parcela de {valor} da Aritana vence em {vencimento}.\n{link}\nSe já pagou, desconsidere.';
-const TEXTO_DIA = 'Olá, {primeiro_nome}! Hoje vence a parcela de {valor} da Aritana.\n{link}\nQualquer dúvida, é só responder esta mensagem.';
-const TEXTO_DEPOIS = 'Olá, {primeiro_nome}. Não identificamos o pagamento de {valor}, que venceu em {vencimento} ({dias} dias). Com multa e juros, hoje fica em {valor_atualizado}.\n{link}\nSe precisar negociar, responda aqui que a gente ajuda.';
+/** Etapas sugeridas da trilha (a equipe edita os dias e os textos). */
+export const ETAPAS_PADRAO: PassoRegua[] = [
+  {
+    dias: 1,
+    acao: 'mensagem',
+    nome: 'Lembrete',
+    canal: 'whatsapp',
+    texto: 'Oi, {primeiro_nome}! Tudo bem? Passando para lembrar que a parcela de {valor} da {empresa} venceu em {vencimento}. Segue o link para pagar por boleto ou Pix:\n{link}\nSe já pagou, pode desconsiderar.',
+  },
+  {
+    dias: 15,
+    acao: 'mensagem',
+    nome: 'Segundo aviso',
+    canal: 'whatsapp',
+    texto: 'Olá, {primeiro_nome}. Ainda não identificamos o pagamento de {valor}, vencido em {vencimento} ({dias} dias). Com multa e juros, hoje fica em {valor_atualizado}.\nSe quiser, mandamos a 2ª via do boleto ou um Pix novo com o valor atualizado: é só responder esta mensagem.',
+  },
+  {
+    dias: 30,
+    acao: 'mensagem',
+    nome: 'Proposta de acordo',
+    canal: 'whatsapp',
+    texto: 'Olá, {primeiro_nome}. Sua pendência com a {empresa} está em {valor_atualizado} ({dias} dias de atraso). Queremos te ajudar a regularizar: dá para parcelar em até {parcelas_max}x ou pagar à vista com desconto, por {valor_com_desconto}. Responda esta mensagem que a gente monta o acordo com você.',
+  },
+  { dias: 60, acao: 'tarefa', nome: 'Contato do Financeiro', canal: 'whatsapp', texto: 'Entrar em contato com {nome}: {dias} dias de atraso, {valor_atualizado} atualizado. Telefone: {telefone}.', responsavelId: null },
+  { dias: 90, acao: 'tarefa', nome: 'Decisão da gestão', canal: 'whatsapp', texto: 'Decidir se a dívida de {nome} ({dias} dias de atraso, {valor_atualizado} atualizado) vai para a advogada.', responsavelId: null },
+];
 
 /** Configuração da cobrança (guardada em configuracoes.cobranca). */
 @Injectable()
@@ -46,17 +80,7 @@ export class CobrancaConfigService {
       descontoMaxGestorPb: 5000,
       parcelasMax: 12,
       diasQuebraAcordo: 15,
-      regua: {
-        ativa: false,
-        canalId: null,
-        passos: [
-          { dias: -3, canal: 'whatsapp', texto: TEXTO_ANTES },
-          { dias: 0, canal: 'whatsapp', texto: TEXTO_DIA },
-          { dias: 3, canal: 'whatsapp', texto: TEXTO_DEPOIS },
-          { dias: 10, canal: 'whatsapp', texto: TEXTO_DEPOIS },
-          { dias: 30, canal: 'whatsapp', texto: TEXTO_DEPOIS },
-        ],
-      },
+      regua: { ativa: false, canalId: null, passos: ETAPAS_PADRAO, versao: 2 },
       protesto: { diasMinimos: 30, especie: 'DMI' },
     };
   }
@@ -65,10 +89,16 @@ export class CobrancaConfigService {
     const [c] = await this.db.select().from(configuracoes).where(eq(configuracoes.chave, 'cobranca'));
     const p = await this.padrao();
     const v = (c?.valor ?? {}) as Partial<ConfigCobranca>;
-    return { ...p, ...v, regua: { ...p.regua, ...(v.regua ?? {}) }, protesto: { ...p.protesto, ...(v.protesto ?? {}) } };
+    const regua = { ...p.regua, ...(v.regua ?? {}) };
+    // Régua antiga (por dia exato) que nunca foi ligada: começa com as etapas da trilha.
+    if (v.regua && v.regua.versao !== 2 && !v.regua.ativa) regua.passos = ETAPAS_PADRAO;
+    regua.passos = regua.passos.map((x) => ({ ...x, acao: x.acao ?? 'mensagem' }));
+    regua.versao = 2;
+    return { ...p, ...v, regua, protesto: { ...p.protesto, ...(v.protesto ?? {}) } };
   }
 
   async salvar(d: ConfigCobranca) {
+    d.regua.versao = 2;
     await this.db.insert(configuracoes).values({ chave: 'cobranca', valor: d }).onConflictDoUpdate({ target: configuracoes.chave, set: { valor: d, atualizadoEm: new Date() } });
     return d;
   }

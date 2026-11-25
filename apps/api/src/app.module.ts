@@ -74,6 +74,8 @@ import { MetaService } from './marketing/meta.service';
 import { PontosService } from './pontos/pontos.service';
 import { JueriController } from './jueri/jueri.controller';
 import { AtendimentoController } from './crm/atendimento.controller';
+import { EnviosController } from './crm/envios.controller';
+import { FilaEnvioService } from './crm/fila-envio.service';
 import { CrmService } from './crm/crm.service';
 import { CanaisService } from './crm/canais.service';
 import { HistoricoWhatsappService } from './crm/historico.service';
@@ -111,6 +113,7 @@ if (!segredo || (process.env.NODE_ENV === 'production' && segredo.length < 32)) 
     SaudeController,
     JueriController,
     AtendimentoController,
+    EnviosController,
     ArquivosController,
     AuthController,
     PessoasController,
@@ -168,6 +171,7 @@ if (!segredo || (process.env.NODE_ENV === 'production' && segredo.length < 32)) 
     CanaisService,
     HistoricoWhatsappService,
     TarefasMensagemService,
+    FilaEnvioService,
     TranscricaoService,
     FerramentasAgenteService,
     AprendizadoService,

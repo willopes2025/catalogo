@@ -18,7 +18,7 @@ export function Devedor() {
   const q = useQuery({ queryKey: ['cobranca', 'ficha', pessoaId], queryFn: () => api<any>(`/cobranca/devedores/${pessoaId}`) });
   const [marcados, setMarcados] = useState<string[]>([]);
   const [modal, setModal] = useState<null | { tipo: 'via'; titulo: any } | { tipo: 'acordo' } | { tipo: 'protesto' } | { tipo: 'cancelar'; acordo: any }>(null);
-  const pausar = useMutation({ mutationFn: (pausada: boolean) => api(`/cobranca/devedores/${pessoaId}/pausar`, { corpo: { pausada, motivo: pausada ? window.prompt('Por que pausar a régua? (opcional)') : null } }), onSuccess: () => qc.invalidateQueries({ queryKey: ['cobranca'] }) });
+  const pausar = useMutation({ mutationFn: (pausada: boolean) => api(`/cobranca/devedores/${pessoaId}/pausar`, { corpo: { pausada, motivo: pausada ? window.prompt('Por que pausar a cobrança automática? (opcional)') : null } }), onSuccess: () => qc.invalidateQueries({ queryKey: ['cobranca'] }) });
   if (q.isLoading || eu.isLoading) return <Carregando />;
   if (q.error) return <Erro erro={q.error} />;
   const f = q.data;
@@ -36,7 +36,7 @@ export function Devedor() {
           <div className="flex">
             {p.telefone && <a className="botao claro" href={`https://wa.me/55${p.telefone.replace(/\D/g, '')}`} target="_blank" rel="noreferrer">WhatsApp</a>}
             {p.telefone && <a className="botao claro" href={`tel:${p.telefone.replace(/\D/g, '')}`}>Ligar</a>}
-            <button className="botao claro" disabled={pausar.isPending} onClick={() => pausar.mutate(!f.carteira.pausada)}>{f.carteira.pausada ? 'Retomar a régua' : 'Pausar a régua'}</button>
+            <button className="botao claro" disabled={pausar.isPending} onClick={() => pausar.mutate(!f.carteira.pausada)}>{f.carteira.pausada ? 'Retomar a cobrança automática' : 'Pausar a cobrança automática'}</button>
           </div>
         }
       />
@@ -45,9 +45,10 @@ export function Devedor() {
           <Indicador tipo="atencao" rotulo="Vencido com encargos" valor={reais(f.resumo.atualizado)} detalhe={`${f.resumo.vencidos} título(s) · ${reais(f.resumo.original)} sem multa e juros`} />
           <Indicador rotulo="Maior atraso" valor={`${f.resumo.maiorAtraso} dias`} detalhe={`Multa ${pct(f.regras.multaPb)} + juros ${pct(f.regras.jurosMesPb)} ao mês`} />
           <Indicador rotulo="A vencer" valor={reais(f.resumo.aVencer)} />
-          <Indicador rotulo="Carteira" valor={f.carteira.cobrador ?? 'Sem cobrador'} detalhe={f.carteira.pausada ? `Régua pausada${f.carteira.motivoPausa ? `: ${f.carteira.motivoPausa}` : ''}` : f.carteira.desde ? `Desde ${dataHora(f.carteira.desde)}` : undefined} />
+          <Indicador rotulo="Carteira" valor={f.carteira.cobrador ?? 'Sem cobrador'} detalhe={f.carteira.pausada ? `Cobrança automática pausada${f.carteira.motivoPausa ? `: ${f.carteira.motivoPausa}` : ''}` : f.carteira.desde ? `Desde ${dataHora(f.carteira.desde)}` : undefined} />
         </div>
         {pausar.error && <Erro erro={pausar.error} />}
+        {f.trilha?.ligada && f.trilha.fora && <div className="aviso">Fora da trilha de cobrança automática: {f.trilha.fora}. A IA do WhatsApp {f.trilha.fora.includes('processo') ? 'também não fala de cobrança com esta pessoa' : 'continua atendendo se ela escrever'}.</div>}
         <div className="cob-ficha">
           <div className="coluna">
             <div className="cartao">
@@ -118,12 +119,24 @@ export function Devedor() {
 
           <div className="coluna">
             <NovoContato pessoaId={pessoaId!} />
+            <Processos pessoaId={pessoaId!} lista={f.processos ?? []} />
+            {f.comprovantes?.length > 0 && (
+              <div className="cartao">
+                <h3 style={{ marginTop: 0 }}>Comprovantes recebidos</h3>
+                {f.comprovantes.map((c: any) => (
+                  <div key={c.id} style={{ fontSize: 13, padding: '4px 0', borderBottom: '1px solid var(--linha)' }}>
+                    {dataHora(c.criadoEm)} · {c.valor ? reais(c.valor) : 'valor não lido'}{c.data ? ` em ${data(c.data)}` : ''} · <span className={`etiqueta ${c.status === 'baixado' ? 'ok' : c.status === 'recusado' ? 'neutra' : 'alerta'}`}>{c.status === 'pendente' ? 'Para conferir' : c.status === 'baixado' ? 'Baixado' : 'Recusado'}</span>
+                  </div>
+                ))}
+                <Link to="/cobranca?aba=comprovantes" style={{ fontSize: 13 }}>Ver em Comprovantes</Link>
+              </div>
+            )}
             <div className="cartao">
               <h3 style={{ marginTop: 0 }}>Histórico</h3>
               <div className="cob-linha-tempo">
                 {f.contatos.map((c: any) => (
                   <div key={c.id} className={`cob-evento ${c.tipo === 'sistema' ? 'sistema' : c.tipo === 'regua' ? 'regua' : c.promessaData ? 'promessa' : ''}`}>
-                    <div className="quem">{dataHora(c.criadoEm)} · {c.tipo === 'sistema' ? 'Sistema' : c.tipo === 'regua' ? 'Régua' : (TIPOS_CONTATO.find((x) => x[0] === c.tipo)?.[1] ?? c.tipo)}{c.usuario ? ` · ${c.usuario}` : ''}{c.cobrador ? ` (${c.cobrador})` : ''}</div>
+                    <div className="quem">{dataHora(c.criadoEm)} · {c.tipo === 'sistema' ? 'Sistema' : c.tipo === 'regua' ? 'Trilha' : (TIPOS_CONTATO.find((x) => x[0] === c.tipo)?.[1] ?? c.tipo)}{c.usuario ? ` · ${c.usuario}` : ''}{c.cobrador ? ` (${c.cobrador})` : ''}</div>
                     {c.texto}
                     {c.promessaData && <div><span className={`etiqueta ${c.promessaStatus === 'cumprida' ? 'ok' : c.promessaStatus === 'quebrada' ? 'erro' : c.promessaStatus === 'aberta' ? 'alerta' : 'neutra'}`}>Promessa {c.promessaStatus}</span> para {data(c.promessaData)}{c.promessaValor ? `, ${reais(c.promessaValor)}` : ''}</div>}
                     {c.retornoEm && <div className="quem">Retornar em {data(c.retornoEm)}</div>}
@@ -328,6 +341,48 @@ function CancelarAcordo({ acordo, fechar }: { acordo: any; fechar: () => void })
           <button className="botao claro" onClick={fechar}>Voltar</button>
         </div>
       </div>
+    </div>
+  );
+}
+
+/** Processos judiciais da pessoa: ativo tira da trilha automática e da cobrança pela IA. */
+function Processos({ pessoaId, lista }: { pessoaId: string; lista: any[] }) {
+  const qc = useQueryClient();
+  const [novo, setNovo] = useState<{ numero: string; situacao: 'ativo' | 'arquivado'; observacao: string } | null>(null);
+  const salvar = useMutation({ mutationFn: (d: { numero: string; situacao: string; observacao?: string | null }) => api(`/cobranca/devedores/${pessoaId}/processos`, { corpo: d }), onSuccess: () => { setNovo(null); qc.invalidateQueries({ queryKey: ['cobranca'] }); } });
+  const excluir = useMutation({ mutationFn: (id: string) => api(`/cobranca/processos/${id}/excluir`, { corpo: {} }), onSuccess: () => qc.invalidateQueries({ queryKey: ['cobranca'] }) });
+  const erros = camposComErro(salvar.error);
+  return (
+    <div className="cartao">
+      <div className="flex" style={{ justifyContent: 'space-between' }}>
+        <h3 style={{ margin: 0 }}>Processo judicial</h3>
+        {!novo && <button className="botao claro pequeno" onClick={() => setNovo({ numero: '', situacao: 'ativo', observacao: '' })}>+ Processo</button>}
+      </div>
+      {lista.map((x) => (
+        <div key={x.id} className="flex" style={{ justifyContent: 'space-between', flexWrap: 'wrap', padding: '6px 0', borderBottom: '1px solid var(--linha)', fontSize: 13 }}>
+          <div>
+            <b>{x.numero}</b> <span className={`etiqueta ${x.situacao === 'ativo' ? 'erro' : 'neutra'}`}>{x.situacao === 'ativo' ? 'Ativo' : 'Arquivado'}</span>
+            <div className="muted">{x.origem === 'planilha' ? 'Planilha da advogada' : 'Cadastrado'}{x.usuario ? ` por ${x.usuario}` : ''} · {dataHora(x.atualizadoEm)}{x.observacao ? ` · ${x.observacao}` : ''}</div>
+          </div>
+          <div className="flex" style={{ gap: 4 }}>
+            <button className="botao claro pequeno" disabled={salvar.isPending} onClick={() => salvar.mutate({ numero: x.numero, situacao: x.situacao === 'ativo' ? 'arquivado' : 'ativo', observacao: x.observacao })}>{x.situacao === 'ativo' ? 'Arquivar' : 'Reativar'}</button>
+            <button className="botao perigo pequeno" disabled={excluir.isPending} onClick={() => window.confirm(`Tirar o processo ${x.numero} do cadastro?`) && excluir.mutate(x.id)}>Tirar</button>
+          </div>
+        </div>
+      ))}
+      {!lista.length && !novo && <p className="muted" style={{ fontSize: 13, margin: '6px 0 0' }}>Nenhum processo. Com processo ativo, a pessoa sai da trilha automática e a IA não cobra.</p>}
+      {novo && (
+        <div className="form" style={{ marginTop: 8 }}>
+          <Campo rotulo="Número do processo" erro={erros.numero} className="l2"><input value={novo.numero} onChange={(e) => setNovo({ ...novo, numero: e.target.value })} placeholder="0000000-00.0000.0.00.0000" /></Campo>
+          <Campo rotulo="Situação" className="l2"><select value={novo.situacao} onChange={(e) => setNovo({ ...novo, situacao: e.target.value as 'ativo' | 'arquivado' })}><option value="ativo">Ativo</option><option value="arquivado">Arquivado</option></select></Campo>
+          <Campo rotulo="Observação (opcional)" className="l4"><input maxLength={500} value={novo.observacao} onChange={(e) => setNovo({ ...novo, observacao: e.target.value })} /></Campo>
+          <div className="flex l4">
+            <button className="botao pequeno" disabled={salvar.isPending || !novo.numero.trim()} onClick={() => salvar.mutate({ numero: novo.numero, situacao: novo.situacao, observacao: novo.observacao || null })}>Salvar</button>
+            <button className="botao claro pequeno" onClick={() => setNovo(null)}>Voltar</button>
+          </div>
+        </div>
+      )}
+      {(salvar.error || excluir.error) && <Erro erro={salvar.error ?? excluir.error} />}
     </div>
   );
 }

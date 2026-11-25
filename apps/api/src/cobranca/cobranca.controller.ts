@@ -1,4 +1,7 @@
-import { BadRequestException, Body, Controller, Get, Inject, NotFoundException, Param, ParseUUIDPipe, Patch, Post, Put, Query } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, Inject, NotFoundException, Param, ParseUUIDPipe, Patch, Post, Put, Query, Res } from '@nestjs/common';
+import { existsSync } from 'node:fs';
+import type { Response } from 'express';
+import { ArquivosService } from '../arquivos/arquivos.service';
 import { randomBytes } from 'node:crypto';
 import bcrypt from 'bcryptjs';
 import { and, asc, eq, sql } from 'drizzle-orm';
@@ -7,10 +10,11 @@ import { Permissao, Usuario, type UsuarioLogado } from '../comum/auth';
 import { DB, type Db } from '../comum/db.module';
 import { dataISO, validar } from '../comum/validacao';
 import { AuditoriaService } from '../comum/auditoria.service';
-import { cobradores, grupos, usuarios } from '../db/schema';
+import { cobradores, cobrancaComprovantes, grupos, usuarios } from '../db/schema';
 import { CobrancaConfigService } from './cobranca-config.service';
 import { CobrancaService } from './cobranca.service';
 import { CraService, NOMES_OCORRENCIA } from './cra.service';
+import { linhasCsv, linhasXlsx } from '../assistente/anexos';
 
 const uuid = z.string().uuid();
 const pb = z.number().int().min(0).max(10000);
@@ -25,6 +29,7 @@ export class CobrancaController {
     private readonly config: CobrancaConfigService,
     private readonly cra: CraService,
     private readonly auditoria: AuditoriaService,
+    private readonly arquivosSvc: ArquivosService,
   ) {}
 
   @Get('eu')
@@ -149,8 +154,65 @@ export class CobrancaController {
   async rodar(@Usuario() u: UsuarioLogado) {
     this.cobranca.exigirGestor(await this.cobranca.escopo(u));
     const r = await this.cobranca.rodarRegua(false);
-    await this.auditoria.registrar({ usuarioId: u.id, acao: 'rodar_regua', entidade: 'cobranca', dados: { enviados: r.enviados, falhas: r.falhas } });
-    return { enviados: r.enviados, falhas: r.falhas, previa: r.previa };
+    await this.auditoria.registrar({ usuarioId: u.id, acao: 'rodar_regua', entidade: 'cobranca', dados: { naFila: r.naFila, tarefas: r.tarefas, enviados: r.enviados, falhas: r.falhas } });
+    return r;
+  }
+
+  // ───── Processos judiciais ─────
+
+  @Post('devedores/:pessoaId/processos')
+  @Permissao('cobranca', 'editar')
+  async salvarProcesso(@Usuario() u: UsuarioLogado, @Param('pessoaId', ParseUUIDPipe) pessoaId: string, @Body() body: unknown) {
+    const d = validar(z.object({ numero: z.string().trim().min(3, 'Digite o número do processo').max(60), situacao: z.enum(['ativo', 'arquivado']), observacao: z.string().trim().max(500).nullable().optional() }), body);
+    return this.cobranca.salvarProcesso(await this.cobranca.escopo(u), u, pessoaId, d);
+  }
+
+  @Post('processos/:id/excluir')
+  @Permissao('cobranca', 'editar')
+  async excluirProcesso(@Usuario() u: UsuarioLogado, @Param('id', ParseUUIDPipe) id: string) {
+    return this.cobranca.excluirProcesso(await this.cobranca.escopo(u), u, id);
+  }
+
+  /** Planilha da advogada (.xlsx ou .csv): `simular` mostra o que vai acontecer sem gravar. */
+  @Post('processos/importar')
+  @Permissao('cobranca', 'excluir')
+  async importarProcessos(@Usuario() u: UsuarioLogado, @Body() body: unknown) {
+    this.cobranca.exigirGestor(await this.cobranca.escopo(u));
+    const d = validar(z.object({ nome: z.string().max(200), base64: z.string().min(4).max(14_000_000), simular: z.boolean().default(false) }), body);
+    const conteudo = Buffer.from(d.base64, 'base64');
+    const linhas = /\.xlsx$/i.test(d.nome) ? linhasXlsx(conteudo) : /\.(csv|txt)$/i.test(d.nome) ? linhasCsv(conteudo.toString('utf8')) : null;
+    if (!linhas) throw new BadRequestException('Mande a planilha em .xlsx ou .csv.');
+    const r = await this.cobranca.importarProcessos(u, linhas, d.simular);
+    if (!d.simular) await this.auditoria.registrar({ usuarioId: u.id, acao: 'importar_processos', entidade: 'cobranca', dados: { arquivo: d.nome, criados: r.criados, atualizados: r.atualizados, naoEncontrados: r.naoEncontrados.length } });
+    return r;
+  }
+
+  // ───── Comprovantes recebidos pelo WhatsApp ─────
+
+  @Get('comprovantes')
+  @Permissao('cobranca', 'ver')
+  async comprovantes(@Usuario() u: UsuarioLogado, @Query('status') status?: string) {
+    return this.cobranca.comprovantes(await this.cobranca.escopo(u), status || 'pendente');
+  }
+
+  @Get('comprovantes/:id/foto')
+  @Permissao('cobranca', 'ver')
+  async fotoComprovante(@Usuario() u: UsuarioLogado, @Param('id', ParseUUIDPipe) id: string, @Res() res: Response) {
+    const [c] = await this.db.select().from(cobrancaComprovantes).where(eq(cobrancaComprovantes.id, id));
+    if (!c?.midia) throw new NotFoundException('Comprovante sem foto.');
+    await this.cobranca.exigirAcesso(await this.cobranca.escopo(u), c.pessoaId);
+    const caminho = this.arquivosSvc.caminhoMidia(c.midia);
+    if (!caminho || !existsSync(caminho)) throw new NotFoundException('Arquivo não encontrado.');
+    res.setHeader('Cache-Control', 'private, max-age=86400');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.sendFile(caminho);
+  }
+
+  @Post('comprovantes/:id/resolver')
+  @Permissao('cobranca', 'editar')
+  async resolverComprovante(@Usuario() u: UsuarioLogado, @Param('id', ParseUUIDPipe) id: string, @Body() body: unknown) {
+    const d = validar(z.object({ status: z.enum(['baixado', 'recusado']), observacao: z.string().trim().max(500).nullable().optional() }), body);
+    return this.cobranca.resolverComprovante(await this.cobranca.escopo(u), u, id, d);
   }
 
   /** Rotinas do dia na hora (acordos, promessas). */
@@ -185,15 +247,28 @@ export class CobrancaController {
         regua: z.object({
           ativa: z.boolean(),
           canalId: uuid.nullable(),
-          passos: z.array(z.object({ dias: z.number().int().min(-30).max(365), canal: z.enum(['whatsapp', 'email']), texto: z.string().trim().min(5).max(2000), templateId: uuid.nullable().optional() })).max(15),
+          passos: z
+            .array(
+              z.object({
+                dias: z.number().int().min(-30).max(365),
+                acao: z.enum(['mensagem', 'tarefa']).default('mensagem'),
+                nome: z.string().trim().max(60).optional(),
+                canal: z.enum(['whatsapp', 'email']).default('whatsapp'),
+                texto: z.string().trim().min(5, 'Escreva o texto de cada etapa').max(2000),
+                templateId: uuid.nullable().optional(),
+                responsavelId: uuid.nullable().optional(),
+              }),
+            )
+            .max(15),
         }),
         protesto: z.object({ diasMinimos: z.number().int().min(1).max(3650), especie: z.string().trim().toUpperCase().regex(/^[A-Z]{2,3}$/, 'A espécie tem 2 ou 3 letras (ex.: DMI)') }),
       }),
       body,
     );
     const dias = d.regua.passos.map((p) => p.dias);
-    if (new Set(dias).size !== dias.length) throw new BadRequestException('Dois passos da régua no mesmo dia: junte numa mensagem só.');
-    if (d.regua.ativa && d.regua.passos.some((p) => p.canal === 'whatsapp') && !d.regua.canalId) throw new BadRequestException('Escolha o número de WhatsApp que manda a régua.');
+    if (new Set(dias).size !== dias.length) throw new BadRequestException('Duas etapas da trilha no mesmo dia: junte numa só.');
+    if (d.regua.ativa && d.regua.passos.some((p) => p.acao === 'mensagem' && p.canal === 'whatsapp') && !d.regua.canalId) throw new BadRequestException('Escolha o número de WhatsApp que manda a trilha.');
+    if (d.regua.ativa && d.regua.passos.some((p) => p.acao === 'tarefa' && !p.responsavelId)) throw new BadRequestException('Escolha quem recebe a tarefa em cada etapa de tarefa.');
     d.regua.passos.sort((a, b) => a.dias - b.dias);
     await this.config.salvar(d);
     await this.auditoria.registrar({ usuarioId: u.id, acao: 'configurar', entidade: 'cobranca', dados: { multaPb: d.multaPb, jurosMesPb: d.jurosMesPb, regua: d.regua.ativa, passos: d.regua.passos.length } });

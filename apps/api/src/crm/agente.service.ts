@@ -117,6 +117,7 @@ export class AgenteService implements OnModuleInit, OnModuleDestroy {
     const nome = contato.nome && contato.nome !== contato.telefone ? contato.nome : null;
     const ferramentas = modo === 'agente' ? this.ferramentas.descricao(cfg.ferramentas, contato) : '';
     const resolvePagamento = !!ferramentas && !!contato.pessoaId && cfg.ferramentas.segundaVia;
+    const negocia = resolvePagamento && cfg.ferramentas.acordo;
     return [
       `Você atende pelo WhatsApp da ${matriz?.nome ?? 'Aritana Semijoias'}${matriz?.cidade ? `, de ${matriz.cidade}/${matriz.uf}` : ''}, uma empresa de semijoias que vende em loja e por revendedoras (maleta em consignação). Número: "${canalNome}". Agora é ${agora} (horário de Brasília).`,
       cfg.nome.trim() ? `Seu nome é ${cfg.nome.trim()}. Se precisar se apresentar, use só esse nome; não diga que é um robô especialista nem que trocou de atendente.` : '',
@@ -146,7 +147,7 @@ export class AgenteService implements OnModuleInit, OnModuleDestroy {
                 ]
               : []),
             ...(ferramentas ? [ferramentas] : []),
-            `PASSAR PARA A EQUIPE (passar = true) quando: a pessoa pedir para falar com atendente ou pessoa; reclamação, ${resolvePagamento ? 'contestação de dívida, pedido de desconto ou de parcelamento' : 'cobrança, pagamento'}, troca, defeito ou garantia; a pessoa estiver irritada; você não souber responder com o que sabe; ou for hora de fechar negócio.`,
+            `PASSAR PARA A EQUIPE (passar = true) quando: a pessoa pedir para falar com atendente ou pessoa; reclamação, ${negocia ? 'contestação de dívida, assunto de processo, advogado ou justiça, pedido de desconto ou prazo fora do que a simulação de acordo permite' : resolvePagamento ? 'contestação de dívida, assunto de processo ou justiça, pedido de desconto ou de parcelamento' : 'cobrança, pagamento'}, troca, defeito ou garantia; a pessoa estiver irritada; você não souber responder com o que sabe; ou for hora de fechar negócio.`,
             'Ao passar, escreva em "resposta" uma frase curta avisando que alguém da equipe vai continuar o atendimento.',
             `RESPONDA SOMENTE com um JSON, sem nada antes ou depois: {"resposta": "texto para enviar ao cliente", "passar": true ou false, "motivo": "se passar ou transferir, o porquê em poucas palavras, para a equipe"${agente && outros.length ? ', "transferir": "chave da outra especialidade ou null"' : ''}${ferramentas ? ', "acao": {"ferramenta": "...", ...} ou null' : ''}}`,
           ].join('\n')
@@ -173,7 +174,7 @@ export class AgenteService implements OnModuleInit, OnModuleDestroy {
       .from(titulos)
       .where(and(eq(titulos.pessoaId, contato.pessoaId), eq(titulos.tipo, 'receber'), inArray(titulos.status, ['aberto', 'protestado'])));
     if (t?.abertos) partes.push(`Tem ${t.abertos} parcela(s) em aberto${Number(t.vencido) ? `, ${reais(Number(t.vencido))} vencido` : ', nenhuma vencida'}.`);
-    partes.push('Use isto para atender melhor, sem despejar os números de uma vez. Valores e prazos exatos de pagamento são com a equipe ou pelo boleto.');
+    partes.push('Use isto para atender melhor, sem despejar os números de uma vez. Valores atualizados e links de pagamento só pelas ferramentas (se você as tiver); senão, com a equipe.');
     return partes.join(' ');
   }
 
@@ -272,8 +273,15 @@ export class AgenteService implements OnModuleInit, OnModuleDestroy {
       const [ultimaDoCliente] = await this.db.select({ tipo: crmMensagens.tipo }).from(crmMensagens).where(and(eq(crmMensagens.conversaId, conversaId), eq(crmMensagens.direcao, 'entrada'))).orderBy(desc(crmMensagens.criadoEm)).limit(1);
       const falado = !!this.ia.vozDisponivel && (cfg.respostaAudio === 'sempre' || (cfg.respostaAudio === 'espelhar' && ultimaDoCliente?.tipo === 'audio'));
       if (c.cv.iaRespostas >= Math.max(1, cfg.maxRespostas)) return this.passar(conversaId, `Chegou ao limite de ${cfg.maxRespostas} respostas seguidas.`);
-      const lista = await this.especialistas();
+      // Só os especialistas deste número (ex.: Cobrança só no Financeiro).
+      const lista = (await this.especialistas()).filter((a) => !a.canais.length || a.canais.includes(c.cv.canalId));
       let agente = lista.find((a) => a.id === c.cv.iaAgenteId) ?? null;
+      // Um especialista só neste número: ele atende direto, sem recepção.
+      if (lista.length === 1 && !agente) {
+        agente = lista[0];
+        await this.db.update(crmConversas).set({ iaAgenteId: agente.id }).where(eq(crmConversas.id, conversaId));
+        await this.nota(conversaId, `🤖 ${agente.nome} atende (único especialista deste número).`);
+      }
       // Recepção: escolhe o especialista (só quando há especialistas e ninguém foi escolhido ainda).
       if (lista.length && !agente) {
         let t: Awaited<ReturnType<AgenteService['triagem']>>;

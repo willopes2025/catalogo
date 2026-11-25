@@ -5,10 +5,11 @@ import { Funil } from './Funil';
 import { Conversas } from './Conversas';
 import { Disparos, Gatilhos, Tarefas } from './Automacoes';
 import { Configurar } from './Configurar';
+import { ListaEnvios } from './Envios';
 import { usarContadores } from './comum';
 import './crm.css';
 
-type Aba = 'funil' | 'conversas' | 'tarefas' | 'disparos' | 'gatilhos' | 'configurar';
+type Aba = 'funil' | 'conversas' | 'tarefas' | 'disparos' | 'envios' | 'gatilhos' | 'configurar';
 
 /** CRM: funis em quadro, conversas com fila de espera, tarefas, gatilhos, disparos e configuração. */
 export function CrmPagina() {
@@ -22,13 +23,14 @@ export function CrmPagina() {
     ['tarefas', 'Tarefas', c?.tarefasVencidas || undefined, true],
     ['gatilhos', 'Gatilhos'],
     ['disparos', 'Disparos'],
+    ['envios', 'Envios em lote'],
     ...(pode('crm', 'excluir') || pode('configuracoes', 'editar') ? ([['configurar', 'Configurar']] as [Aba, string][]) : []),
   ];
   return (
     <>
       <Topo
         eb="CRM"
-        titulo={{ funil: 'Funis', conversas: 'Conversas', tarefas: 'Minhas tarefas', gatilhos: 'Gatilhos', disparos: 'Disparos em massa', configurar: 'Configurar o CRM' }[aba]}
+        titulo={{ funil: 'Funis', conversas: 'Conversas', tarefas: 'Minhas tarefas', gatilhos: 'Gatilhos', disparos: 'Disparos em massa', envios: 'Envios em lote', configurar: 'Configurar o CRM' }[aba]}
         sub={c ? `${c.fila} na fila de espera · ${c.minhas} conversa(s) com você${c.tarefasVencidas ? ` · ${c.tarefasVencidas} tarefa(s) vencida(s)` : ''}${c.mencoes ? ` · ${c.mencoes} menção(ões) a você` : ''}` : undefined}
       />
       <div className="abas" role="tablist">
@@ -43,6 +45,7 @@ export function CrmPagina() {
       {aba === 'tarefas' && <Tarefas />}
       {aba === 'gatilhos' && <Gatilhos />}
       {aba === 'disparos' && <Disparos />}
+      {aba === 'envios' && <ListaEnvios />}
       {aba === 'configurar' && <Configurar />}
     </>
   );

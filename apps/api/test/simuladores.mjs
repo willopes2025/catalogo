@@ -421,14 +421,24 @@ http
         saida = JSON.stringify({ licoes: /30 dias/.test(texto) ? [{ funcao: null, quando: 'O cliente pergunta qual é o prazo de troca', resposta: 'O prazo de troca é de 30 dias, com a nota.' }, { funcao: null, quando: 'x', resposta: 'curta demais' }] : [] });
       } else if (corpo.system.includes('recepção do WhatsApp')) {
         const tudo = corpo.messages.filter((m) => m.role === 'user').flatMap(blocos).filter((b) => b.type === 'text').map((b) => b.text).join(' ');
-        const r = /atendente/i.test(texto) ? { agente: 'equipe', motivo: 'Pediu atendente' } : /revender|revendedora|trabalhar com voc/i.test(tudo) ? { agente: 'recrutamento', certeza: 0.9, motivo: 'Quer revender' } : /acerto|minha maleta/i.test(tudo) ? { agente: 'revendedora', certeza: 0.9, motivo: 'Fala da maleta' } : /preço|brinco|colar|anel|argola/i.test(tudo) ? { agente: 'vendas', certeza: 0.95, motivo: 'Quer comprar peça' } : corpo.system.includes('Você já perguntou') ? { agente: 'equipe', motivo: 'Assunto não ficou claro' } : { agente: 'perguntar', certeza: 0.2, pergunta: 'Oi! Me conta o que você está procurando? 😊', motivo: 'Só cumprimentou' };
+        const r = /atendente/i.test(texto) ? { agente: 'equipe', motivo: 'Pediu atendente' } : corpo.system.includes('"cobranca"') && /pix|pagar|parcel|comprovante|devo|boleto/i.test(tudo) ? { agente: 'cobranca', certeza: 0.95, motivo: 'Respondeu à cobrança' } : /revender|revendedora|trabalhar com voc/i.test(tudo) ? { agente: 'recrutamento', certeza: 0.9, motivo: 'Quer revender' } : /acerto|minha maleta/i.test(tudo) ? { agente: 'revendedora', certeza: 0.9, motivo: 'Fala da maleta' } : /preço|brinco|colar|anel|argola/i.test(tudo) ? { agente: 'vendas', certeza: 0.95, motivo: 'Quer comprar peça' } : corpo.system.includes('Você já perguntou') ? { agente: 'equipe', motivo: 'Assunto não ficou claro' } : { agente: 'perguntar', certeza: 0.2, pergunta: 'Oi! Me conta o que você está procurando? 😊', motivo: 'Só cumprimentou' };
         saida = JSON.stringify(r);
       } else if (corpo.system.includes('FERRAMENTAS:') && texto.startsWith('[RESULTADO DA FERRAMENTA')) {
         // Depois da ferramenta, responde ao cliente com o que ela devolveu (ou encadeia a 2ª via depois de consultar).
         const pediu = corpo.messages.filter((m) => m.role === 'user').flatMap(blocos).filter((b) => b.type === 'text').map((b) => b.text).filter((t) => !t.startsWith('[RESULTADO')).pop() ?? '';
         if (/ferramenta infinita/i.test(pediu)) saida = JSON.stringify({ resposta: '', passar: false, acao: { ferramenta: 'consultar_estoque', busca: 'argola' } });
-        else if (texto.startsWith('[RESULTADO DA FERRAMENTA consultar_parcelas') && /segunda via/i.test(pediu) && texto.includes('1. ')) saida = JSON.stringify({ resposta: '', passar: false, acao: { ferramenta: 'segunda_via', parcela: 1, forma: /boleto/i.test(pediu) ? 'boleto' : 'pix' } });
+        else if (texto.startsWith('[RESULTADO DA FERRAMENTA consultar_parcelas') && /segunda via|pix/i.test(pediu) && texto.includes('1. ')) saida = JSON.stringify({ resposta: '', passar: false, acao: { ferramenta: 'segunda_via', parcela: 1, forma: /boleto/i.test(pediu) ? 'boleto' : 'pix' } });
         else saida = JSON.stringify({ resposta: texto.split('\n').slice(1).join(' ').replace(/Agora responda ao cliente.*$/, '').trim().slice(0, 900), passar: /passe para a equipe|passe a conversa/i.test(texto) });
+      } else if (corpo.system.includes('FERRAMENTAS:') && /me manda o pix/i.test(texto)) {
+        saida = JSON.stringify({ resposta: '', passar: false, acao: { ferramenta: 'consultar_parcelas' } });
+      } else if (corpo.system.includes('FERRAMENTAS:') && /comprovante de ([\d.,]+) pago por (.+?) em (\d{4}-\d{2}-\d{2})/i.test(texto)) {
+        const mm = /comprovante de ([\d.,]+) pago por (.+?) em (\d{4}-\d{2}-\d{2})/i.exec(texto);
+        saida = JSON.stringify({ resposta: '', passar: false, acao: { ferramenta: 'registrar_comprovante', valor: Number(mm[1].replace('.', '').replace(',', '.')), pagador: mm[2], data: mm[3] } });
+      } else if (corpo.system.includes('FERRAMENTAS:') && /parcelar em (\d+)x/i.test(texto)) {
+        saida = JSON.stringify({ resposta: '', passar: false, acao: { ferramenta: 'simular_acordo', parcelas: Number(/parcelar em (\d+)x/i.exec(texto)[1]), entrada: null } });
+      } else if (corpo.system.includes('FERRAMENTAS:') && /^aceito/i.test(texto.trim())) {
+        const tudo = corpo.messages.filter((m) => m.role === 'user').flatMap(blocos).filter((b) => b.type === 'text').map((b) => b.text).join(' ');
+        saida = JSON.stringify({ resposta: '', passar: false, acao: { ferramenta: 'aceitar_acordo', parcelas: Number(/parcelar em (\d+)x/i.exec(tudo)?.[1] ?? 1), entrada: null, forma: 'pix' } });
       } else if (corpo.system.includes('FERRAMENTAS:') && /segunda via|quanto eu devo/i.test(texto)) {
         saida = JSON.stringify({ resposta: '', passar: false, acao: { ferramenta: 'consultar_parcelas' } });
       } else if (corpo.system.includes('FERRAMENTAS:') && /pago (no )?dia (\d{4}-\d{2}-\d{2})/i.test(texto)) {

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { CartaoEnvio } from './crm/Envios';
 import { api, lerSessao } from '../api';
 import { Link } from 'react-router-dom';
 import { dataHora } from '../formato';
@@ -506,7 +507,9 @@ function CartaoAcao({ a, decidir, ocupado }: { a: Acao; decidir: (confirmar: boo
           )}
         </>
       )}
-      {p && p.total > 0 && (
+      {a.resultado?.fila ? (
+        <CartaoEnvio id={a.resultado.fila} semTitulo />
+      ) : p && p.total > 0 && (
         <div className="assistente-progresso">
           <div className="barra"><div style={{ width: `${Math.round((p.feitos / p.total) * 100)}%` }} /></div>
           <small className="muted">{p.feitos} de {p.total}{p.falhas ? ` · ${p.falhas} falha(s)` : ''}</small>
@@ -855,7 +858,7 @@ function Configurar() {
       </div>
       {exemplo.erro != null && <div className="l4"><Erro erro={exemplo.erro} /></div>}
       <div className="l4">
-        <p className="muted">Ele só faz o que o usuário logado pode fazer (as mesmas permissões das telas). Mensagens, cobranças e envios em lote sempre passam pela confirmação de quem pediu. Para mudar o espaço entre mensagens do envio em lote, use a chave ASSISTENTE_INTERVALO_LOTE_S (padrão: 20 segundos).</p>
+        <p className="muted">Ele só faz o que o usuário logado pode fazer (as mesmas permissões das telas). Mensagens, cobranças e envios em lote sempre passam pela confirmação de quem pediu. O envio em lote entra na fila do número: o intervalo entre mensagens e o horário permitido ficam em CRM › Configurar › Números (Editar), e o andamento em CRM › Envios em lote.</p>
         {salvar.error && <Erro erro={salvar.error} />}
         {salvar.isSuccess && !f && <div className="aviso ok">Salvo.</div>}
         <button className="botao" disabled={salvar.isPending || !v.nome.trim()} onClick={() => salvar.mutate(v, { onSuccess: () => { setF(null); setOutra(false); } })}>Salvar</button>

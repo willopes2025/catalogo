@@ -1,10 +1,12 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { api, pode } from '../../api';
+import { api, lerSessao, pode } from '../../api';
 import { data, dataHora, documento, pct, reais, telefone } from '../../formato';
 import { Abas, Campo, Carregando, Erro, Indicador, Topo, camposComErro } from '../../componentes/ui';
 import './cobranca.css';
+import { usarEquipe } from '../Mesa';
+import { ListaEnvios } from '../crm/Envios';
 
 export type Eu = { cobradorId: string | null; restrito: boolean; gestor: boolean; cobrador: string | null; protestoLigado: boolean };
 export const useEu = () => useQuery({ queryKey: ['cobranca', 'eu'], queryFn: () => api<Eu>('/cobranca/eu'), staleTime: 60_000 });
@@ -18,7 +20,7 @@ export const STATUS_ACORDO: Record<string, [string, string]> = { ativo: ['Em dia
 const pbParaTexto = (pb: number) => String(pb / 100).replace('.', ',');
 const textoParaPb = (t: string) => Math.round(Number((t || '0').replace(',', '.')) * 100);
 
-type AbaCob = 'painel' | 'carteira' | 'acordos' | 'protestos' | 'cobradores' | 'configurar';
+type AbaCob = 'painel' | 'carteira' | 'acordos' | 'comprovantes' | 'envios' | 'protestos' | 'cobradores' | 'configurar';
 
 export function Cobranca() {
   const eu = useEu();
@@ -28,14 +30,14 @@ export function Cobranca() {
   if (eu.isLoading) return <Carregando />;
   if (eu.error) return <Erro erro={eu.error} />;
   const e = eu.data!;
-  const abas: [AbaCob, string][] = [['painel', 'Painel'], ['carteira', 'Carteira'], ['acordos', 'Acordos']];
-  if (!e.restrito) abas.push(['protestos', 'Protesto']);
+  const abas: [AbaCob, string][] = [['painel', 'Painel'], ['carteira', 'Carteira'], ['acordos', 'Acordos'], ['comprovantes', 'Comprovantes']];
+  if (!e.restrito) abas.push(['envios', 'Envios'], ['protestos', 'Protesto']);
   if (e.gestor) abas.push(['cobradores', 'Cobradores e acessos'], ['configurar', 'Configurar']);
   return (
     <>
-      <Topo eb="Cobrança" titulo={e.restrito ? `Carteira de ${e.cobrador}` : 'Cobrança'} sub={e.restrito ? 'Só os devedores que a Aritana passou para vocês' : 'Títulos vencidos, carteiras dos cobradores, acordos, régua de mensagens e protesto'} />
+      <Topo eb="Cobrança" titulo={e.restrito ? `Carteira de ${e.cobrador}` : 'Cobrança'} sub={e.restrito ? 'Só os devedores que a Aritana passou para vocês' : 'Títulos vencidos, carteiras dos cobradores, acordos, trilha de cobrança e protesto'} />
       <Abas ativa={abas.some((x) => x[0] === aba) ? aba : 'painel'} mudar={mudar} abas={abas} />
-      {aba === 'carteira' ? <Carteira eu={e} /> : aba === 'acordos' ? <Acordos /> : aba === 'protestos' && !e.restrito ? <Protestos eu={e} /> : aba === 'cobradores' && e.gestor ? <Cobradores /> : aba === 'configurar' && e.gestor ? <Configurar /> : <Painel irPara={(f) => setParams({ aba: 'carteira', faixa: f })} />}
+      {aba === 'carteira' ? <Carteira eu={e} /> : aba === 'acordos' ? <Acordos /> : aba === 'comprovantes' ? <Comprovantes /> : aba === 'envios' && !e.restrito ? <ListaEnvios /> : aba === 'protestos' && !e.restrito ? <Protestos eu={e} /> : aba === 'cobradores' && e.gestor ? <Cobradores /> : aba === 'configurar' && e.gestor ? <Configurar /> : <Painel irPara={(f) => setParams({ aba: 'carteira', faixa: f })} />}
     </>
   );
 }
@@ -464,22 +466,23 @@ function NovoAcesso({ id, tipo, nome, usuarios, fechar, criado }: { id: string; 
 
 // ───────────── Configurar ─────────────
 
-const VARIAVEIS = '{primeiro_nome} {nome} {valor} {valor_atualizado} {vencimento} {dias} {link} {pix} {titulos} {empresa}';
+const VARIAVEIS = '{primeiro_nome} {nome} {valor} {valor_atualizado} {valor_com_desconto} {desconto_maximo} {parcelas_max} {vencimento} {dias} {link} {pix} {titulos} {telefone} {etapa} {empresa}';
 
 function Configurar() {
   const qc = useQueryClient();
   const q = useQuery({ queryKey: ['cobranca', 'config'], queryFn: () => api<any>('/cobranca/config') });
   const canais = useQuery({ queryKey: ['crm', 'canais'], queryFn: () => api<any[]>('/crm/canais'), enabled: pode('crm', 'ver') });
   const [c, setC] = useState<any | null>(null);
-  const [previa, setPrevia] = useState<any[] | null>(null);
+  const [previa, setPrevia] = useState<{ lista: any[]; fora: Record<string, number> } | null>(null);
+  const equipe = usarEquipe();
   const cfg = c ?? (q.data ? { ...q.data, multa: pbParaTexto(q.data.multaPb), juros: pbParaTexto(q.data.jurosMesPb), desc: pbParaTexto(q.data.descontoMaxPb), descG: pbParaTexto(q.data.descontoMaxGestorPb) } : null);
   const canal = canais.data?.find((x) => x.id === cfg?.regua.canalId);
   const templates = useQuery({ queryKey: ['crm', 'templates', canal?.id], queryFn: () => api<any[]>(`/crm/templates?canalId=${canal!.id}`), enabled: !!canal && canal.tipo === 'oficial' });
   const salvar = useMutation({
-    mutationFn: () => api('/cobranca/config', { metodo: 'PUT', corpo: { multaPb: textoParaPb(cfg.multa), jurosMesPb: textoParaPb(cfg.juros), diasCarencia: Number(cfg.diasCarencia) || 0, descontoMaxPb: textoParaPb(cfg.desc), descontoMaxGestorPb: textoParaPb(cfg.descG), parcelasMax: Number(cfg.parcelasMax), diasQuebraAcordo: Number(cfg.diasQuebraAcordo), regua: { ativa: cfg.regua.ativa, canalId: cfg.regua.canalId || null, passos: cfg.regua.passos.map((p: any) => ({ ...p, dias: Number(p.dias), templateId: p.templateId || null })) }, protesto: { diasMinimos: Number(cfg.protesto.diasMinimos), especie: cfg.protesto.especie } } }),
+    mutationFn: () => api('/cobranca/config', { metodo: 'PUT', corpo: { multaPb: textoParaPb(cfg.multa), jurosMesPb: textoParaPb(cfg.juros), diasCarencia: Number(cfg.diasCarencia) || 0, descontoMaxPb: textoParaPb(cfg.desc), descontoMaxGestorPb: textoParaPb(cfg.descG), parcelasMax: Number(cfg.parcelasMax), diasQuebraAcordo: Number(cfg.diasQuebraAcordo), regua: { ativa: cfg.regua.ativa, canalId: cfg.regua.canalId || null, passos: cfg.regua.passos.map((p: any) => ({ dias: Number(p.dias), acao: p.acao ?? 'mensagem', nome: p.nome ?? '', canal: p.canal ?? 'whatsapp', texto: p.texto, templateId: p.templateId || null, responsavelId: p.responsavelId || null })) }, protesto: { diasMinimos: Number(cfg.protesto.diasMinimos), especie: cfg.protesto.especie } } }),
     onSuccess: () => { setC(null); qc.invalidateQueries({ queryKey: ['cobranca'] }); },
   });
-  const verPrevia = useMutation({ mutationFn: () => api<any>('/cobranca/regua/previa'), onSuccess: (r) => setPrevia(r.previa) });
+  const verPrevia = useMutation({ mutationFn: () => api<any>('/cobranca/regua/previa'), onSuccess: (r) => setPrevia({ lista: r.previa, fora: r.foraDaTrilha ?? {} }) });
   const rodar = useMutation({ mutationFn: () => api<any>('/cobranca/regua/rodar', { corpo: {} }), onSuccess: () => qc.invalidateQueries({ queryKey: ['cobranca'] }) });
   if (q.isLoading || !cfg) return <Carregando />;
   const muda = (x: any) => setC({ ...cfg, ...x });
@@ -503,50 +506,79 @@ function Configurar() {
 
       <div className="cartao">
         <div className="flex" style={{ justifyContent: 'space-between', flexWrap: 'wrap' }}>
-          <h3 style={{ margin: 0 }}>Régua de cobrança</h3>
-          <label className="check"><input type="checkbox" checked={cfg.regua.ativa} onChange={(e) => muda({ regua: { ...cfg.regua, ativa: e.target.checked } })} /> Ligada (manda todo dia depois das 9h)</label>
+          <h3 style={{ margin: 0 }}>Trilha de cobrança automática</h3>
+          <label className="check"><input type="checkbox" checked={cfg.regua.ativa} onChange={(e) => muda({ regua: { ...cfg.regua, ativa: e.target.checked } })} /> Ligada</label>
         </div>
-        <p className="muted">Cada passo manda uma mensagem quando o título fica a tantos dias do vencimento (negativo é antes). Títulos da mesma pessoa vão juntos. O boleto ou Pix é emitido antes, para o link ir na mensagem. Devedor com a régua pausada, título de cartão e título em protesto ficam de fora.</p>
+        <p className="muted">
+          Cada devedor segue sozinho pelas etapas, contando os dias desde o vencimento mais antigo em aberto. A etapa vale do dia dela até a próxima, e cada pessoa recebe cada etapa uma vez (quem já está com 40 dias, ao ligar, recebe a etapa de 30). Todo dia cedo o sistema monta a fila; as mensagens saem pelo número escolhido com o intervalo e o horário configurados nele.
+        </p>
+        <p className="muted" style={{ marginTop: 0 }}>
+          <b>Ficam fora:</b> quem tem processo judicial ativo, acordo em dia, promessa de pagamento dentro do prazo, cobrança pausada ou título em protesto. Quem paga sai na hora (a mensagem que estava na fila não sai). Títulos de cartão e dinheiro não entram.
+        </p>
         <Campo rotulo="Número de WhatsApp que manda" erro={erros['regua.canalId']}>
           <select value={cfg.regua.canalId ?? ''} onChange={(e) => muda({ regua: { ...cfg.regua, canalId: e.target.value || null } })}>
             <option value="">Escolha…</option>
             {canais.data?.filter((x) => x.ativo && !x.excluidoEm).map((x) => <option key={x.id} value={x.id}>{x.nome}{x.tipo === 'oficial' ? ' (oficial: precisa de template)' : ''}</option>)}
           </select>
         </Campo>
+        {canal && <p className="muted" style={{ fontSize: 13 }}>Pelo "{canal.nome}": uma mensagem a cada {(canal.envioIntervaloMinS ?? 180) / 60} a {(canal.envioIntervaloMaxS ?? 360) / 60} min, das {canal.envioInicio ?? '08:00'} às {canal.envioFim ?? '18:00'}. Para mudar: CRM › Configurar › Números › Editar.</p>}
         {cfg.regua.passos.map((p: any, i: number) => (
-          <div key={i} className="cob-passo">
-            <Campo rotulo="Dias do vencimento"><input type="number" value={p.dias} onChange={(e) => passo(i, { dias: e.target.value })} /></Campo>
-            <Campo rotulo="Por"><select value={p.canal} onChange={(e) => passo(i, { canal: e.target.value })}><option value="whatsapp">WhatsApp</option><option value="email">E-mail</option></select></Campo>
-            <Campo rotulo={Number(p.dias) < 0 ? `${-p.dias} dia(s) antes` : Number(p.dias) === 0 ? 'No dia do vencimento' : `${p.dias} dia(s) depois`}>
+          <div key={i} className="cob-etapa">
+            <div className="cob-etapa-topo">
+              <Campo rotulo="A partir de (dias)"><input type="number" value={p.dias} onChange={(e) => passo(i, { dias: e.target.value })} /></Campo>
+              <Campo rotulo="Nome da etapa"><input maxLength={60} value={p.nome ?? ''} placeholder="Ex.: Lembrete" onChange={(e) => passo(i, { nome: e.target.value })} /></Campo>
+              <Campo rotulo="O que acontece">
+                <select value={p.acao ?? 'mensagem'} onChange={(e) => passo(i, { acao: e.target.value })}>
+                  <option value="mensagem">Manda mensagem</option>
+                  <option value="tarefa">Vira tarefa para a equipe</option>
+                </select>
+              </Campo>
+              {(p.acao ?? 'mensagem') === 'mensagem' ? (
+                <Campo rotulo="Por"><select value={p.canal} onChange={(e) => passo(i, { canal: e.target.value })}><option value="whatsapp">WhatsApp</option><option value="email">E-mail</option></select></Campo>
+              ) : (
+                <Campo rotulo="Quem recebe a tarefa">
+                  <select value={p.responsavelId ?? ''} onChange={(e) => passo(i, { responsavelId: e.target.value || null })}>
+                    <option value="">Escolha…</option>
+                    {equipe.data?.map((u) => <option key={u.id} value={u.id}>{u.nome}</option>)}
+                  </select>
+                </Campo>
+              )}
+              <button className="botao perigo pequeno" style={{ alignSelf: 'end' }} onClick={() => muda({ regua: { ...cfg.regua, passos: cfg.regua.passos.filter((_: any, j: number) => j !== i) } })}>Tirar</button>
+            </div>
+            <Campo rotulo={`${Number(p.dias) < 0 ? `${-p.dias} dia(s) antes do vencimento` : Number(p.dias) === 0 ? 'No dia do vencimento' : `De ${p.dias} dia(s) de atraso`}${cfg.regua.passos[i + 1] ? ` até ${Number(cfg.regua.passos[i + 1].dias) - 1}` : ' em diante'} · ${(p.acao ?? 'mensagem') === 'tarefa' ? 'o que a equipe precisa fazer' : 'mensagem'}`}>
               <textarea value={p.texto} onChange={(e) => passo(i, { texto: e.target.value })} />
-              {canal?.tipo === 'oficial' && p.canal === 'whatsapp' && (
+              {canal?.tipo === 'oficial' && (p.acao ?? 'mensagem') === 'mensagem' && p.canal === 'whatsapp' && (
                 <select value={p.templateId ?? ''} onChange={(e) => passo(i, { templateId: e.target.value || null })} style={{ marginTop: 6 }}>
                   <option value="">Template aprovado pela Meta…</option>
                   {templates.data?.filter((t) => t.tipo !== 'livre').map((t) => <option key={t.id} value={t.id}>{t.nome}</option>)}
                 </select>
               )}
             </Campo>
-            <button className="botao perigo pequeno" style={{ marginTop: 22 }} onClick={() => muda({ regua: { ...cfg.regua, passos: cfg.regua.passos.filter((_: any, j: number) => j !== i) } })}>Tirar</button>
           </div>
         ))}
         <p className="muted">Pode usar: {VARIAVEIS}</p>
         <div className="flex" style={{ flexWrap: 'wrap' }}>
-          <button className="botao claro pequeno" onClick={() => muda({ regua: { ...cfg.regua, passos: [...cfg.regua.passos, { dias: 15, canal: 'whatsapp', texto: 'Olá, {primeiro_nome}. A parcela de {valor} venceu em {vencimento}. Hoje fica em {valor_atualizado}.\n{link}' }] } })}>+ Passo</button>
+          <button className="botao claro pequeno" onClick={() => muda({ regua: { ...cfg.regua, passos: [...cfg.regua.passos, { dias: 45, acao: 'mensagem', nome: '', canal: 'whatsapp', texto: 'Olá, {primeiro_nome}. A parcela de {valor} venceu em {vencimento}. Hoje fica em {valor_atualizado}.\n{link}' }] } })}>+ Etapa</button>
           <button className="botao claro pequeno" disabled={verPrevia.isPending || !!c} title={c ? 'Salve antes de ver a prévia' : undefined} onClick={() => verPrevia.mutate()}>Ver o que sai hoje</button>
-          {cfg.regua.ativa && !c && <button className="botao claro pequeno" disabled={rodar.isPending} onClick={() => window.confirm('Mandar agora as mensagens de hoje? Cada título recebe cada passo uma vez só.') && rodar.mutate()}>Mandar agora</button>}
-          {rodar.data && <span className="muted">{rodar.data.enviados} enviada(s), {rodar.data.falhas} com problema.</span>}
+          {cfg.regua.ativa && !c && <button className="botao claro pequeno" disabled={rodar.isPending} onClick={() => window.confirm('Montar agora a fila de hoje? Cada pessoa recebe cada etapa uma vez só; as mensagens saem no intervalo e horário do número.') && rodar.mutate()}>Rodar agora</button>}
+          {rodar.data && <span className="muted">{rodar.data.naFila} mensagem(ns) na fila, {rodar.data.tarefas} tarefa(s){rodar.data.enviados ? `, ${rodar.data.enviados} e-mail(s)` : ''}{rodar.data.falhas ? `, ${rodar.data.falhas} com problema` : ''}.</span>}
         </div>
         {(verPrevia.error || rodar.error) && <Erro erro={verPrevia.error ?? rodar.error} />}
         {previa && (
-          <table className="tabela" style={{ marginTop: 10 }}>
-            <thead><tr><th>Para</th><th>Passo</th><th>Mensagem</th></tr></thead>
-            <tbody>
-              {previa.map((x, i) => <tr key={i}><td><Link to={`/cobranca/devedor/${x.pessoaId}`}>{x.nome}</Link><div className="muted">{x.destino ?? '—'}</div>{x.problema && <span className="etiqueta alerta">{x.problema}</span>}</td><td>{x.passo} dia(s) · {x.canal === 'email' ? 'e-mail' : 'WhatsApp'}</td><td style={{ whiteSpace: 'pre-wrap' }}>{x.texto}</td></tr>)}
-              {!previa.length && <tr><td colSpan={3} className="vazio">Nenhuma mensagem para hoje.</td></tr>}
-            </tbody>
-          </table>
+          <>
+            {Object.keys(previa.fora).length > 0 && <p className="muted" style={{ marginTop: 10 }}>Fora da trilha hoje: {Object.entries(previa.fora).map(([m, n]) => `${n} com ${m}`).join(' · ')}.</p>}
+            <table className="tabela" style={{ marginTop: 10 }}>
+              <thead><tr><th>Para</th><th>Etapa</th><th>Mensagem ou tarefa</th></tr></thead>
+              <tbody>
+                {previa.lista.map((x: any, i: number) => <tr key={i}><td><Link to={`/cobranca/devedor/${x.pessoaId}`}>{x.nome}</Link><div className="muted">{x.destino ?? '—'}</div>{x.problema && <span className="etiqueta alerta">{x.problema}</span>}</td><td>{x.etapa}<div className="muted">{x.acao === 'tarefa' ? 'tarefa' : x.canal === 'email' ? 'e-mail' : 'WhatsApp'}</div></td><td style={{ whiteSpace: 'pre-wrap' }}>{x.texto}</td></tr>)}
+                {!previa.lista.length && <tr><td colSpan={3} className="vazio">Nada para sair hoje.</td></tr>}
+              </tbody>
+            </table>
+          </>
         )}
       </div>
+
+      <ImportarProcessos />
 
       <div className="cartao">
         <h3 style={{ marginTop: 0 }}>Protesto</h3>
@@ -564,4 +596,130 @@ function Configurar() {
       </div>
     </div>
   );
+}
+
+// ───────────── Processos judiciais (planilha da advogada) ─────────────
+
+function ImportarProcessos() {
+  const qc = useQueryClient();
+  const [arquivo, setArquivo] = useState<{ nome: string; base64: string } | null>(null);
+  const enviar = useMutation({
+    mutationFn: (simular: boolean) => api<any>('/cobranca/processos/importar', { corpo: { ...arquivo, simular } }),
+    onSuccess: (_r, simular) => { if (!simular) qc.invalidateQueries({ queryKey: ['cobranca'] }); },
+  });
+  const ler = (f: File | undefined) => {
+    enviar.reset();
+    if (!f) return setArquivo(null);
+    const r = new FileReader();
+    r.onload = () => setArquivo({ nome: f.name, base64: String(r.result).split(',')[1] ?? '' });
+    r.readAsDataURL(f);
+  };
+  const r = enviar.data;
+  const simulado = enviar.variables === true;
+  return (
+    <div className="cartao">
+      <h3 style={{ marginTop: 0 }}>Processos judiciais (planilha da advogada)</h3>
+      <p className="muted">Planilha .xlsx ou .csv com um cabeçalho contendo a coluna do <b>processo</b>, a do <b>CPF/CNPJ</b> (ou o <b>nome</b>) e, se tiver, a <b>situação</b>. Situação "arquivado", "extinto", "baixado" ou "encerrado" vira arquivado; o resto fica ativo. Quem tem processo ativo sai da trilha e a IA não cobra. Dá para cadastrar um por um na ficha do devedor.</p>
+      <div className="flex" style={{ flexWrap: 'wrap', gap: 8 }}>
+        <input type="file" accept=".xlsx,.csv" onChange={(e) => ler(e.target.files?.[0])} />
+        <button className="botao claro pequeno" disabled={!arquivo || enviar.isPending} onClick={() => enviar.mutate(true)}>Conferir antes</button>
+        <button className="botao pequeno" disabled={!arquivo || enviar.isPending} onClick={() => enviar.mutate(false)}>Importar</button>
+      </div>
+      {enviar.error && <Erro erro={enviar.error} />}
+      {r && (
+        <div className="aviso" style={{ marginTop: 10 }}>
+          {simulado ? 'Conferência (nada foi gravado): ' : 'Importado: '}
+          {r.linhas} linha(s) · {r.ativos} ativo(s) · {r.arquivados} arquivado(s){!simulado ? ` · ${r.criados} novo(s), ${r.atualizados} atualizado(s)` : ''}{r.semNumero ? ` · ${r.semNumero} sem número de processo` : ''}.
+          {r.naoEncontrados.length > 0 && (
+            <>
+              <div style={{ marginTop: 6 }}><b>{r.naoEncontrados.length} sem cadastro encontrado</b> (confira o CPF/CNPJ ou cadastre na ficha):</div>
+              <ul style={{ margin: '4px 0 0', paddingLeft: 18 }}>{r.naoEncontrados.slice(0, 30).map((x: any) => <li key={x.linha}>Linha {x.linha}: {x.nome || '—'} {x.documento ? `(${x.documento})` : ''} · {x.numero}</li>)}</ul>
+              {r.naoEncontrados.length > 30 && <div className="muted">e mais {r.naoEncontrados.length - 30}.</div>}
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ───────────── Comprovantes recebidos pelo WhatsApp ─────────────
+
+function Comprovantes() {
+  const qc = useQueryClient();
+  const [status, setStatus] = useState('pendente');
+  const [foto, setFoto] = useState<string | null>(null);
+  const q = useQuery({ queryKey: ['cobranca', 'comprovantes', status], queryFn: () => api<any[]>(`/cobranca/comprovantes?status=${status}`), refetchInterval: 60_000 });
+  const resolver = useMutation({
+    mutationFn: (x: { id: string; status: 'baixado' | 'recusado'; observacao?: string | null }) => api(`/cobranca/comprovantes/${x.id}/resolver`, { corpo: { status: x.status, observacao: x.observacao ?? null } }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['cobranca'] }),
+  });
+  const ok = (v: boolean, rotulo: string) => <span className={`etiqueta ${v ? 'ok' : 'alerta'}`}>{v ? '✓' : '?'} {rotulo}</span>;
+  return (
+    <div className="coluna">
+      <div className="flex" style={{ justifyContent: 'space-between', flexWrap: 'wrap' }}>
+        <p className="muted" style={{ margin: 0 }}>Comprovantes que os devedores mandaram no WhatsApp e a IA leu. Confira, dê a baixa da parcela no Financeiro (ou na ficha) e marque aqui.</p>
+        <select value={status} onChange={(e) => setStatus(e.target.value)} style={{ maxWidth: 200 }}>
+          <option value="pendente">Para conferir</option>
+          <option value="baixado">Baixados</option>
+          <option value="recusado">Recusados</option>
+          <option value="todos">Todos</option>
+        </select>
+      </div>
+      {q.isLoading && <Carregando />}
+      {q.error && <Erro erro={q.error} />}
+      {resolver.error && <Erro erro={resolver.error} />}
+      {q.data && !q.data.length && <div className="cartao vazio">Nenhum comprovante {status === 'pendente' ? 'para conferir' : 'aqui'}.</div>}
+      {q.data?.map((c) => (
+        <div key={c.id} className="cartao cob-comprovante">
+          {c.midia ? <FotoComprovante id={c.id} abrir={() => setFoto(c.id)} /> : <div className="cob-sem-foto muted">sem foto</div>}
+          <div style={{ minWidth: 0 }}>
+            <div className="flex" style={{ justifyContent: 'space-between', flexWrap: 'wrap' }}>
+              <Link to={`/cobranca/devedor/${c.pessoaId}`}><b>{c.nome}</b></Link>
+              <span className="muted" style={{ fontSize: 12 }}>{dataHora(c.criadoEm)}</span>
+            </div>
+            <div style={{ margin: '4px 0' }}>
+              {c.valor ? reais(c.valor) : 'Valor não lido'}{c.data ? ` · pago em ${data(c.data)}` : ''}{c.pagador ? ` · por ${c.pagador}` : ''}
+            </div>
+            <div className="flex" style={{ gap: 6, flexWrap: 'wrap' }}>{ok(c.conferencia.valor, 'valor')}{ok(c.conferencia.data, 'data')}{ok(c.conferencia.nome, 'nome')}</div>
+            {c.conferencia.observacao && <div className="muted" style={{ fontSize: 13, marginTop: 4 }}>{c.conferencia.observacao}</div>}
+            {c.titulos.length > 0 && <div style={{ fontSize: 13, marginTop: 4 }}>Parece ser: {c.titulos.map((t: any) => `${t.descricao} (${reais(t.valor)}, venc. ${data(t.vencimento)}${t.status !== 'aberto' ? `, ${t.status}` : ''})`).join('; ')}</div>}
+            {c.status === 'pendente' ? (
+              <div className="flex" style={{ gap: 6, marginTop: 8, flexWrap: 'wrap' }}>
+                <button className="botao pequeno" disabled={resolver.isPending} onClick={() => resolver.mutate({ id: c.id, status: 'baixado' })}>Já dei a baixa</button>
+                <button className="botao claro pequeno" disabled={resolver.isPending} onClick={() => { const m = window.prompt('Por que recusar? (fica no histórico do devedor)'); if (m !== null) resolver.mutate({ id: c.id, status: 'recusado', observacao: m }); }}>Recusar</button>
+              </div>
+            ) : (
+              <div className="muted" style={{ fontSize: 13, marginTop: 6 }}>{c.status === 'baixado' ? 'Baixado' : 'Recusado'}{c.resolvidoPorNome ? ` por ${c.resolvidoPorNome}` : ''}{c.resolvidoEm ? ` em ${dataHora(c.resolvidoEm)}` : ''}{c.observacao ? `: ${c.observacao}` : ''}</div>
+            )}
+          </div>
+        </div>
+      ))}
+      {foto && (
+        <div className="modal-fundo" onClick={() => setFoto(null)}>
+          <div className="cartao modal" style={{ maxWidth: 720 }}><FotoComprovante id={foto} grande /></div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Foto do comprovante (só com login: baixa com o token e mostra por um link local). */
+function FotoComprovante({ id, abrir, grande }: { id: string; abrir?: () => void; grande?: boolean }) {
+  const [url, setUrl] = useState<string | null>(null);
+  useEffect(() => {
+    let solto: string | null = null;
+    fetch(`/api/cobranca/comprovantes/${id}/foto`, { headers: { authorization: `Bearer ${lerSessao()?.token ?? ''}` } })
+      .then((r) => (r.ok ? r.blob() : null))
+      .then((b) => {
+        if (b) setUrl((solto = URL.createObjectURL(b)));
+      })
+      .catch(() => undefined);
+    return () => {
+      if (solto) URL.revokeObjectURL(solto);
+    };
+  }, [id]);
+  if (!url) return <div className="cob-sem-foto muted">…</div>;
+  if (grande) return <img src={url} alt="Comprovante" style={{ width: '100%' }} />;
+  return <button className="link" onClick={abrir} title="Ver o comprovante"><img src={url} alt="Comprovante" /></button>;
 }

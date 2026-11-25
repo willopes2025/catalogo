@@ -4,13 +4,14 @@ import { calcularAcordo, calcularEncargos, formatarReais, preencherTexto, type R
 import { temPermissao, type UsuarioLogado } from '../comum/auth';
 import { DB, type Db } from '../comum/db.module';
 import { AuditoriaService } from '../comum/auditoria.service';
-import { cobradores, cobrancaAcordos, cobrancaCarteira, cobrancaContatos, cobrancaEnvios, cobrancaProtestos, crmCanais, empresas, pessoas, titulos, usuarios } from '../db/schema';
+import { cobradores, cobrancaAcordos, cobrancaCarteira, cobrancaComprovantes, cobrancaContatos, cobrancaEnvios, cobrancaProtestos, crmCanais, empresas, mesaTarefas, pessoas, processosJudiciais, titulos, usuarios } from '../db/schema';
 import { AsaasService } from '../integracoes/asaas.service';
 import { EmailService } from '../integracoes/email.service';
 import { CanaisService } from '../crm/canais.service';
 import { hoje } from '../maletas/maletas.service';
 import { CobrancaConfigService, type ConfigCobranca } from './cobranca-config.service';
 import { PlanoContasService } from '../financeiro/plano.service';
+import { FilaEnvioService, type NovoItem } from '../crm/fila-envio.service';
 
 /** O que este usuário pode ver na cobrança. */
 export interface Escopo {
@@ -39,9 +40,11 @@ export class CobrancaService implements OnModuleInit, OnModuleDestroy {
     private readonly email: EmailService,
     private readonly auditoria: AuditoriaService,
     private readonly plano: PlanoContasService,
+    private readonly fila: FilaEnvioService,
   ) {}
 
   onModuleInit() {
+    this.fila.verificarAntes('trilha', (i) => this.aindaNaTrilha(i));
     // De hora em hora: acordos (quitados e quebrados), promessas vencidas e, a partir das 9h, a régua do dia.
     if (process.env.COBRANCA_AUTOMATICA === '0') return;
     this.timer = setInterval(() => void this.rotina().catch((e) => this.log.warn(`Rotina: ${(e as Error).message}`)), 60 * 60_000);
@@ -56,10 +59,11 @@ export class CobrancaService implements OnModuleInit, OnModuleDestroy {
     await this.verificarAcordos();
     await this.verificarPromessas();
     const hora = Number(new Date().toLocaleString('en-US', { timeZone: 'America/Sao_Paulo', hour: 'numeric', hour12: false }));
-    if (hora >= 9 && hora < 20 && this.reguaRodadaEm !== hoje()) {
+    // A trilha monta a fila do dia cedo; as mensagens saem no horário configurado no número.
+    if (hora >= 7 && hora < 20 && this.reguaRodadaEm !== hoje()) {
       this.reguaRodadaEm = hoje();
       const r = await this.rodarRegua(false);
-      if (r.enviados || r.falhas) this.log.log(`Régua: ${r.enviados} mensagem(ns) enviada(s), ${r.falhas} falha(s).`);
+      if (r.naFila || r.tarefas || r.falhas) this.log.log(`Trilha: ${r.naFila} mensagem(ns) na fila, ${r.tarefas} tarefa(s), ${r.falhas} com problema.`);
     }
   }
 
@@ -226,6 +230,9 @@ export class CobrancaService implements OnModuleInit, OnModuleDestroy {
       contatos: contatos.map((x) => ({ ...x.c, usuario: x.usuario, cobrador: x.cobrador })),
       pagos,
       regras: { multaPb: cfg.multaPb, jurosMesPb: cfg.jurosMesPb, diasCarencia: cfg.diasCarencia, descontoMaxPb: e.gestor ? cfg.descontoMaxGestorPb : cfg.descontoMaxPb, parcelasMax: cfg.parcelasMax },
+      processos: await this.processos(pessoaId),
+      trilha: { ligada: cfg.regua.ativa, fora: await this.foraDaTrilha(pessoaId) },
+      comprovantes: await this.db.select().from(cobrancaComprovantes).where(eq(cobrancaComprovantes.pessoaId, pessoaId)).orderBy(desc(cobrancaComprovantes.criadoEm)).limit(10),
       asaas: this.asaas.configurado,
     };
   }
@@ -268,7 +275,7 @@ export class CobrancaService implements OnModuleInit, OnModuleDestroy {
   // ───────────── Segunda via ─────────────
 
   /** Boleto/Pix novo (outro vencimento, valor com encargos ou sem). O anterior é apagado e o título passa a apontar só para o novo. */
-  async segundaVia(e: Escopo, u: UsuarioLogado, tituloId: string, d: { vencimento: string; tipo: 'BOLETO' | 'PIX'; comEncargos: boolean }) {
+  async segundaVia(e: Escopo, u: UsuarioLogado | null, tituloId: string, d: { vencimento: string; tipo: 'BOLETO' | 'PIX'; comEncargos: boolean }) {
     const [t] = await this.db.select().from(titulos).where(eq(titulos.id, tituloId));
     if (!t || !t.pessoaId) throw new NotFoundException('Título não encontrado.');
     await this.exigirAcesso(e, t.pessoaId);
@@ -278,8 +285,8 @@ export class CobrancaService implements OnModuleInit, OnModuleDestroy {
     if (!this.asaas.configurado) throw new BadRequestException('O Asaas não está ligado: não dá para emitir boleto ou Pix.');
     const cfg = await this.config.obter();
     const valor = d.comEncargos ? calcularEncargos(t.valor, t.vencimento, d.vencimento, cfg).total : t.valor;
-    const r = await this.asaas.cobrar(t.id, d.tipo, u.id, { valor, vencimento: d.vencimento });
-    await this.db.insert(cobrancaContatos).values({ pessoaId: t.pessoaId, usuarioId: u.id, cobradorId: e.cobradorId, tipo: 'sistema', texto: `Nova ${d.tipo === 'PIX' ? 'cobrança Pix' : '2ª via de boleto'}: ${formatarReais(valor)} para ${dataBR(d.vencimento)} (${t.descricao}).` });
+    const r = await this.asaas.cobrar(t.id, d.tipo, u?.id ?? null, { valor, vencimento: d.vencimento });
+    await this.db.insert(cobrancaContatos).values({ pessoaId: t.pessoaId, usuarioId: u?.id ?? null, cobradorId: e.cobradorId, tipo: 'sistema', texto: `Nova ${d.tipo === 'PIX' ? 'cobrança Pix' : '2ª via de boleto'}: ${formatarReais(valor)} para ${dataBR(d.vencimento)} (${t.descricao}).` });
     return { ...r, valor, vencimento: d.vencimento };
   }
 
@@ -314,14 +321,14 @@ export class CobrancaService implements OnModuleInit, OnModuleDestroy {
     return { ...r, descontoMaxPb };
   }
 
-  async criarAcordo(e: Escopo, u: UsuarioLogado, pessoaId: string, d: { tituloIds: string[]; desconto: number; entrada: number; vencimentoEntrada?: string; parcelas: number; primeiroVencimento: string; cobranca: 'BOLETO' | 'PIX' | 'nenhuma'; observacao?: string | null }) {
+  async criarAcordo(e: Escopo, u: UsuarioLogado | null, pessoaId: string, d: { tituloIds: string[]; desconto: number; entrada: number; vencimentoEntrada?: string; parcelas: number; primeiroVencimento: string; cobranca: 'BOLETO' | 'PIX' | 'nenhuma'; observacao?: string | null }) {
     const r = await this.simularAcordo(e, pessoaId, d);
     const ts = await this.titulosDoAcordo(pessoaId, d.tituloIds);
     const empresaId = ts[0].empresaId;
     const acordo = await this.db.transaction(async (tx) => {
       const [a] = await tx
         .insert(cobrancaAcordos)
-        .values({ pessoaId, cobradorId: e.cobradorId, usuarioId: u.id, original: r.original, multa: r.multa, juros: r.juros, desconto: r.desconto, total: r.total, entrada: r.entrada?.valor ?? 0, parcelas: r.parcelas.length, observacao: d.observacao ?? null })
+        .values({ pessoaId, cobradorId: e.cobradorId, usuarioId: u?.id ?? null, original: r.original, multa: r.multa, juros: r.juros, desconto: r.desconto, total: r.total, entrada: r.entrada?.valor ?? 0, parcelas: r.parcelas.length, observacao: d.observacao ?? null })
         .returning();
       // Os títulos de origem ficam "renegociados" (ligados ao acordo); voltam se o acordo quebrar.
       for (const t of ts) {
@@ -352,10 +359,10 @@ export class CobrancaService implements OnModuleInit, OnModuleDestroy {
           })),
         )
         .returning();
-      await tx.insert(cobrancaContatos).values({ pessoaId, usuarioId: u.id, cobradorId: e.cobradorId, tipo: 'sistema', texto: `Acordo nº ${a.numero}: ${formatarReais(r.total)}${r.entrada ? ` (entrada de ${formatarReais(r.entrada.valor)} + ` : ' ('}${r.parcelas.length}x). Dívida de ${formatarReais(r.original)}, ${formatarReais(r.multa + r.juros)} de encargos, ${formatarReais(r.desconto)} de desconto.` });
+      await tx.insert(cobrancaContatos).values({ pessoaId, usuarioId: u?.id ?? null, cobradorId: e.cobradorId, tipo: 'sistema', texto: `Acordo nº ${a.numero}: ${formatarReais(r.total)}${r.entrada ? ` (entrada de ${formatarReais(r.entrada.valor)} + ` : ' ('}${r.parcelas.length}x). Dívida de ${formatarReais(r.original)}, ${formatarReais(r.multa + r.juros)} de encargos, ${formatarReais(r.desconto)} de desconto.` });
       // Promessas abertas deixam de valer: o acordo é o compromisso agora.
       await tx.update(cobrancaContatos).set({ promessaStatus: 'substituida' }).where(and(eq(cobrancaContatos.pessoaId, pessoaId), eq(cobrancaContatos.promessaStatus, 'aberta')));
-      await this.auditoria.registrar({ usuarioId: u.id, acao: 'criar_acordo', entidade: 'cobranca_acordo', entidadeId: a.id, dados: { pessoaId, titulos: d.tituloIds, total: r.total, desconto: r.desconto, parcelas: r.parcelas.length } }, tx);
+      await this.auditoria.registrar({ usuarioId: u?.id ?? null, acao: 'criar_acordo', entidade: 'cobranca_acordo', entidadeId: a.id, dados: { pessoaId, titulos: d.tituloIds, total: r.total, desconto: r.desconto, parcelas: r.parcelas.length } }, tx);
       return { ...a, parcelasCriadas: criadas };
     });
     // Boletos dos títulos de origem deixam de valer.
@@ -367,7 +374,7 @@ export class CobrancaService implements OnModuleInit, OnModuleDestroy {
       else
         for (const p of acordo.parcelasCriadas) {
           try {
-            await this.asaas.cobrar(p.id, d.cobranca, u.id);
+            await this.asaas.cobrar(p.id, d.cobranca, u?.id ?? null);
           } catch (err) {
             avisos.push(`${p.descricao}: ${(err as Error).message}`);
           }
@@ -470,99 +477,278 @@ export class CobrancaService implements OnModuleInit, OnModuleDestroy {
     return { ok: true, abatido: r.abatido };
   }
 
-  // ───────────── Régua ─────────────
+  // ───────────── Trilha de cobrança ─────────────
 
   /**
-   * Manda as mensagens do dia: para cada passo da régua, os títulos que vencem (ou venceram) há exatamente aqueles dias.
-   * Junta os títulos da mesma pessoa numa mensagem só. Cada título recebe cada passo uma vez.
-   * `simular`: só mostra o que seria enviado.
+   * Por que esta pessoa está fora da trilha agora (null = está na trilha): processo judicial ativo, cobrança pausada,
+   * título em protesto, acordo em dia ou promessa de pagamento dentro do prazo.
+   */
+  async foraDaTrilha(pessoaId: string): Promise<string | null> {
+    const h = hoje();
+    const [r] = (
+      await this.db.execute<{ processo: boolean; pausada: boolean; protesto: boolean; acordo: boolean; promessa: string | null }>(sql`
+        select
+          exists (select 1 from processos_judiciais p where p.pessoa_id = ${pessoaId} and p.situacao = 'ativo') as processo,
+          coalesce((select c.pausada from cobranca_carteira c where c.pessoa_id = ${pessoaId}), false) as pausada,
+          exists (select 1 from cobranca_protestos x join titulos t on t.id = x.titulo_id where t.pessoa_id = ${pessoaId} and x.status in ('enviado', 'em_cartorio', 'protestado')) as protesto,
+          exists (select 1 from cobranca_acordos a where a.pessoa_id = ${pessoaId} and a.status = 'ativo'
+                  and not exists (select 1 from titulos t where t.acordo_id = a.id and t.status = 'aberto' and t.vencimento < ${h})) as acordo,
+          (select max(c.promessa_data)::text from cobranca_contatos c where c.pessoa_id = ${pessoaId} and c.promessa_status = 'aberta' and c.promessa_data >= ${h}) as promessa`)
+    ).rows;
+    if (r.processo) return 'tem processo judicial ativo';
+    if (r.pausada) return 'cobrança pausada';
+    if (r.protesto) return 'tem título em protesto';
+    if (r.acordo) return 'acordo em dia';
+    if (r.promessa) return `promessa de pagamento até ${dataBR(r.promessa)}`;
+    return null;
+  }
+
+  /**
+   * Trilha de cobrança: cada pessoa recebe a etapa do seu maior atraso (a etapa vale do seu dia até a próxima), uma vez.
+   * Mensagem de WhatsApp entra na fila do número (intervalo e horário do número); tarefa vai para a Mesa de quem foi escolhido.
+   * `simular`: só mostra o que sairia hoje e quem ficou de fora.
    */
   async rodarRegua(simular: boolean) {
     const cfg = await this.config.obter();
-    const previa: { pessoaId: string; nome: string; passo: number; canal: string; titulos: number; valor: number; texto: string; destino: string | null; problema: string | null }[] = [];
+    const previa: { pessoaId: string; nome: string; passo: number; etapa: string; acao: string; canal: string; titulos: number; valor: number; texto: string; destino: string | null; problema: string | null }[] = [];
+    const fora = new Map<string, number>();
     let enviados = 0;
     let falhas = 0;
-    if (!simular && !cfg.regua.ativa) return { enviados, falhas, previa };
+    let tarefas = 0;
+    if ((!simular && !cfg.regua.ativa) || !cfg.regua.passos.length) return { enviados, falhas, tarefas, naFila: 0, previa, foraDaTrilha: {} };
+    const passos = [...cfg.regua.passos].sort((x, y) => x.dias - y.dias);
     const [canal] = cfg.regua.canalId ? await this.db.select().from(crmCanais).where(eq(crmCanais.id, cfg.regua.canalId)) : [];
     const [empresa] = await this.db.select({ nome: empresas.nome }).from(empresas).where(eq(empresas.tipo, 'matriz')).limit(1);
     const h = hoje();
-    for (const passo of cfg.regua.passos) {
-      const alvo = new Date(Date.parse(`${h}T12:00:00Z`) - passo.dias * 86400_000).toISOString().slice(0, 10);
-      const linhas = await this.db
-        .select({ t: titulos, p: pessoas })
-        .from(titulos)
-        .innerJoin(pessoas, eq(pessoas.id, titulos.pessoaId))
-        .leftJoin(cobrancaCarteira, eq(cobrancaCarteira.pessoaId, pessoas.id))
-        .where(
-          and(
-            eq(titulos.tipo, 'receber'),
-            eq(titulos.status, 'aberto'),
-            eq(titulos.vencimento, alvo),
-            sql`coalesce(${titulos.formaPagamento}, '') not in ('debito', 'credito', 'dinheiro')`,
-            sql`coalesce(${cobrancaCarteira.pausada}, false) = false`,
-            sql`not exists (select 1 from cobranca_envios e where e.titulo_id = ${titulos.id} and e.passo = ${passo.dias})`,
-            sql`not exists (select 1 from cobranca_protestos p where p.titulo_id = ${titulos.id} and p.status in ('enviado', 'em_cartorio', 'protestado'))`,
-          ),
-        );
-      const porPessoa = new Map<string, typeof linhas>();
-      for (const l of linhas) porPessoa.set(l.p.id, [...(porPessoa.get(l.p.id) ?? []), l]);
-      for (const [pessoaId, grupo] of porPessoa) {
-        const p = grupo[0].p;
-        const destino = passo.canal === 'email' ? p.email : p.telefone1;
-        let problema: string | null = null;
-        if (!destino) problema = passo.canal === 'email' ? 'Sem e-mail no cadastro.' : 'Sem telefone no cadastro.';
-        else if (passo.canal === 'whatsapp' && (!canal || !canal.ativo || canal.excluidoEm)) problema = 'Escolha o número de WhatsApp da régua em Cobrança › Configurar.';
-        else if (passo.canal === 'whatsapp' && canal?.tipo === 'oficial' && !passo.templateId) problema = 'No WhatsApp oficial, cada passo precisa de um template aprovado.';
-        // Boleto/Pix antes de mandar, para a mensagem já ir com o link.
-        if (!simular && !problema && this.asaas.configurado && p.documento)
-          for (const g of grupo)
-            if (!g.t.cobrancaExternaId) {
-              try {
-                const r = await this.asaas.cobrar(g.t.id, g.t.formaPagamento === 'pix' ? 'PIX' : 'BOLETO', null);
-                g.t.cobrancaUrl = r.url ?? null;
-                g.t.pixCopiaCola = r.pixCopiaCola ?? null;
-              } catch (err) {
-                this.log.warn(`Régua: boleto de ${g.t.id} não emitido: ${(err as Error).message}`);
-              }
+    const limite = new Date(Date.parse(`${h}T12:00:00Z`) - passos[0].dias * 86400_000).toISOString().slice(0, 10);
+    const linhas = await this.db
+      .select({ t: titulos, p: pessoas })
+      .from(titulos)
+      .innerJoin(pessoas, eq(pessoas.id, titulos.pessoaId))
+      .where(and(eq(titulos.tipo, 'receber'), eq(titulos.status, 'aberto'), sql`${titulos.vencimento} <= ${limite}`, sql`coalesce(${titulos.formaPagamento}, '') not in ('debito', 'credito', 'dinheiro')`));
+    const porPessoa = new Map<string, typeof linhas>();
+    for (const l of linhas) porPessoa.set(l.p.id, [...(porPessoa.get(l.p.id) ?? []), l]);
+    const atraso = (v: string) => Math.round((Date.parse(`${h}T12:00:00Z`) - Date.parse(`${v}T12:00:00Z`)) / 86400_000);
+    const itensFila: NovoItem[] = [];
+    for (const [pessoaId, todos] of porPessoa) {
+      const principal = todos.reduce((m, x) => (x.t.vencimento < m.t.vencimento ? x : m));
+      const maior = atraso(principal.t.vencimento);
+      const passo = [...passos].reverse().find((x) => x.dias <= maior);
+      if (!passo) continue;
+      const [ja] = await this.db.select({ id: cobrancaEnvios.id }).from(cobrancaEnvios).where(and(eq(cobrancaEnvios.tituloId, principal.t.id), eq(cobrancaEnvios.passo, passo.dias))).limit(1);
+      if (ja) continue;
+      const motivo = await this.foraDaTrilha(pessoaId);
+      if (motivo) {
+        fora.set(motivo.replace(/ até .*/, ''), (fora.get(motivo.replace(/ até .*/, '')) ?? 0) + 1);
+        continue;
+      }
+      const grupo = todos.filter((x) => atraso(x.t.vencimento) >= Math.min(passo.dias, 1)).sort((x, y) => x.t.vencimento.localeCompare(y.t.vencimento));
+      const p = principal.p;
+      const etapa = passo.nome?.trim() || (passo.dias < 0 ? `${-passo.dias} dias antes` : passo.dias === 0 ? 'no vencimento' : `${passo.dias} dias`);
+      const tarefa = passo.acao === 'tarefa';
+      const destino = tarefa ? null : passo.canal === 'email' ? p.email : p.telefone1;
+      let problema: string | null = null;
+      if (tarefa) {
+        if (!passo.responsavelId) problema = `Escolha quem recebe a tarefa da etapa "${etapa}".`;
+      } else if (!destino) problema = passo.canal === 'email' ? 'Sem e-mail no cadastro.' : 'Sem telefone no cadastro.';
+      else if (passo.canal === 'whatsapp' && (!canal || !canal.ativo || canal.excluidoEm)) problema = 'Escolha o número de WhatsApp da trilha em Cobrança › Configurar.';
+      else if (passo.canal === 'whatsapp' && canal?.tipo === 'oficial' && !passo.templateId) problema = 'No WhatsApp oficial, cada etapa precisa de um template aprovado.';
+      // Boleto/Pix antes de mandar, para a mensagem já ir com o link.
+      if (!simular && !tarefa && !problema && this.asaas.configurado && p.documento)
+        for (const g of grupo)
+          if (!g.t.cobrancaExternaId) {
+            try {
+              const r = await this.asaas.cobrar(g.t.id, g.t.formaPagamento === 'pix' ? 'PIX' : 'BOLETO', null);
+              g.t.cobrancaUrl = r.url ?? null;
+              g.t.pixCopiaCola = r.pixCopiaCola ?? null;
+            } catch (err) {
+              this.log.warn(`Trilha: boleto de ${g.t.id} não emitido: ${(err as Error).message}`);
             }
-        const valor = grupo.reduce((s, g) => s + g.t.valor, 0);
-        const atualizado = grupo.reduce((s, g) => s + calcularEncargos(g.t.valor, g.t.vencimento, h, cfg).total, 0);
-        const links = grupo.map((g) => (g.t.cobrancaUrl ? `${grupo.length > 1 ? `${g.t.descricao}: ` : 'Boleto/Pix: '}${g.t.cobrancaUrl}` : null)).filter(Boolean).join('\n');
-        const texto = preencherTexto(passo.texto, {
-          nome: p.nome,
-          primeiro_nome: p.nome.split(' ')[0],
-          valor: formatarReais(valor),
-          valor_atualizado: formatarReais(atualizado),
-          vencimento: dataBR(alvo),
-          dias: Math.abs(passo.dias),
-          link: links,
-          pix: grupo.length === 1 ? (grupo[0].t.pixCopiaCola ?? '') : '',
-          titulos: grupo.map((g) => `${g.t.descricao}: ${formatarReais(g.t.valor)}`).join('\n'),
-          empresa: empresa?.nome ?? 'Aritana',
-        });
-        previa.push({ pessoaId, nome: p.nome, passo: passo.dias, canal: passo.canal, titulos: grupo.length, valor, texto, destino: destino ?? null, problema });
-        if (simular) continue;
+          }
+      const valor = grupo.reduce((s2, g) => s2 + g.t.valor, 0);
+      const atualizado = grupo.reduce((s2, g) => s2 + calcularEncargos(g.t.valor, g.t.vencimento, h, cfg).total, 0);
+      const links = grupo.map((g) => (g.t.cobrancaUrl ? `${grupo.length > 1 ? `${g.t.descricao}: ` : 'Boleto/Pix: '}${g.t.cobrancaUrl}` : null)).filter(Boolean).join('\n');
+      const texto = preencherTexto(passo.texto, {
+        nome: p.nome,
+        primeiro_nome: p.nome.split(' ')[0],
+        valor: formatarReais(valor),
+        valor_atualizado: formatarReais(atualizado),
+        valor_com_desconto: formatarReais(Math.round(atualizado * (1 - cfg.descontoMaxPb / 10000))),
+        desconto_maximo: `${String(cfg.descontoMaxPb / 100).replace('.', ',')}%`,
+        parcelas_max: cfg.parcelasMax,
+        vencimento: dataBR(principal.t.vencimento),
+        dias: Math.abs(maior),
+        link: links,
+        pix: grupo.length === 1 ? (grupo[0].t.pixCopiaCola ?? '') : '',
+        titulos: grupo.map((g) => `${g.t.descricao}: ${formatarReais(g.t.valor)}`).join('\n'),
+        telefone: p.telefone1 ?? '—',
+        etapa,
+        empresa: empresa?.nome ?? 'Aritana',
+      });
+      previa.push({ pessoaId, nome: p.nome, passo: passo.dias, etapa, acao: tarefa ? 'tarefa' : 'mensagem', canal: passo.canal, titulos: grupo.length, valor, texto, destino: destino ?? null, problema });
+      if (simular) continue;
+      const tituloIds = grupo.map((g) => g.t.id);
+      const registrar = async (resultado: string, detalhe: string | null) => {
+        await this.db.insert(cobrancaEnvios).values(tituloIds.map((tituloId) => ({ tituloId, passo: passo.dias, canal: tarefa ? 'tarefa' : passo.canal, resultado, detalhe }))).onConflictDoNothing();
+      };
+      if (problema) {
+        falhas++;
+        // Sem registrar o envio: quando corrigirem (telefone, responsável), a etapa sai na próxima rodada.
+        await this.db.insert(cobrancaContatos).values({ pessoaId, tipo: 'regua', texto: `Trilha de cobrança (${etapa}) não saiu: ${problema}` });
+        continue;
+      }
+      if (tarefa) {
+        await this.db.insert(mesaTarefas).values({ titulo: `Cobrança: ${p.nome} (${etapa})`.slice(0, 200), descricao: `${texto}\n\nFicha: /cobranca/devedor/${pessoaId}`, responsavelId: passo.responsavelId!, venceEm: h, prioridade: passo.dias >= 90 ? 'alta' : 'normal' });
+        await registrar('tarefa', null);
+        await this.db.insert(cobrancaContatos).values({ pessoaId, tipo: 'regua', texto: `Trilha de cobrança (${etapa}): virou tarefa para a equipe.\n${texto}` });
+        tarefas++;
+        continue;
+      }
+      if (passo.canal === 'email') {
         let resultado = 'enviado';
         let detalhe: string | null = null;
-        if (problema) {
-          resultado = 'sem_contato';
-          detalhe = problema;
-        } else {
-          try {
-            if (passo.canal === 'email') await this.email.enviar(destino!, `${empresa?.nome ?? 'Aritana'}: ${passo.dias < 0 ? 'lembrete de vencimento' : passo.dias === 0 ? 'vencimento hoje' : 'pagamento em atraso'}`, texto);
-            else await this.canais.enviarParaTelefone({ canalId: canal!.id, telefone: destino!, nome: p.nome, texto, templateId: passo.templateId });
-          } catch (err) {
-            resultado = 'falhou';
-            detalhe = (err as Error).message.slice(0, 300);
-          }
+        try {
+          await this.email.enviar(destino!, `${empresa?.nome ?? 'Aritana'}: ${maior < 0 ? 'lembrete de vencimento' : maior === 0 ? 'vencimento hoje' : 'pagamento em atraso'}`, texto);
+          enviados++;
+        } catch (err) {
+          resultado = 'falhou';
+          detalhe = (err as Error).message.slice(0, 300);
+          falhas++;
         }
-        if (resultado === 'enviado') enviados++;
-        else falhas++;
-        await this.db.insert(cobrancaEnvios).values(grupo.map((g) => ({ tituloId: g.t.id, passo: passo.dias, canal: passo.canal, resultado, detalhe }))).onConflictDoNothing();
-        await this.db.insert(cobrancaContatos).values({ pessoaId, tipo: 'regua', texto: resultado === 'enviado' ? `Régua (${passo.dias < 0 ? `${-passo.dias} dias antes` : passo.dias === 0 ? 'no vencimento' : `${passo.dias} dias depois`}), por ${passo.canal === 'email' ? 'e-mail' : 'WhatsApp'}:\n${texto}` : `Régua não enviada (${passo.canal === 'email' ? 'e-mail' : 'WhatsApp'}): ${detalhe}` });
+        await registrar(resultado, detalhe);
+        await this.db.insert(cobrancaContatos).values({ pessoaId, tipo: 'regua', texto: resultado === 'enviado' ? `Trilha de cobrança (${etapa}), por e-mail:\n${texto}` : `Trilha de cobrança (${etapa}) não saiu por e-mail: ${detalhe}` });
+        continue;
       }
+      // WhatsApp: entra na fila do número; o histórico é registrado quando a mensagem sair.
+      await registrar('na_fila', null);
+      itensFila.push({ pessoaId, nome: p.nome, telefone: destino!, texto, templateId: passo.templateId ?? null, dados: { tituloIds, passo: passo.dias, etapa } });
     }
-    return { enviados, falhas, previa };
+    if (itensFila.length && canal) {
+      const titulo = `Trilha de cobrança ${dataBR(h)}`;
+      const aberto = await this.fila.aberto(canal.id, 'trilha', titulo);
+      if (aberto) await this.fila.acrescentar(aberto.id, itensFila);
+      else await this.fila.criarLote({ canalId: canal.id, origem: 'trilha', titulo, itens: itensFila });
+    }
+    return { enviados, falhas, tarefas, naFila: itensFila.length, previa, foraDaTrilha: Object.fromEntries(fora) };
+  }
+
+  /** Antes de cada mensagem da trilha sair da fila: a pessoa ainda deve e continua na trilha? */
+  private async aindaNaTrilha(i: { pessoaId: string | null; dados: { tituloIds?: string[] } }) {
+    if (!i.pessoaId) return null;
+    const ids = i.dados.tituloIds ?? [];
+    if (ids.length) {
+      const [{ abertos }] = await this.db.select({ abertos: sql<number>`count(*)::int` }).from(titulos).where(and(inArray(titulos.id, ids), eq(titulos.status, 'aberto')));
+      if (!abertos) return 'pagou (ou a parcela saiu da cobrança) antes de a mensagem sair';
+    }
+    return this.foraDaTrilha(i.pessoaId);
+  }
+
+  // ───────────── Processos judiciais ─────────────
+
+  processos(pessoaId: string) {
+    return this.db.select({ p: processosJudiciais, usuario: usuarios.nome }).from(processosJudiciais).leftJoin(usuarios, eq(usuarios.id, processosJudiciais.usuarioId)).where(eq(processosJudiciais.pessoaId, pessoaId)).orderBy(desc(processosJudiciais.atualizadoEm)).then((r) => r.map((x) => ({ ...x.p, usuario: x.usuario })));
+  }
+
+  async salvarProcesso(e: Escopo, u: UsuarioLogado, pessoaId: string, d: { numero: string; situacao: 'ativo' | 'arquivado'; observacao?: string | null }) {
+    await this.exigirAcesso(e, pessoaId);
+    const numero = d.numero.trim();
+    const [antes] = await this.db.select().from(processosJudiciais).where(and(eq(processosJudiciais.pessoaId, pessoaId), eq(processosJudiciais.numero, numero)));
+    const [r] = await this.db
+      .insert(processosJudiciais)
+      .values({ pessoaId, numero, situacao: d.situacao, observacao: d.observacao ?? null, usuarioId: u.id })
+      .onConflictDoUpdate({ target: [processosJudiciais.pessoaId, processosJudiciais.numero], set: { situacao: d.situacao, observacao: d.observacao ?? null, usuarioId: u.id, atualizadoEm: new Date() } })
+      .returning();
+    if (!antes || antes.situacao !== d.situacao)
+      await this.db.insert(cobrancaContatos).values({ pessoaId, usuarioId: u.id, cobradorId: e.cobradorId, tipo: 'sistema', texto: `Processo judicial ${numero}: ${d.situacao === 'ativo' ? 'ativo (fora da trilha de cobrança automática)' : 'arquivado'}.` });
+    return r;
+  }
+
+  async excluirProcesso(e: Escopo, u: UsuarioLogado, id: string) {
+    const [p] = await this.db.select().from(processosJudiciais).where(eq(processosJudiciais.id, id));
+    if (!p) throw new NotFoundException('Processo não encontrado.');
+    await this.exigirAcesso(e, p.pessoaId);
+    await this.db.delete(processosJudiciais).where(eq(processosJudiciais.id, id));
+    await this.db.insert(cobrancaContatos).values({ pessoaId: p.pessoaId, usuarioId: u.id, cobradorId: e.cobradorId, tipo: 'sistema', texto: `Processo judicial ${p.numero} tirado do cadastro.` });
+    return { ok: true };
+  }
+
+  /**
+   * Planilha da advogada: uma linha por processo, com CPF/CNPJ (ou nome), número do processo e situação.
+   * Acha as colunas pelo cabeçalho; situação com "arquivado", "extinto", "baixado" ou "encerrado" vira arquivado, o resto ativo.
+   */
+  async importarProcessos(u: UsuarioLogado, linhas: string[][], simular: boolean) {
+    const norm = (t: string) => t.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
+    const iCab = linhas.findIndex((l) => l.some((c) => /processo|autos/.test(norm(c))));
+    if (iCab < 0) throw new BadRequestException('Não achei a coluna do número do processo. A planilha precisa de um cabeçalho com "Processo" (e "CPF/CNPJ" ou "Nome").');
+    const cab = linhas[iCab].map(norm);
+    const col = (re: RegExp, evitar?: RegExp) => cab.findIndex((c) => re.test(c) && !(evitar && evitar.test(c)));
+    const cNumero = col(/processo|autos/, /situa|status|fase/);
+    const cDoc = col(/cpf|cnpj|documento/);
+    const cNome = col(/nome|devedor|reu|executado|parte|cliente/);
+    const cSit = col(/situa|status|andamento|fase/);
+    if (cDoc < 0 && cNome < 0) throw new BadRequestException('A planilha precisa de uma coluna "CPF/CNPJ" ou "Nome" para achar a pessoa.');
+    const todas = await this.db.select({ id: pessoas.id, nome: pessoas.nome, documento: pessoas.documento }).from(pessoas);
+    const porDoc = new Map(todas.filter((p) => p.documento).map((p) => [p.documento!.replace(/\D/g, ''), p]));
+    const porNome = new Map<string, typeof todas>();
+    for (const p of todas) porNome.set(norm(p.nome), [...(porNome.get(norm(p.nome)) ?? []), p]);
+    const r = { linhas: 0, criados: 0, atualizados: 0, ativos: 0, arquivados: 0, naoEncontrados: [] as { linha: number; nome: string; documento: string; numero: string }[], semNumero: 0 };
+    for (const [n, l] of linhas.slice(iCab + 1).entries()) {
+      const numero = (l[cNumero] ?? '').trim();
+      const documento = cDoc >= 0 ? (l[cDoc] ?? '').replace(/\D/g, '') : '';
+      const nome = cNome >= 0 ? (l[cNome] ?? '').trim() : '';
+      if (!numero && !documento && !nome) continue;
+      r.linhas++;
+      if (!numero) {
+        r.semNumero++;
+        continue;
+      }
+      // CPF guardado como número perde o zero da frente: completa até 11 (ou 14).
+      const doc = documento && documento.length < 11 ? documento.padStart(11, '0') : documento.length > 11 && documento.length < 14 ? documento.padStart(14, '0') : documento;
+      const achadas = doc ? [porDoc.get(doc)].filter(Boolean) : (porNome.get(norm(nome)) ?? []);
+      if (achadas.length !== 1) {
+        r.naoEncontrados.push({ linha: iCab + n + 2, nome, documento, numero });
+        continue;
+      }
+      const situacao = cSit >= 0 && /arquiv|extint|baixad|encerr|quitad/.test(norm(l[cSit] ?? '')) ? 'arquivado' : 'ativo';
+      if (situacao === 'ativo') r.ativos++;
+      else r.arquivados++;
+      if (simular) continue;
+      const pessoaId = achadas[0]!.id;
+      const [antes] = await this.db.select({ id: processosJudiciais.id, situacao: processosJudiciais.situacao }).from(processosJudiciais).where(and(eq(processosJudiciais.pessoaId, pessoaId), eq(processosJudiciais.numero, numero)));
+      await this.db
+        .insert(processosJudiciais)
+        .values({ pessoaId, numero, situacao, origem: 'planilha', usuarioId: u.id })
+        .onConflictDoUpdate({ target: [processosJudiciais.pessoaId, processosJudiciais.numero], set: { situacao, usuarioId: u.id, atualizadoEm: new Date() } });
+      if (antes) r.atualizados++;
+      else r.criados++;
+      if (!antes || antes.situacao !== situacao) await this.db.insert(cobrancaContatos).values({ pessoaId, usuarioId: u.id, tipo: 'sistema', texto: `Processo judicial ${numero} (planilha da advogada): ${situacao}.` });
+    }
+    return r;
+  }
+
+  // ───────────── Comprovantes recebidos pelo WhatsApp ─────────────
+
+  async comprovantes(e: Escopo, status = 'pendente') {
+    const lista = await this.db
+      .select({ c: cobrancaComprovantes, nome: pessoas.nome, documento: pessoas.documento, resolvidoPor: usuarios.nome })
+      .from(cobrancaComprovantes)
+      .innerJoin(pessoas, eq(pessoas.id, cobrancaComprovantes.pessoaId))
+      .leftJoin(usuarios, eq(usuarios.id, cobrancaComprovantes.resolvidoPor))
+      .where(and(status === 'todos' ? undefined : eq(cobrancaComprovantes.status, status), e.restrito ? sql`exists (select 1 from cobranca_carteira c where c.pessoa_id = ${cobrancaComprovantes.pessoaId} and c.cobrador_id = ${e.cobradorId})` : undefined))
+      .orderBy(desc(cobrancaComprovantes.criadoEm))
+      .limit(100);
+    const ids = [...new Set(lista.flatMap((x) => x.c.tituloIds))];
+    const ts = ids.length ? await this.db.select({ id: titulos.id, descricao: titulos.descricao, valor: titulos.valor, vencimento: titulos.vencimento, status: titulos.status }).from(titulos).where(inArray(titulos.id, ids)) : [];
+    return lista.map((x) => ({ ...x.c, nome: x.nome, documento: x.documento, resolvidoPorNome: x.resolvidoPor, titulos: x.c.tituloIds.map((i) => ts.find((t) => t.id === i)).filter(Boolean) }));
+  }
+
+  async resolverComprovante(e: Escopo, u: UsuarioLogado, id: string, d: { status: 'baixado' | 'recusado'; observacao?: string | null }) {
+    const [c] = await this.db.select().from(cobrancaComprovantes).where(eq(cobrancaComprovantes.id, id));
+    if (!c) throw new NotFoundException('Comprovante não encontrado.');
+    await this.exigirAcesso(e, c.pessoaId);
+    const [r] = await this.db.update(cobrancaComprovantes).set({ status: d.status, observacao: d.observacao ?? null, resolvidoPor: u.id, resolvidoEm: new Date() }).where(eq(cobrancaComprovantes.id, id)).returning();
+    await this.db.insert(cobrancaContatos).values({ pessoaId: c.pessoaId, usuarioId: u.id, cobradorId: e.cobradorId, tipo: 'sistema', texto: d.status === 'baixado' ? `Comprovante de ${c.valor ? formatarReais(c.valor) : 'pagamento'} conferido e baixado.` : `Comprovante recusado${d.observacao ? `: ${d.observacao}` : '.'}` });
+    return r;
   }
 
   // ───────────── Painel ─────────────
