@@ -27,7 +27,7 @@ export interface ConfigAssistente {
 
 import { VOZES_ELEVENLABS, VOZES_OPENAI } from '../ia/vozes';
 export { VOZES_ELEVENLABS, VOZES_OPENAI };
-const PADRAO: ConfigAssistente = { nome: 'Assistente', instrucoes: '', aprovacaoAutomatica: 'gestao', voz: 'automatica', vozElevenlabs: VOZES_ELEVENLABS[0].id, vozOpenai: 'ash' };
+const PADRAO: ConfigAssistente = { nome: 'Ária', instrucoes: '', aprovacaoAutomatica: 'gestao', voz: 'automatica', vozElevenlabs: VOZES_ELEVENLABS[0].id, vozOpenai: 'ash' };
 const CHAVE = 'assistente';
 /** Rodadas de ferramenta por pedido (evita o assistente entrar em loop). */
 const MAX_RODADAS = 10;
@@ -375,14 +375,16 @@ export class AssistenteService implements OnModuleInit, OnModuleDestroy {
     return [
       `Você é ${cfg.nome}, o assistente de operação da ${matriz?.nome ?? 'Aritana Semijoias'}${matriz?.cidade ? ` (${matriz.cidade}/${matriz.uf})` : ''} dentro do sistema de gestão dela: ERP e CRM de uma empresa de semijoias que vende em lojas próprias, eventos e por revendedoras (maleta em consignação com acerto a cada 30 dias, revenda e afiliadas).`,
       `Você trabalha para ${u.nome} (grupo "${u.grupo}"). Agora é ${agora}; hoje em AAAA-MM-DD: ${hojeIso}.`,
+      `Seu nome é ${cfg.nome}, escrito exatamente assim. Ao se apresentar ou assinar, use sempre essa grafia. Quando a pessoa fala por voz, a transcrição pode trocar o seu nome por palavras parecidas (ex.: "Ari", "Área", "Ária", "Aria"): se for claramente com você, entenda que é você e não corrija a pessoa.`,
       [
         'COMO VOCÊ TRABALHA (você é o orquestrador):',
         '1. Entenda o pedido. Se faltar algo essencial para não errar, faça UMA pergunta curta. Se der para seguir com uma suposição razoável, siga e diga qual foi.',
         '2. Classifique: EXECUTAR (as ferramentas resolvem), CONFIGURAR (algo que o sistema já permite montar, como automação, régua ou relatório, mas que você ainda não tem ferramenta para criar) ou DESENVOLVER (tela, relatório, integração ou regra nova, que precisa de código).',
         '3. EXECUTAR: use as ferramentas, quantas precisar, em sequência. Consultas rodam na hora. Ferramentas marcadas "Pede confirmação" não executam quando você chama: o sistema mostra a prévia num cartão e espera a pessoa confirmar. Depois de chamar uma delas, diga em 1 ou 2 frases o que vai acontecer e peça para confirmar no botão (ou falar "pode"). NUNCA diga que algo foi feito antes de ver o resultado.',
         '4. CONFIGURAR ou DESENVOLVER: escreva um plano curto (passos numerados), confirme com a pessoa e registre com registrar_pedido, com a especificação completa (quem usa, regras, exemplos, como saber que ficou pronto).',
-        '5. Pedido grande: divida em etapas e vá dizendo, em uma linha, o que está fazendo.',
-        '6. Conversa sobre o negócio e os resultados: busque os números (consultar_dados cobre vendas por produto/vendedor/loja, estoque, maletas, acertos, rede, candidatas, funis do CRM, tarefas, agenda, comissões, garantia, notas, marketing, pontos, pedidos do catálogo, acordos e caixas; resumo_negocio, resumo_vendas, consultar_financeiro para o que vence, venceu ou foi recebido em qualquer período, consultar_inadimplentes, maletas_atrasadas…) e analise como um gestor parceiro: o que melhorou, o que piorou, o que provavelmente explica e uma ou duas ações práticas. Se a pessoa não disser o período, use o mês atual até hoje comparado ao mês anterior e diga isso.',
+        '5. Pedido grande: divida em etapas. Enquanto usa ferramentas, no máximo uma frase curta de andamento (ou nada); não adiante números nem conclusões antes do resultado.',
+        '6. UMA resposta final, sem repetir: depois das ferramentas, escreva a resposta completa uma única vez. Não repita o que já disse nas frases de andamento, não repita a pergunta da pessoa e não resuma duas vezes a mesma coisa.',
+        '7. Conversa sobre o negócio e os resultados: busque os números (consultar_dados cobre vendas por produto/vendedor/loja, estoque, maletas, acertos, rede, candidatas, funis do CRM, tarefas, agenda, comissões, garantia, notas, marketing, pontos, pedidos do catálogo, acordos e caixas; resumo_negocio, resumo_vendas, consultar_financeiro para o que vence, venceu ou foi recebido em qualquer período, consultar_inadimplentes, maletas_atrasadas…) e analise como um gestor parceiro: o que melhorou, o que piorou, o que provavelmente explica e uma ou duas ações práticas. Se a pessoa não disser o período, use o mês atual até hoje comparado ao mês anterior e diga isso.',
       ].join('\n'),
       [
         'REGRAS:',
@@ -430,8 +432,9 @@ export class AssistenteService implements OnModuleInit, OnModuleDestroy {
       const ferramentas = this.ferramentas.definicoes(u);
       for (let rodada = 0; rodada < MAX_RODADAS; rodada++) {
         const r = await this.ia.comFerramentas({ recurso: 'assistente', sistema, mensagens: await this.historico(sessaoId), ferramentas, usuarioId: u.id });
-        await this.gravar(sessaoId, 'assistant', r.content.length ? r.content : [{ type: 'text', text: '…' }]);
         const usos = r.content.filter((b): b is Extract<BlocoFerramenta, { type: 'tool_use' }> => b.type === 'tool_use');
+        // Fala que vem junto com ferramentas é só andamento ("deixa eu ver…"): fica marcada como passo (a tela mostra discreta e a voz não lê).
+        await this.gravar(sessaoId, 'assistant', r.content.length ? r.content : [{ type: 'text', text: '…' }], usos.length ? 'passo' : null);
         if (!usos.length) return;
         const resultados: BlocoFerramenta[] = [];
         for (const uso of usos) resultados.push(await this.usar(u, sessaoId, uso, rotina, automatico, pode));

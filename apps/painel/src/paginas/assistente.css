@@ -99,3 +99,6 @@
 .assistente-pontinhos i:nth-child(3) { animation-delay: 0.3s; }
 @keyframes assistente-pulo { 0%, 60%, 100% { transform: translateY(0); opacity: 0.45; } 30% { transform: translateY(-5px); opacity: 1; } }
 @media (prefers-reduced-motion: reduce) { .assistente-cursor, .assistente-pontinhos i { animation: none; } }
+
+/* Frase de andamento entre ferramentas ("deixa eu ver…"): discreta, a resposta final vem depois. */
+.assistente .fala.dele.passo { background: transparent; border: 1px dashed var(--linha); color: var(--suave, #7a7166); font-size: 13px; padding: 6px 10px; }

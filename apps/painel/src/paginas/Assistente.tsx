@@ -126,9 +126,12 @@ async function falar(texto: string, modo: Estado['vozResposta'] = 'navegador', e
     });
   } catch (e) {
     if (exemplo) throw e;
+    avisoVoz?.((e as Error).message);
     falarNoNavegador(texto);
   }
 }
+/** Quem mostra na tela o motivo de a voz não ter saído (a conversa aberta registra). */
+let avisoVoz: ((motivo: string) => void) | null = null;
 
 export function Assistente() {
   const [aba, setAba] = useState<'conversa' | 'agentes' | 'pedidos' | 'config'>('conversa');
@@ -195,6 +198,11 @@ function Chat({ id, estado, aoApagar }: { id: string; estado: Estado; aoApagar: 
   const [arrastando, setArrastando] = useState(false);
   const seletor = useRef<HTMLInputElement>(null);
   const [ouvir, setOuvir] = useState(() => localStorage.getItem('aritana.assistente.ouvir') === '1');
+  const [falhaVoz, setFalhaVoz] = useState<string | null>(null);
+  useEffect(() => {
+    avisoVoz = (m) => setFalhaVoz(m);
+    return () => { avisoVoz = null; };
+  }, []);
   const fim = useRef<HTMLDivElement>(null);
   const caixa = useRef<HTMLDivElement>(null);
   const faladas = useRef<Set<string> | null>(null);
@@ -270,9 +278,11 @@ function Chat({ id, estado, aoApagar }: { id: string; estado: Estado; aoApagar: 
     }
     const novas = respostas.filter((m) => !faladas.current!.has(m.id));
     novas.forEach((m) => faladas.current!.add(m.id));
+    // Fala só a resposta final (as frases de andamento entre ferramentas não são lidas).
+    const finais = novas.filter((m) => m.origem !== 'passo');
     // Conversa por voz: se a pessoa falou, ele responde falando (mesmo com "Ouvir respostas" desligado).
     const falouPorVoz = s.data.mensagens.filter((m) => m.papel === 'user' && (m.origem === 'voz' || m.origem === 'texto')).at(-1)?.origem === 'voz';
-    if ((ouvir || falouPorVoz) && novas.length) void falar(novas.map((m) => m.fala ?? m.texto).join(' '), estado.vozResposta);
+    if ((ouvir || falouPorVoz) && finais.length) void falar(finais.map((m) => m.fala ?? m.texto).join(' '), estado.vozResposta);
   }, [s.data, ouvir, estado.vozResposta]);
 
   const enviandoAnexo = pendentes.some((p) => !p.id && !p.erro);
@@ -333,6 +343,12 @@ function Chat({ id, estado, aoApagar }: { id: string; estado: Estado; aoApagar: 
         </label>
         <button className="botao claro pequeno" onClick={() => window.confirm('Excluir esta conversa? Não dá para desfazer.') && apagar.mutate()} disabled={s.data.ocupada}>Excluir conversa</button>
       </div>
+      {falhaVoz && (
+        <div className="aviso alerta" style={{ margin: '0 0 8px', fontSize: 13 }}>
+          A voz não saiu: {falhaVoz} {estado.vozResposta !== 'navegador' ? '(tentei a voz do navegador no lugar). Confira a chave e a voz em Assistente › Configurar.' : ''}
+          <button className="botao claro pequeno" style={{ marginLeft: 8 }} onClick={() => setFalhaVoz(null)}>Ok</button>
+        </div>
+      )}
       <div className="assistente-mensagens" ref={caixa}>
         {linha.length === 0 && (
           <div className="assistente-sugestoes">
@@ -340,11 +356,11 @@ function Chat({ id, estado, aoApagar }: { id: string; estado: Estado; aoApagar: 
           </div>
         )}
         {linha.map((x) => (x.tipo === 'msg' ? (
-          <div key={x.m.id} className={`fala ${x.m.papel === 'user' ? 'minha' : 'dele'}`}>
+          <div key={x.m.id} className={`fala ${x.m.papel === 'user' ? 'minha' : 'dele'}${x.m.origem === 'passo' ? ' passo' : ''}`}>
             {x.m.anexos?.length > 0 && <div className="assistente-anexos-msg">{x.m.anexos.map((a) => <AnexoNaMensagem key={a.id} a={a} />)}</div>}
             {x.m.origem === 'voz' && <span className="muted" title="Falado">🎤 </span>}
             {x.m.papel === 'assistant' && digitando.has(x.m.id) ? <Digitado texto={x.m.texto} aoAvancar={acompanhar} aoTerminar={() => terminouDeDigitar(x.m.id)} /> : x.m.texto}
-            {x.m.papel === 'assistant' && !digitando.has(x.m.id) && <button className="assistente-falar" title="Ouvir" onClick={() => void falar(x.m.fala ?? x.m.texto, estado.vozResposta)}>🔊</button>}
+            {x.m.papel === 'assistant' && x.m.origem !== 'passo' && !digitando.has(x.m.id) && <button className="assistente-falar" title="Ouvir" onClick={() => void falar(x.m.fala ?? x.m.texto, estado.vozResposta)}>🔊</button>}
           </div>
         ) : (
           <CartaoAcao key={x.a.id} a={x.a} decidir={(confirmar) => decidir.mutate({ acaoId: x.a.id, confirmar })} ocupado={decidir.isPending} />
