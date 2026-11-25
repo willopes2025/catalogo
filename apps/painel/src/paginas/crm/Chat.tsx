@@ -169,6 +169,7 @@ export function Chat({ conversaId, leadId, aoMudar, abas, aoSair }: { conversaId
   const [interna, setInterna] = useState(false);
   const [verTemplates, setVerTemplates] = useState(false);
   const [transferir, setTransferir] = useState(false);
+  const transferirPara = useQuery({ queryKey: ['crm', 'transferir-para', conversaId], enabled: transferir, queryFn: () => api<{ id: string; nome: string; grupo: string; pode: boolean; motivo: string | null }[]>(`/crm/conversas/${conversaId}/transferir-para`) });
   // Balão aberto: qual mensagem está com o seletor de reação; qual painel do rodapé (emojis, formulários); menu "⋮" do topo.
   const [aba, setAba] = useState<'chat' | 'notas' | 'tarefas'>('chat');
   const [unificando, setUnificando] = useState(false);
@@ -382,8 +383,14 @@ export function Chat({ conversaId, leadId, aoMudar, abas, aoSair }: { conversaId
           <span>Transferir para:</span>
           <div className="flex" style={{ gap: 6, flexWrap: 'wrap' }}>
             <button className="botao claro pequeno" onClick={() => { acao.mutate({ rota: 'transferir', corpo: { usuarioId: null } }); setTransferir(false); }}>Devolver para a fila</button>
-            {atendentes.data?.filter((a) => a.id !== c.atendenteId).map((a) => <button key={a.id} className="botao claro pequeno" onClick={() => { acao.mutate({ rota: 'transferir', corpo: { usuarioId: a.id } }); setTransferir(false); }}>{a.nome}</button>)}
+            {transferirPara.isLoading && <span className="muted">Carregando…</span>}
+            {transferirPara.data?.filter((a) => a.id !== c.atendenteId).map((a) => (
+              <button key={a.id} className="botao claro pequeno" disabled={!a.pode} title={a.motivo ? `${a.motivo}${gestor ? '. Ajuste em Configurações › Grupos e permissões ou no número, em CRM › Configurar.' : ''}` : a.grupo} style={a.pode ? undefined : { opacity: 0.5 }} onClick={() => { acao.mutate({ rota: 'transferir', corpo: { usuarioId: a.id } }); setTransferir(false); }}>
+                {a.nome}{!a.pode && <span style={{ fontSize: 11 }}> · {a.motivo === 'Sem acesso ao CRM' ? 'sem acesso' : 'outro número'}</span>}
+              </button>
+            ))}
           </div>
+          {transferirPara.data?.some((a) => !a.pode) && <span className="muted" style={{ fontSize: 12, width: '100%' }}>Os apagados não podem receber: passe o mouse para ver o motivo.</span>}
         </div>
       )}
       {unificando && (

@@ -541,6 +541,22 @@ export class AtendimentoController {
     return this.canais.pegar(id, u.id, gestor(u));
   }
 
+  /**
+   * Para quem esta conversa pode ir: todos os usuários ativos, com o motivo de quem não pode receber
+   * (sem acesso ao CRM, ou não atende pelo número desta conversa).
+   */
+  @Get('crm/conversas/:id/transferir-para')
+  @Permissao('crm', 'editar')
+  async transferirPara(@Usuario() u: UsuarioLogado, @Param('id', ParseUUIDPipe) id: string) {
+    const { canal } = await this.conversaVisivel(u, id);
+    const us = await this.db.execute<{ id: string; nome: string; grupo: string; permissoes: Record<string, string[]> }>(sql`select u.id, u.nome, g.nome as grupo, g.permissoes from usuarios u join grupos g on g.id = u.grupo_id where u.ativo order by u.nome`);
+    return us.rows.map((x) => {
+      const crm = !!(x.permissoes['*'] || x.permissoes.crm?.includes('editar'));
+      const numero = !canal.atendentes.length || canal.atendentes.includes(x.id) || canal.usuarioId === x.id;
+      return { id: x.id, nome: x.nome, grupo: x.grupo, pode: crm && numero, motivo: !crm ? 'Sem acesso ao CRM' : !numero ? `Não atende pelo número ${canal.nome}` : null };
+    });
+  }
+
   @Post('crm/conversas/:id/transferir')
   @Permissao('crm', 'editar')
   async transferir(@Usuario() u: UsuarioLogado, @Param('id', ParseUUIDPipe) id: string, @Body() body: unknown) {
@@ -549,6 +565,8 @@ export class AtendimentoController {
       const { canal } = await this.conversaVisivel(u, id);
       const [dest] = await this.db.select({ id: usuarios.id, ativo: usuarios.ativo }).from(usuarios).where(eq(usuarios.id, usuarioId));
       if (!dest?.ativo) throw new BadRequestException('Atendente não encontrado.');
+      const [g] = (await this.db.execute<{ permissoes: Record<string, string[]> }>(sql`select g.permissoes from usuarios u join grupos g on g.id = u.grupo_id where u.id = ${usuarioId}`)).rows;
+      if (!(g?.permissoes['*'] || g?.permissoes.crm?.includes('editar'))) throw new BadRequestException('Esta pessoa não tem acesso ao CRM. Libere em Configurações › Grupos e permissões (CRM › editar).');
       if (canal.atendentes.length && !canal.atendentes.includes(usuarioId) && canal.usuarioId !== usuarioId) throw new BadRequestException('Esta pessoa não atende por este número.');
     }
     return this.canais.transferir(id, usuarioId, u.id, gestor(u));

@@ -4190,3 +4190,21 @@ test('importar histórico do WhatsApp: servidor próprio pede o QR uma vez, grav
   assert.equal((await ok('POST', `/crm/importacoes/${i2.id}/cancelar`)).status, 'erro');
   await ok('DELETE', `/crm/canais/${c2.id}`);
 });
+
+test('transferir conversa: lista todos os usuários, dizendo quem não pode receber e por quê', async () => {
+  const c = await ok('POST', '/crm/canais', { nome: 'Número transferência', tipo: 'evolution' });
+  await fetch(`${SIM}/__evo/conectar?i=${encodeURIComponent(c.config.instancia)}`);
+  const hook = (await recebidos()).filter((r) => r.caminho === '/evo/instance/create' && r.corpo.instanceName === c.config.instancia).pop().corpo.webhook.url.replace('http://localhost:3100', '');
+  await fetch(API.replace(/\/api$/, '') + hook, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ event: 'messages.upsert', data: { key: { remoteJid: '5527966620001@s.whatsapp.net', fromMe: false, id: 'TRF1' }, pushName: 'Cliente Transfere', message: { conversation: 'oi' }, messageTimestamp: Math.floor(Date.now() / 1000) } }) });
+  const cv = (await ok('GET', '/crm/conversas?aba=fila')).find((x) => x.telefone === '5527966620001');
+  const lista = await ok('GET', `/crm/conversas/${cv.id}/transferir-para`);
+  const ativos = (await ok('GET', '/usuarios')).filter((u) => u.ativo);
+  assert.equal(lista.length, ativos.length, 'todo usuário ativo aparece');
+  const semCrm = lista.find((x) => !x.pode);
+  assert.ok(semCrm, 'há quem não pode receber');
+  assert.equal(semCrm.motivo, 'Sem acesso ao CRM');
+  assert.equal((await chamar('POST', `/crm/conversas/${cv.id}/transferir`, { usuarioId: semCrm.id })).status, 400);
+  const pode = lista.find((x) => x.pode);
+  await ok('POST', `/crm/conversas/${cv.id}/transferir`, { usuarioId: pode.id });
+  await ok('DELETE', `/crm/canais/${c.id}`);
+});
