@@ -172,6 +172,13 @@ export function Chat({ conversaId, leadId, aoMudar, abas, aoSair }: { conversaId
   const [texto, setTexto] = useState('');
   const [interna, setInterna] = useState(false);
   const [verTemplates, setVerTemplates] = useState(false);
+  // Template da Meta escolhido: espera o "Enviar" (não vai sozinho).
+  const [templateEscolhido, setTemplateEscolhido] = useState<Template | null>(null);
+  // Assinar com o nome de quem está atendendo (cada pessoa escolhe; fica salvo neste navegador).
+  const [assinar, setAssinarEstado] = useState(() => { try { return localStorage.getItem('aritana.crm.assinar') === '1'; } catch { return false; } });
+  const setAssinar = (v: boolean) => { setAssinarEstado(v); try { localStorage.setItem('aritana.crm.assinar', v ? '1' : '0'); } catch { /* sem armazenamento */ } };
+  const meuNome = (lerSessao()?.usuario?.nome ?? '').trim().split(/\s+/)[0] ?? '';
+  const comAssinatura = (t: string) => (assinar && meuNome && t.trim() ? `*${meuNome}:*\n${t}` : t);
   const [transferir, setTransferir] = useState(false);
   const transferirPara = useQuery({ queryKey: ['crm', 'transferir-para', conversaId], enabled: transferir, queryFn: () => api<{ id: string; nome: string; grupo: string; pode: boolean; motivo: string | null }[]>(`/crm/conversas/${conversaId}/transferir-para`) });
   // Balão aberto: qual mensagem está com o seletor de reação; qual painel do rodapé (emojis, formulários); menu "⋮" do topo.
@@ -213,6 +220,7 @@ export function Chat({ conversaId, leadId, aoMudar, abas, aoSair }: { conversaId
     onSuccess: () => {
       setTexto('');
       setVerTemplates(false);
+      setTemplateEscolhido(null);
       setCitar(null);
       setPainel(null);
       atualizar();
@@ -300,8 +308,9 @@ export function Chat({ conversaId, leadId, aoMudar, abas, aoSair }: { conversaId
     requestAnimationFrame(() => { el?.focus(); el?.setSelectionRange(ini + pedaco.length, ini + pedaco.length); });
   };
   const mandar = () => {
-    if (pendente) return anexar.mutate({ arquivo: pendente.arquivo, nome: pendente.nome, legenda: texto });
-    if (texto.trim() && !enviar.isPending) enviar.mutate({ tipo: 'texto', texto });
+    if (templateEscolhido) return enviar.mutate({ tipo: 'template', templateId: templateEscolhido.id });
+    if (pendente) return anexar.mutate({ arquivo: pendente.arquivo, nome: pendente.nome, legenda: texto.trim() ? comAssinatura(texto) : texto });
+    if (texto.trim() && !enviar.isPending) enviar.mutate({ tipo: 'texto', texto: comAssinatura(texto) });
   };
 
   // "/" → respostas rápidas e templates (digitar mais filtra pelo nome); "@nome" na conversa interna → colegas.
@@ -318,7 +327,7 @@ export function Chat({ conversaId, leadId, aoMudar, abas, aoSair }: { conversaId
         .filter((t) => (t.tipo === 'meta' ? t.status === 'APPROVED' && cv?.canalTipo === 'oficial' : cv?.canalTipo !== 'oficial' || cv?.dentroDaJanela))
         .filter((t) => t.nome.toLowerCase().includes(termo) || t.texto.toLowerCase().includes(termo))
         // Modelo livre entra no campo para você ajustar antes de enviar; o da Meta vai como está (é o texto aprovado).
-        .map((t) => (t.tipo === 'meta' ? { rotulo: `${t.nome} — ${t.texto.slice(0, 60)}`, valor: '', etiqueta: 'Template da Meta: envia na hora', templateId: t.id } : { rotulo: `${t.nome} — ${t.texto.slice(0, 60)}`, valor: t.texto, etiqueta: 'Template' }));
+        .map((t) => (t.tipo === 'meta' ? { rotulo: `${t.nome} — ${t.texto.slice(0, 60)}`, valor: '', etiqueta: 'Template da Meta', templateId: t.id } : { rotulo: `${t.nome} — ${t.texto.slice(0, 60)}`, valor: t.texto, etiqueta: 'Template' }));
       return [...rapidas, ...modelos].slice(0, 12);
     }
     const arroba = texto.match(/(^|\s)@(\S*)$/);
@@ -326,8 +335,9 @@ export function Chat({ conversaId, leadId, aoMudar, abas, aoSair }: { conversaId
     return [];
   }, [texto, interna, respostas.data, atendentes.data, templates.data, cv?.canalTipo, cv?.dentroDaJanela]);
   const usarSugestao = (sg: { valor: string; templateId?: string; midia?: { nome: string; mime: string | null; arquivo: string } }) => {
-    if (sg.templateId) enviar.mutate({ tipo: 'template', templateId: sg.templateId });
-    else setTexto(sg.valor);
+    // Template da Meta: fica escolhido esperando o "Enviar"; o resto entra no campo para ajustar.
+    if (sg.templateId) { setTemplateEscolhido((templates.data ?? []).find((t) => t.id === sg.templateId) ?? null); setTexto(''); }
+    else setTexto(preencherModelo(sg.valor));
     // Resposta rápida com foto, vídeo ou áudio: o arquivo fica anexado esperando o "Enviar" (o texto vira legenda).
     if (sg.midia) {
       const m = sg.midia;
@@ -336,6 +346,20 @@ export function Chat({ conversaId, leadId, aoMudar, abas, aoSair }: { conversaId
         .then((b) => escolher(m.mime ? new Blob([b], { type: m.mime }) : b, m.nome))
         .catch((e) => setErroLocal((e as Error).message));
     }
+    campoTexto.current?.focus();
+  };
+  // Modelo livre: troca [NOME]/{{nome}} pelo nome do contato e [ATENDENTE] pelo seu, para você só conferir.
+  function preencherModelo(t: string) {
+    const contatoNome = q.data?.contato?.nome ?? '';
+    const primeiro = /^\d+$/.test(contatoNome) ? '' : contatoNome.trim().split(/\s+/)[0] ?? '';
+    return t
+      .replace(/\[NOME\]|\{\{\s*(primeiro_nome|nome)\s*\}\}/gi, primeiro)
+      .replace(/\[ATENDENTE\]/gi, meuNome);
+  }
+  const escolherTemplate = (t: Template) => {
+    setVerTemplates(false);
+    if (t.tipo === 'meta') { setTemplateEscolhido(t); setTexto(''); }
+    else { setTemplateEscolhido(null); setTexto(preencherModelo(t.texto)); }
     campoTexto.current?.focus();
   };
   const semSugestao = !interna && /^\/[^\n]*$/.test(texto) && !sugestoes.length;
@@ -521,7 +545,7 @@ export function Chat({ conversaId, leadId, aoMudar, abas, aoSair }: { conversaId
               {!usaveis.length && <div className="muted" style={{ padding: 8 }}>Nenhum template disponível para este número.</div>}
               {usaveis.map((t) => (
                 <div key={t.id} className="linha-template">
-                  <button onClick={() => enviar.mutate({ tipo: 'template', templateId: t.id })} disabled={enviar.isPending} title="Enviar este template">
+                  <button onClick={() => escolherTemplate(t)} title="Colocar este template na caixa de mensagem">
                     <b>{t.nome}</b> {t.tipo === 'meta' ? <span className="tag">Meta</span> : null} <span className="muted">— {t.texto.slice(0, 80)}</span>
                   </button>
                   {gestor && t.tipo !== 'meta' && <button className="apagar" title="Apagar este template" aria-label={`Apagar o template ${t.nome}`} disabled={apagarTemplate.isPending} onClick={() => window.confirm(`Apagar o template "${t.nome}"? Ele some para toda a equipe.`) && apagarTemplate.mutate(t.id)}>🗑</button>}
@@ -548,6 +572,15 @@ export function Chat({ conversaId, leadId, aoMudar, abas, aoSair }: { conversaId
                   <b>{f.titulo}</b> <span className="muted">— coloca o link na mensagem</span>
                 </button>
               ))}
+            </div>
+          )}
+          {templateEscolhido && !interna && (
+            <div className="citando">
+              <div style={{ minWidth: 0 }}>
+                <b>Template da Meta: {templateEscolhido.nome}</b> <span className="muted">(vai do jeito aprovado; aperte Enviar)</span>
+                <div className="previa">{templateEscolhido.texto}</div>
+              </div>
+              <button className="icone-chat" aria-label="Tirar o template" onClick={() => setTemplateEscolhido(null)}>✕</button>
             </div>
           )}
           {citar && !interna && (
@@ -594,6 +627,7 @@ export function Chat({ conversaId, leadId, aoMudar, abas, aoSair }: { conversaId
           />
           <div className="acoes">
             <label className="check" style={{ fontSize: 13 }}><input type="checkbox" checked={interna} onChange={(e) => setInterna(e.target.checked)} /> 🔒 Interna</label>
+            {!interna && meuNome && <label className="check" style={{ fontSize: 13 }} title={`A mensagem sai com "${meuNome}:" em cima, para o cliente saber quem está falando`}><input type="checkbox" checked={assinar} onChange={(e) => setAssinar(e.target.checked)} /> Mostrar meu nome</label>}
             <button className="botao claro pequeno" title="Emojis" aria-label="Emojis" aria-expanded={painel === 'emoji'} disabled={!podeEscrever} onClick={() => setPainel(painel === 'emoji' ? null : 'emoji')}>😀</button>
             {!interna && <button className="botao claro pequeno" onClick={() => setVerTemplates((v) => !v)}>Templates</button>}
             {!interna && <button className="botao claro pequeno" disabled={!podeEscrever || anexar.isPending || (c.canalTipo === 'oficial' && !c.dentroDaJanela)} onClick={() => arquivo.current?.click()}>{anexar.isPending ? 'Enviando…' : '📎 Arquivo'}</button>}
@@ -610,7 +644,7 @@ export function Chat({ conversaId, leadId, aoMudar, abas, aoSair }: { conversaId
             ) : (
               <>
                 {!interna && !texto.trim() && !pendente && typeof MediaRecorder !== 'undefined' && <button className="botao claro pequeno" title="Gravar um áudio" aria-label="Gravar um áudio" disabled={!podeEscrever || anexar.isPending || (c.canalTipo === 'oficial' && !c.dentroDaJanela)} onClick={() => void gravar()}>🎤 Áudio</button>}
-                <button className="botao pequeno" disabled={(!texto.trim() && !pendente) || enviar.isPending || anexar.isPending || !podeEscrever} onClick={() => (interna ? enviar.mutate({ tipo: 'texto', texto }) : mandar())}>{interna ? 'Anotar' : anexar.isPending ? 'Enviando…' : 'Enviar'}</button>
+                <button className="botao pequeno" disabled={(!texto.trim() && !pendente && !(templateEscolhido && !interna)) || enviar.isPending || anexar.isPending || !podeEscrever} onClick={() => (interna ? enviar.mutate({ tipo: 'texto', texto }) : mandar())}>{interna ? 'Anotar' : anexar.isPending ? 'Enviando…' : 'Enviar'}</button>
               </>
             )}
           </div>

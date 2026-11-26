@@ -248,6 +248,14 @@ export class MaletasService {
       .select({ id: documentos.id, tipo: documentos.tipo, status: documentos.status, token: documentos.token, assinadoEm: documentos.assinadoEm })
       .from(documentos)
       .where(and(eq(documentos.maletaId, id), sql`${documentos.status} <> 'cancelado'`));
+    // Parcelas dos acertos (para receber na própria maleta: baixa ou Pix/boleto).
+    const parcelasAcerto = historico.length
+      ? await this.db
+          .select({ id: titulos.id, acertoId: titulos.origemId, descricao: titulos.descricao, valor: titulos.valor, vencimento: titulos.vencimento, status: titulos.status, pagoEm: titulos.pagoEm, formaPagamento: titulos.formaPagamento, cobrancaUrl: titulos.cobrancaUrl, pixCopiaCola: titulos.pixCopiaCola, cobrancaTipo: titulos.cobrancaTipo })
+          .from(titulos)
+          .where(and(eq(titulos.origemTipo, 'acerto'), inArray(titulos.origemId, historico.map((a) => a.id)), sql`${titulos.status} <> 'cancelado'`))
+          .orderBy(asc(titulos.vencimento), asc(titulos.parcela))
+      : [];
     const totais = {
       pecas: comSaldo.reduce((a, i) => a + i.naMaleta, 0),
       valor: comSaldo.reduce((a, i) => a + i.naMaleta * i.preco, 0),
@@ -255,7 +263,7 @@ export class MaletasService {
       valorEnviado: comSaldo.reduce((a, i) => a + i.enviada * i.preco, 0),
     };
     const diasAtraso = m.maleta.status === 'aberta' ? Math.max(0, diasEntre(m.maleta.dataLimite, hoje())) : 0;
-    return { ...m.maleta, representante: m.representante, telefone: m.telefone, cidade: m.cidade, origem: m.origem, itens: comSaldo, acertos: historico, conferencias, documentos: docs, totais, diasAtraso };
+    return { ...m.maleta, representante: m.representante, telefone: m.telefone, cidade: m.cidade, origem: m.origem, itens: comSaldo, acertos: historico, parcelasAcerto, conferencias, documentos: docs, totais, diasAtraso };
   }
 
   /**
@@ -647,6 +655,27 @@ export class MaletasService {
       await tx.update(maletas).set({ status: 'aberta', acertadaEm: null, observacaoInterna: sql`concat_ws(E'\n', ${maletas.observacaoInterna}, ${nota2}::text)` }).where(eq(maletas.id, id));
       await this.auditoria.registrar({ usuarioId, acao: 'estornar_acerto', entidade: 'maleta', entidadeId: id, dados: { motivo, acerto: a, parcelas: ts.map((t) => ({ id: t.id, valor: t.valor, status: t.status })), viraCredito } }, tx);
       return { ok: true, parcelasCanceladas: ts.length, viraCredito, apagarNoAsaas };
+    });
+  }
+
+  /** Parcela de um acerto desta maleta, travada para mexer. */
+  async parcelaDoAcerto(tx: Tx, maletaId: string, tituloId: string) {
+    const [t] = await tx.select().from(titulos).where(eq(titulos.id, tituloId)).for('update');
+    if (!t || t.origemTipo !== 'acerto' || !t.origemId) throw new NotFoundException('Parcela não encontrada.');
+    const [a] = await tx.select({ id: acertos.id }).from(acertos).where(and(eq(acertos.id, t.origemId), eq(acertos.maletaId, maletaId)));
+    if (!a) throw new BadRequestException('Esta parcela não é de um acerto desta maleta.');
+    return t;
+  }
+
+  /** Recebe (dá baixa) uma parcela do acerto pela tela da maleta: Pix, dinheiro, cartão ou depósito. */
+  async receberParcela(maletaId: string, d: { tituloId: string; formaPagamento: string; contaId?: string | null }, usuarioId: string) {
+    return this.db.transaction(async (tx) => {
+      const t = await this.parcelaDoAcerto(tx, maletaId, d.tituloId);
+      if (t.status !== 'aberto' && t.status !== 'protestado') throw new BadRequestException(`Esta parcela está ${t.status}.`);
+      const pagoEm = hoje();
+      await tx.update(titulos).set({ status: 'pago', pagoEm, valorPago: t.valor, contaId: d.contaId ?? null, formaPagamento: d.formaPagamento }).where(eq(titulos.id, t.id));
+      await this.auditoria.registrar({ usuarioId, acao: 'baixar', entidade: 'titulo', entidadeId: t.id, dados: { origem: 'maleta', maletaId, formaPagamento: d.formaPagamento, contaId: d.contaId ?? null, valorPago: t.valor } }, tx);
+      return { ok: true, cobrancaAnterior: t.cobrancaExternaId, pagoEm, valor: t.valor };
     });
   }
 

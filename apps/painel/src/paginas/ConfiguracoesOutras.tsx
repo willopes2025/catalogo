@@ -11,6 +11,7 @@ import { soVazios, useConsulta } from '../componentes/consultas';
 export function Usuarios() {
   const qc = useQueryClient();
   const q = useQuery({ queryKey: ['usuarios'], queryFn: () => api<any[]>('/usuarios') });
+  const [editandoNome, setEditandoNome] = useState<{ id: string; nome: string } | null>(null);
   const grupos = useQuery({ queryKey: ['grupos'], queryFn: () => api<any[]>('/grupos') });
   const [novo, setNovo] = useState({ nome: '', email: '', grupoId: '' });
   const [senha, setSenha] = useState<{ email: string; senha: string } | null>(null);
@@ -35,7 +36,20 @@ export function Usuarios() {
         <tbody>
           {q.data!.map((u) => (
             <tr key={u.id}>
-              <td><b>{u.nome}</b></td>
+              <td>
+                {editandoNome?.id === u.id ? (
+                  <form className="flex" style={{ gap: 6 }} onSubmit={(e) => { e.preventDefault(); const nome = (editandoNome?.nome ?? "").trim(); if (nome.length >= 2 && nome !== u.nome) editar.mutate({ id: u.id, corpo: { nome } }, { onSuccess: () => setEditandoNome(null) }); else setEditandoNome(null); }}>
+                    <input autoFocus value={editandoNome?.nome ?? ""} maxLength={120} onChange={(e) => setEditandoNome({ id: u.id, nome: e.target.value })} onKeyDown={(e) => e.key === 'Escape' && setEditandoNome(null)} aria-label="Nome do usuário" />
+                    <button className="botao pequeno" disabled={editar.isPending}>Salvar</button>
+                    <button type="button" className="botao claro pequeno" onClick={() => setEditandoNome(null)}>Cancelar</button>
+                  </form>
+                ) : (
+                  <span className="flex" style={{ gap: 6 }}>
+                    <b>{u.nome}</b>
+                    {pode('configuracoes', 'editar') && <button className="link" title="Editar o nome" aria-label={`Editar o nome de ${u.nome}`} onClick={() => setEditandoNome({ id: u.id, nome: u.nome })}>✎ editar</button>}
+                  </span>
+                )}
+              </td>
               <td>{u.email}</td>
               <td>
                 <select value={u.grupoId} disabled={!pode('configuracoes', 'editar')} onChange={(e) => editar.mutate({ id: u.id, corpo: { grupoId: e.target.value } })}>

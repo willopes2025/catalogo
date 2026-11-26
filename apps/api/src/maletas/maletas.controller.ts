@@ -1,10 +1,10 @@
 import { Body, Controller, Get, Inject, NotFoundException, Param, ParseUUIDPipe, Post, Query } from '@nestjs/common';
-import { and, desc, eq, gte, lte, lt, sql, type SQL, ilike, or } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, lte, lt, sql, type SQL, ilike, or } from 'drizzle-orm';
 import { z } from 'zod';
 import { DB, type Db } from '../comum/db.module';
 import { Permissao, Publico, Usuario, temPermissao, type UsuarioLogado } from '../comum/auth';
 import { dataISO, validar } from '../comum/validacao';
-import { maletaItens, maletas, pessoas, produtos } from '../db/schema';
+import { contas, maletaItens, maletas, pessoas, produtos } from '../db/schema';
 import { MaletasService, hoje, type DadosAcerto } from './maletas.service';
 import { AsaasService } from '../integracoes/asaas.service';
 import { AuditoriaService } from '../comum/auditoria.service';
@@ -183,6 +183,32 @@ export class MaletasController {
   mudarDataAcerto(@Usuario() u: UsuarioLogado, @Param('id', ParseUUIDPipe) id: string, @Body() body: unknown) {
     const d = validar(z.object({ dataLimite: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Data inválida'), motivo: z.string().trim().min(3, 'Informe o motivo').max(300) }), body);
     return this.svc.mudarDataAcerto(id, d, u.id, temPermissao(u.permissoes, 'maletas', 'excluir'));
+  }
+
+  /** Contas para receber o acerto (onde o dinheiro entrou). */
+  @Get('recebimento/contas')
+  @Permissao('maletas', 'editar')
+  contasRecebimento() {
+    return this.db.select({ id: contas.id, nome: contas.nome, tipo: contas.tipo }).from(contas).where(eq(contas.ativo, true)).orderBy(asc(contas.nome));
+  }
+
+  /** Dá baixa numa parcela do acerto pela própria maleta. */
+  @Post(':id/receber')
+  @Permissao('maletas', 'editar')
+  async receber(@Usuario() u: UsuarioLogado, @Param('id', ParseUUIDPipe) id: string, @Body() body: unknown) {
+    const d = validar(z.object({ tituloId: z.string().uuid(), formaPagamento: z.enum(['pix', 'dinheiro', 'debito', 'credito', 'deposito', 'boleto']), contaId: z.string().uuid().nullable().optional() }), body);
+    const r = await this.svc.receberParcela(id, d, u.id);
+    if (r.cobrancaAnterior) await this.asaas.informarPagamentoManual(r.cobrancaAnterior, r.pagoEm, r.valor);
+    return { ok: true };
+  }
+
+  /** Gera Pix ou boleto (Asaas) de uma parcela do acerto. */
+  @Post(':id/cobrar')
+  @Permissao('maletas', 'editar')
+  async cobrar(@Usuario() u: UsuarioLogado, @Param('id', ParseUUIDPipe) id: string, @Body() body: unknown) {
+    const d = validar(z.object({ tituloId: z.string().uuid(), tipo: z.enum(['PIX', 'BOLETO']) }), body);
+    await this.db.transaction((tx) => this.svc.parcelaDoAcerto(tx, id, d.tituloId));
+    return this.asaas.cobrar(d.tituloId, d.tipo, u.id);
   }
 
   /** Estorna o último acerto (só a gerência: quem pode excluir em Maletas). A maleta volta aberta. */

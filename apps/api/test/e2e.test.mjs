@@ -4713,6 +4713,15 @@ test('estornar acerto: peças voltam para a maleta, parcelas canceladas (paga de
   assert.equal((await ok('GET', `/financeiro/titulos?pessoaId=${rep.id}`)).itens.length, 0, 'parcelas do acerto canceladas: ela volta a dever a maleta');
   assert.equal((await chamar('POST', `/maletas/${m.id}/estornar-acerto`, { motivo: 'de novo' })).status, 400, 'sem acerto para estornar');
   // Dá para fazer o acerto certo depois.
-  const ac2 = await ok('POST', `/maletas/${m.id}/acerto`, { forma: 'avista', modalidade: 'presencial', dataAcerto, parcelas: 1, formaPagamento: 'pix', itens: [{ produtoId: ia.produtoId, vendida: 1, devolvida: 2, perdida: 0 }, { produtoId: ib.produtoId, vendida: 0, devolvida: 1, perdida: 0 }] });
+  const ac2 = await ok('POST', `/maletas/${m.id}/acerto`, { forma: 'avista', modalidade: 'presencial', dataAcerto, parcelas: 1, formaPagamento: 'pix', usarCredito: false, itens: [{ produtoId: ia.produtoId, vendida: 1, devolvida: 2, perdida: 0 }, { produtoId: ib.produtoId, vendida: 0, devolvida: 1, perdida: 0 }] });
   assert.equal(ac2.fechou, true);
+  // Pagamento na própria maleta: o acerto não nasce pago; dá baixa escolhendo como pagou.
+  const det2 = await ok('GET', `/maletas/${m.id}`);
+  const parc = det2.parcelasAcerto.find((p) => p.status === 'aberto');
+  assert.ok(parc, 'parcela do acerto em aberto, esperando o pagamento');
+  assert.equal((await chamar('POST', `/maletas/${m.id}/receber`, { tituloId: tit.itens[0].id, formaPagamento: 'pix' })).status, 400, 'parcela de outro acerto (estornado) não');
+  await ok('POST', `/maletas/${m.id}/receber`, { tituloId: parc.id, formaPagamento: 'dinheiro' });
+  const pago = (await ok('GET', `/maletas/${m.id}`)).parcelasAcerto.find((p) => p.id === parc.id);
+  assert.deepEqual([pago.status, pago.formaPagamento], ['pago', 'dinheiro']);
+  assert.equal((await chamar('POST', `/maletas/${m.id}/receber`, { tituloId: parc.id, formaPagamento: 'pix' })).status, 400, 'não recebe duas vezes');
 });

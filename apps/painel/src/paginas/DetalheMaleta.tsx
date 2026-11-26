@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { api, pode } from '../api';
 import { data, dataHora, reais, telefone } from '../formato';
 import { Carregando, Erro, StatusMaleta, Topo } from '../componentes/ui';
@@ -101,6 +101,7 @@ export function DetalheMaleta() {
 
       <AutorizacoesDaMaleta maletaId={id!} />
       {modo === 'consignataria' && <TrocarConsignataria maletaId={id!} atual={m.representanteId} valor={m.totais.valor} fechar={() => setModo('ver')} />}
+      {m.parcelasAcerto?.length > 0 && <ReceberAcerto maletaId={id!} parcelas={m.parcelasAcerto} />}
       {modo === 'estornar' && <EstornarAcerto maletaId={id!} acerto={m.acertos.at(-1)} fechar={() => setModo('ver')} />}
       {modo === 'data' && <MudarDataAcerto maletaId={id!} atual={m.dataLimite} retirada={m.dataRetirada} fechar={() => setModo('ver')} />}
 
@@ -341,6 +342,78 @@ function EstornarAcerto({ maletaId, acerto, fechar }: { maletaId: string; acerto
         <button className="botao perigo" disabled={motivo.trim().length < 3 || !certeza || estornar.isPending} onClick={() => estornar.mutate()}>{estornar.isPending ? 'Estornando…' : 'Estornar acerto'}</button>
         <button className="botao claro" onClick={fechar}>Desistir</button>
       </div>
+    </div>
+  );
+}
+
+const FORMAS: [string, string][] = [['pix', 'Pix'], ['dinheiro', 'Dinheiro'], ['debito', 'Cartão de débito'], ['credito', 'Cartão de crédito'], ['deposito', 'Depósito/transferência']];
+const NOME_FORMA: Record<string, string> = Object.fromEntries([...FORMAS, ['boleto', 'Boleto']]);
+
+/** Pagamento do acerto na própria maleta: dar baixa (como pagou e em que conta) ou gerar Pix/boleto. */
+function ReceberAcerto({ maletaId, parcelas }: { maletaId: string; parcelas: any[] }) {
+  const qc = useQueryClient();
+  const [qs] = useSearchParams();
+  const destacar = qs.get('receber') === '1';
+  const abertas = parcelas.filter((p) => p.status === 'aberto' || p.status === 'protestado');
+  const contas = useQuery({ queryKey: ['maletas', 'contas-recebimento'], queryFn: () => api<{ id: string; nome: string }[]>('/maletas/recebimento/contas'), enabled: abertas.length > 0 && pode('maletas', 'editar') });
+  const [escolha, setEscolha] = useState<Record<string, { forma: string; contaId: string }>>({});
+  const receber = useMutation({
+    mutationFn: (p: { tituloId: string; formaPagamento: string; contaId: string | null }) => api(`/maletas/${maletaId}/receber`, { corpo: p }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['maleta', maletaId] }),
+  });
+  const cobrar = useMutation({
+    mutationFn: (p: { tituloId: string; tipo: 'PIX' | 'BOLETO' }) => api(`/maletas/${maletaId}/cobrar`, { corpo: p }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['maleta', maletaId] }),
+  });
+  const copiar = (t: string) => navigator.clipboard?.writeText(t).catch(() => undefined);
+  return (
+    <div className={`cartao coluna ${destacar && abertas.length ? 'destaque-receber' : ''}`} style={{ marginBottom: 14, ...(destacar && abertas.length ? { outline: '2px solid var(--dourado)' } : {}) }}>
+      <h3 style={{ margin: 0 }}>Pagamento do acerto</h3>
+      {destacar && abertas.length > 0 && <div className="aviso">Acerto fechado. Agora registre o pagamento: escolha como ela pagou e clique em <b>Dar baixa</b>, ou gere o Pix/boleto para ela pagar.</div>}
+      <table className="tabela">
+        <thead><tr><th>Parcela</th><th>Vencimento</th><th className="num">Valor</th><th>Situação</th><th></th></tr></thead>
+        <tbody>
+          {parcelas.map((p) => {
+            const aberta = p.status === 'aberto' || p.status === 'protestado';
+            const e = escolha[p.id] ?? { forma: p.formaPagamento && p.formaPagamento !== 'boleto' ? p.formaPagamento : 'pix', contaId: '' };
+            return (
+              <tr key={p.id}>
+                <td>{p.descricao}</td>
+                <td>{data(p.vencimento)}</td>
+                <td className="num"><b>{reais(p.valor)}</b></td>
+                <td>{aberta ? <span className="etiqueta alerta">Em aberto</span> : p.status === 'pago' ? <span className="etiqueta ok">Pago {data(p.pagoEm)}{p.formaPagamento ? ` · ${NOME_FORMA[p.formaPagamento] ?? p.formaPagamento}` : ''}</span> : <span className="etiqueta neutra">{p.status}</span>}</td>
+                <td>
+                  {aberta && pode('maletas', 'editar') && (
+                    <div className="coluna" style={{ gap: 6 }}>
+                      <div className="flex" style={{ gap: 6, flexWrap: 'wrap' }}>
+                        <select value={e.forma} onChange={(ev) => setEscolha({ ...escolha, [p.id]: { ...e, forma: ev.target.value } })} aria-label="Como pagou">{FORMAS.map(([v, n]) => <option key={v} value={v}>{n}</option>)}</select>
+                        <select value={e.contaId} onChange={(ev) => setEscolha({ ...escolha, [p.id]: { ...e, contaId: ev.target.value } })} aria-label="Conta"><option value="">Conta (opcional)</option>{contas.data?.map((c) => <option key={c.id} value={c.id}>{c.nome}</option>)}</select>
+                        <button className="botao pequeno" disabled={receber.isPending} onClick={() => receber.mutate({ tituloId: p.id, formaPagamento: e.forma, contaId: e.contaId || null })}>Dar baixa</button>
+                      </div>
+                      <div className="flex" style={{ gap: 6, flexWrap: 'wrap' }}>
+                        {p.cobrancaUrl ? (
+                          <>
+                            <a className="link" href={p.cobrancaUrl} target="_blank" rel="noreferrer">Abrir {p.cobrancaTipo === 'PIX' ? 'Pix' : 'boleto'}</a>
+                            <button className="link" onClick={() => copiar(p.cobrancaUrl)}>Copiar link</button>
+                            {p.pixCopiaCola && <button className="link" onClick={() => copiar(p.pixCopiaCola)}>Copiar Pix copia e cola</button>}
+                          </>
+                        ) : (
+                          <>
+                            <button className="botao claro pequeno" disabled={cobrar.isPending} onClick={() => cobrar.mutate({ tituloId: p.id, tipo: 'PIX' })}>Gerar Pix</button>
+                            <button className="botao claro pequeno" disabled={cobrar.isPending} onClick={() => cobrar.mutate({ tituloId: p.id, tipo: 'BOLETO' })}>Gerar boleto</button>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+      {receber.error && <Erro erro={receber.error} />}
+      {cobrar.error && <Erro erro={cobrar.error} />}
     </div>
   );
 }

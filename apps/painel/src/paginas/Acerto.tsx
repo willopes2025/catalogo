@@ -19,7 +19,7 @@ export function Acerto() {
   const [linhas, setLinhas] = useState<Linha[]>([]);
   const [bipagem, setBipagem] = useState(true);
   const [avisoBip, setAvisoBip] = useState<string | null>(null);
-  const [op, setOp] = useState({ forma: 'avista' as 'avista' | 'prazo', modalidade: 'presencial', parcial: false, parcelas: 1, primeiroVencimento: '', formaPagamento: 'pix', pagoAgora: true, usarCredito: true });
+  const [op, setOp] = useState({ forma: 'avista' as 'avista' | 'prazo', modalidade: 'presencial', parcial: false, parcelas: 1, primeiroVencimento: '', formaPagamento: 'pix', usarCredito: true });
   const leitor = useRef<HTMLInputElement>(null);
 
   // Conferência de volta feita depois do último acerto: o acerto começa com ela.
@@ -94,7 +94,7 @@ export function Acerto() {
   }
 
   const corpo = useMemo(
-    () => ({ ...op, primeiroVencimento: op.primeiroVencimento || undefined, pagoAgora: op.pagoAgora && op.parcelas === 1, itens: linhas.map(({ produtoId, vendida, devolvida, perdida }) => ({ produtoId, vendida, devolvida, perdida })) }),
+    () => ({ ...op, primeiroVencimento: op.primeiroVencimento || undefined, pagoAgora: false, itens: linhas.map(({ produtoId, vendida, devolvida, perdida }) => ({ produtoId, vendida, devolvida, perdida })) }),
     [op, linhas],
   );
   const sim = useQuery({ queryKey: ['simular', id, corpo], queryFn: () => api<any>(`/maletas/${id}/simular-acerto`, { corpo }), enabled: linhas.length > 0, placeholderData: (p) => p, retry: false });
@@ -103,7 +103,8 @@ export function Acerto() {
     onSuccess: () => {
       // A simulação não vale mais depois de fechar: remove em vez de recalcular.
       qc.removeQueries({ queryKey: ['simular', id] });
-      navegar(`/maletas/${id}`);
+      // Depois de fechar, vai direto receber: baixa (Pix, dinheiro, cartão) ou gerar Pix/boleto.
+      navegar(`/maletas/${id}?receber=1`);
       qc.invalidateQueries({ predicate: (x) => x.queryKey[0] !== 'simular' });
     },
   });
@@ -166,7 +167,6 @@ export function Acerto() {
             <Campo rotulo="Modalidade"><select value={op.modalidade} onChange={(e) => setOp({ ...op, modalidade: e.target.value })}><option value="presencial">Presencial</option><option value="video">Por vídeo</option><option value="envio">Por envio</option></select></Campo>
             <div className="campo l2"><label>&nbsp;</label>
               <div className="flex" style={{ flexWrap: 'wrap' }}>
-                <label className="check"><input type="checkbox" checked={op.pagoAgora && op.parcelas === 1} disabled={op.parcelas > 1} onChange={(e) => setOp({ ...op, pagoAgora: e.target.checked })} /> Pago agora</label>
                 <label className="check"><input type="checkbox" checked={op.usarCredito} onChange={(e) => setOp({ ...op, usarCredito: e.target.checked })} /> Usar créditos</label>
                 <label className="check"><input type="checkbox" checked={op.parcial} onChange={(e) => setOp({ ...op, parcial: e.target.checked })} /> Acerto parcial</label>
               </div>
