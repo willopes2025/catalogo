@@ -52,6 +52,8 @@ export function DetalheMaleta() {
             {aberta && pode('maletas', 'editar') && <button className="botao claro" onClick={() => { setModo(modo === 'retirar' ? 'ver' : 'retirar'); setItens([]); }}>Retirar peças</button>}
             {aberta && pode('maletas', 'editar') && <button className="botao claro" onClick={() => setModo(modo === 'consignataria' ? 'ver' : 'consignataria')}>Trocar consignatária</button>}
             {aberta && pode('maletas', 'editar') && <button className="botao claro" onClick={() => setModo(modo === 'data' ? 'ver' : 'data')}>Mudar data do acerto</button>}
+            {aberta && pode('maletas', 'editar') && <Link className="botao claro" to={`/maletas/${id}/conferencia?tipo=saida`}>Conferir saída</Link>}
+            {aberta && pode('maletas', 'editar') && <Link className="botao claro" to={`/maletas/${id}/conferencia?tipo=volta`}>Conferir volta</Link>}
             {aberta && pode('maletas', 'editar') && <Link className="botao" to={`/maletas/${id}/acerto`}>Fazer acerto</Link>}
           </>
         )}
@@ -115,6 +117,24 @@ export function DetalheMaleta() {
           ))}
         </tbody>
       </table>
+
+      {m.conferencias?.length > 0 && (
+        <div className="cartao" style={{ marginTop: 14 }}>
+          <h3 style={{ marginBottom: 8 }}>Conferências</h3>
+          {m.conferencias.map((c: any) => (
+            <details key={c.id} className="resumo-linha" style={{ display: 'block' }}>
+              <summary style={{ cursor: 'pointer' }}>
+                {c.tipo === 'saida' ? 'Saída' : 'Volta'} · {dataHora(c.criadoEm)} · conferido por <b>{c.conferidoPor ?? '—'}</b> · {c.conferidas} de {c.esperadas} peças
+                {c.faltando > 0 && <> · <span className="etiqueta alerta">faltaram {c.faltando}</span> {c.tratamento === 'retirar' ? '(tiradas da maleta)' : c.tratamento === 'cobrar' ? '(cobrar pelo custo)' : c.tratamento === 'investigar' ? '(investigar)' : ''}</>}
+                {c.sobras.length > 0 && <> · <span className="etiqueta neutra">sobraram {c.sobras.reduce((a: number, x: any) => a + x.quantidade, 0)}</span></>}
+              </summary>
+              {c.observacao && <p style={{ margin: '6px 0' }}><b>Observação:</b> {c.observacao}</p>}
+              {c.itens.filter((i: any) => i.conferido < i.esperado).length > 0 && <p style={{ margin: '6px 0' }}><b>Faltou:</b> {c.itens.filter((i: any) => i.conferido < i.esperado).map((i: any) => `${i.esperado - i.conferido}× ${i.descricao}`).join('; ')}</p>}
+              {c.sobras.length > 0 && <p style={{ margin: '6px 0' }}><b>Sobrou:</b> {c.sobras.map((x: any) => `${x.quantidade}× ${x.descricao ?? `código ${x.codigo}`}`).join('; ')}</p>}
+            </details>
+          ))}
+        </div>
+      )}
 
       {m.acertos.length > 0 && (
         <div className="cartao" style={{ marginTop: 14 }}>

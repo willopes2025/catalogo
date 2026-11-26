@@ -19,8 +19,35 @@ export function Acerto() {
   const [op, setOp] = useState({ forma: 'avista' as 'avista' | 'prazo', modalidade: 'presencial', parcial: false, parcelas: 1, primeiroVencimento: '', formaPagamento: 'pix', pagoAgora: true, usarCredito: true });
   const leitor = useRef<HTMLInputElement>(null);
 
+  // Conferência de volta feita depois do último acerto: o acerto começa com ela.
+  const conf = useMemo(() => {
+    const d = q.data;
+    if (!d) return null;
+    const ultimoAcerto = d.acertos?.at(-1)?.criadoEm ?? '';
+    return [...(d.conferencias ?? [])].reverse().find((c: any) => c.tipo === 'volta' && c.criadoEm > ultimoAcerto) ?? null;
+  }, [q.data]);
+
   useEffect(() => {
     if (!q.data) return;
+    if (conf) {
+      const porProduto = new Map<string, any>(conf.itens.map((i: any) => [i.produtoId, i]));
+      const temPre = !!q.data.prebaixaEm;
+      setBipagem(false);
+      setLinhas(
+        q.data.itens
+          .filter((i: any) => i.naMaleta > 0)
+          .map((i: any) => {
+            const c = porProduto.get(i.produtoId);
+            const devolvida = Math.min(i.naMaleta, c?.conferido ?? 0);
+            const falta = temPre && c ? Math.max(0, Math.min(c.esperado, i.naMaleta) - devolvida) : 0;
+            const perdida = conf.tratamento === 'cobrar' ? falta : 0;
+            const pendente = conf.tratamento === 'investigar' ? falta : 0;
+            return { ...i, devolvida, perdida, vendida: Math.max(0, i.naMaleta - devolvida - perdida - pendente) };
+          }),
+      );
+      if (conf.tratamento === 'investigar' && conf.faltando > 0) setOp((o) => ({ ...o, parcial: true }));
+      return;
+    }
     const temPre = !!q.data.prebaixaEm;
     setLinhas(
       q.data.itens
@@ -36,8 +63,8 @@ export function Acerto() {
   }, [q.data]);
 
   useEffect(() => {
-    if (bipagem) setLinhas((ls) => ls.map((l) => ({ ...l, vendida: l.naMaleta - l.perdida, devolvida: 0 })));
-  }, [bipagem]);
+    if (bipagem && !conf) setLinhas((ls) => ls.map((l) => ({ ...l, vendida: l.naMaleta - l.perdida, devolvida: 0 })));
+  }, [bipagem, conf]);
 
   function bipar() {
     const c = codigo.trim();
@@ -103,6 +130,8 @@ export function Acerto() {
                 </div>
                 {avisoBip && <div className="muted">{avisoBip}</div>}
               </>
+            ) : conf ? (
+              <div className="aviso">Quantidades preenchidas com a conferência de volta de {conf.conferidoPor ?? '—'} ({conf.conferidas} peça(s) voltaram{conf.faltando ? `; faltaram ${conf.faltando}: ${conf.tratamento === 'cobrar' ? 'cobradas pelo custo' : conf.tratamento === 'investigar' ? 'ficam na maleta para investigar' : 'confira'}` : ''}). Confira antes de fechar.</div>
             ) : m.prebaixaEm ? (
               <div className="aviso alerta">Quantidades preenchidas com a pré-baixa informada pela representante. Confira antes de fechar.</div>
             ) : null}

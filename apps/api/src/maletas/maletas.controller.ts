@@ -139,6 +139,23 @@ export class MaletasController {
     return this.svc.prebaixa(id, validar(prebaixaSchema, body).itens, u.id);
   }
 
+  /** Conferência peça por peça, na saída ou na volta (opcional). Fica no nome de quem está logado. */
+  @Post(':id/conferencia')
+  @Permissao('maletas', 'editar')
+  conferir(@Usuario() u: UsuarioLogado, @Param('id', ParseUUIDPipe) id: string, @Body() body: unknown) {
+    const d = validar(
+      z.object({
+        tipo: z.enum(['saida', 'volta']),
+        itens: z.array(z.object({ produtoId: z.string().uuid(), conferido: z.number().int().min(0).max(10_000) })).max(5000),
+        sobras: z.array(z.object({ codigo: z.string().max(60), quantidade: z.number().int().min(1).max(10_000) })).max(500).default([]),
+        observacao: z.string().max(1000).nullable().optional(),
+        tratamento: z.enum(['nada', 'retirar', 'cobrar', 'investigar']).default('nada'),
+      }),
+      body,
+    );
+    return this.svc.conferir(id, d, u.id);
+  }
+
   @Post(':id/simular-acerto')
   @Permissao('maletas', 'ver')
   simular(@Param('id', ParseUUIDPipe) id: string, @Body() body: unknown) {

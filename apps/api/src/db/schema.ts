@@ -2525,3 +2525,30 @@ export const maletaSolicitacoes = pgTable(
   },
   (t) => ({ pendentes: index('maleta_solicitacoes_idx').on(t.status, t.maletaId) }),
 );
+
+/**
+ * Conferência da maleta, peça por peça (bipando): na saída (antes de entregar) e na volta (antes do acerto).
+ * Opcional. Guarda o que era esperado, o que foi conferido, o que faltou, quem conferiu e a observação.
+ */
+export const maletaConferencias = pgTable(
+  'maleta_conferencias',
+  {
+    id: id(),
+    maletaId: uuid('maleta_id').notNull().references(() => maletas.id, { onDelete: 'cascade' }),
+    /** saida | volta */
+    tipo: text('tipo').notNull(),
+    usuarioId: uuid('usuario_id').references(() => usuarios.id, { onDelete: 'set null' }),
+    /** Peça por peça: esperado e conferido. */
+    itens: jsonb('itens').$type<{ produtoId: string; descricao: string; codigoBarras: string | null; esperado: number; conferido: number }[]>().notNull(),
+    /** Peças bipadas que não são desta maleta. */
+    sobras: jsonb('sobras').$type<{ codigo: string; descricao: string | null; quantidade: number }[]>().notNull().default([]),
+    esperadas: integer('esperadas').notNull(),
+    conferidas: integer('conferidas').notNull(),
+    faltando: integer('faltando').notNull(),
+    /** O que fazer com o que faltou: nada | retirar (saída: tira da maleta) | cobrar (volta: perdida, pelo custo) | investigar (volta: fica pendente). */
+    tratamento: text('tratamento').notNull().default('nada'),
+    observacao: text('observacao'),
+    criadoEm: criadoEm(),
+  },
+  (t) => ({ porMaleta: index('maleta_conferencias_idx').on(t.maletaId, t.criadoEm) }),
+);

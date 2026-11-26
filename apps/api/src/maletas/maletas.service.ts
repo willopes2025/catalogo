@@ -1,6 +1,6 @@
 import { BadRequestException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { randomBytes } from 'node:crypto';
-import { and, asc, eq, inArray, lt, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, lt, or, sql } from 'drizzle-orm';
 import {
   calcularAcerto,
   diasEntre,
@@ -17,7 +17,7 @@ import { AuditoriaService } from '../comum/auditoria.service';
 import { EstoqueService } from '../estoque/estoque.service';
 import { ConfiguracoesService } from '../configuracoes/configuracoes.service';
 import { DocumentosService } from '../documentos/documentos.service';
-import { acertos, creditos, documentos, locaisEstoque, maletaItens, maletaSolicitacoes, maletas, pessoas, produtos, titulos, usuarios } from '../db/schema';
+import { acertos, creditos, documentos, locaisEstoque, maletaConferencias, maletaItens, maletaSolicitacoes, maletas, pessoas, produtos, titulos, usuarios } from '../db/schema';
 import { PlanoContasService } from '../financeiro/plano.service';
 
 export const hoje = () => new Date(Date.now() - 3 * 3600_000).toISOString().slice(0, 10); // horário de Brasília
@@ -237,6 +237,13 @@ export class MaletasService {
       .orderBy(asc(produtos.descricao));
     const comSaldo = itens.map((i) => ({ ...i, naMaleta: i.enviada - i.vendida - i.devolvida - i.perdida }));
     const historico = await this.db.select().from(acertos).where(eq(acertos.maletaId, id)).orderBy(asc(acertos.criadoEm));
+    const conferencias = await this.db
+      .select({ c: maletaConferencias, por: usuarios.nome })
+      .from(maletaConferencias)
+      .leftJoin(usuarios, eq(usuarios.id, maletaConferencias.usuarioId))
+      .where(eq(maletaConferencias.maletaId, id))
+      .orderBy(asc(maletaConferencias.criadoEm))
+      .then((r) => r.map((x) => ({ ...x.c, conferidoPor: x.por })));
     const docs = await this.db
       .select({ id: documentos.id, tipo: documentos.tipo, status: documentos.status, token: documentos.token, assinadoEm: documentos.assinadoEm })
       .from(documentos)
@@ -248,7 +255,76 @@ export class MaletasService {
       valorEnviado: comSaldo.reduce((a, i) => a + i.enviada * i.preco, 0),
     };
     const diasAtraso = m.maleta.status === 'aberta' ? Math.max(0, diasEntre(m.maleta.dataLimite, hoje())) : 0;
-    return { ...m.maleta, representante: m.representante, telefone: m.telefone, cidade: m.cidade, origem: m.origem, itens: comSaldo, acertos: historico, documentos: docs, totais, diasAtraso };
+    return { ...m.maleta, representante: m.representante, telefone: m.telefone, cidade: m.cidade, origem: m.origem, itens: comSaldo, acertos: historico, conferencias, documentos: docs, totais, diasAtraso };
+  }
+
+  /**
+   * Conferência peça por peça (opcional). Saída: confere o que vai na maleta; o que faltou pode sair da maleta.
+   * Volta: confere o que voltou; com pré-baixa, mostra o que ela disse que devolveria e não veio
+   * (o acerto usa a conferência: o que faltou é cobrado pelo custo ou fica pendente para investigar).
+   */
+  async conferir(
+    id: string,
+    d: { tipo: 'saida' | 'volta'; itens: { produtoId: string; conferido: number }[]; sobras: { codigo: string; quantidade: number }[]; observacao?: string | null; tratamento: 'nada' | 'retirar' | 'cobrar' | 'investigar' },
+    usuarioId: string,
+  ) {
+    if (d.tipo === 'saida' && !['nada', 'retirar'].includes(d.tratamento)) throw new BadRequestException('Na saída, o que faltou pode só ficar registrado ou sair da maleta.');
+    if (d.tipo === 'volta' && !['nada', 'cobrar', 'investigar'].includes(d.tratamento)) throw new BadRequestException('Na volta, o que faltou pode ser cobrado pelo custo ou ficar para investigar.');
+    return this.db.transaction(async (tx) => {
+      const m = await this.maletaAberta(tx, id);
+      const doBanco = await tx
+        .select({ it: maletaItens, descricao: produtos.descricao, codigoBarras: produtos.codigoBarras })
+        .from(maletaItens)
+        .innerJoin(produtos, eq(produtos.id, maletaItens.produtoId))
+        .where(eq(maletaItens.maletaId, id))
+        .orderBy(asc(produtos.descricao));
+      const lidos = new Map(d.itens.map((i) => [i.produtoId, Math.max(0, Math.floor(i.conferido))]));
+      const fora = d.itens.filter((i) => !doBanco.some((b) => b.it.produtoId === i.produtoId));
+      if (fora.length) throw new BadRequestException('Há peças na conferência que não são desta maleta (mande como "sobra").');
+      const comPrebaixa = !!m.prebaixaEm;
+      const itens = doBanco
+        .map((b) => {
+          const naMaleta = b.it.enviada - b.it.vendida - b.it.devolvida - b.it.perdida;
+          // Volta com pré-baixa: espera o que ela disse que devolveria. Sem pré-baixa: tudo pode voltar (o que não voltou foi vendido).
+          const esperado = d.tipo === 'volta' && comPrebaixa ? Math.min(naMaleta, b.it.prebaixaDevolvida ?? Math.max(0, naMaleta - (b.it.prebaixaVendida ?? 0))) : naMaleta;
+          return { produtoId: b.it.produtoId, descricao: b.descricao, codigoBarras: b.codigoBarras, naMaleta, esperado, conferido: Math.min(naMaleta, lidos.get(b.it.produtoId) ?? 0) };
+        })
+        .filter((i) => i.naMaleta > 0);
+      const conta = (f: (i: (typeof itens)[number]) => number) => itens.reduce((a, i) => a + f(i), 0);
+      const faltando = d.tipo === 'volta' && !comPrebaixa ? 0 : conta((i) => Math.max(0, i.esperado - i.conferido));
+      // Peças bipadas que não são desta maleta: guarda com a descrição, se o código existir.
+      const sobras = [];
+      for (const s2 of d.sobras.filter((x) => x.codigo.trim() && x.quantidade > 0)) {
+        const [p] = await tx.select({ descricao: produtos.descricao }).from(produtos).where(or(eq(produtos.codigoBarras, s2.codigo.trim()), eq(produtos.referencia, s2.codigo.trim()))).limit(1);
+        sobras.push({ codigo: s2.codigo.trim(), descricao: p?.descricao ?? null, quantidade: Math.floor(s2.quantidade) });
+      }
+      const [c] = await tx
+        .insert(maletaConferencias)
+        .values({
+          maletaId: id,
+          tipo: d.tipo,
+          usuarioId,
+          itens: itens.map(({ naMaleta: _n, ...i }) => i),
+          sobras,
+          esperadas: conta((i) => i.esperado),
+          conferidas: conta((i) => i.conferido),
+          faltando,
+          tratamento: faltando ? d.tratamento : 'nada',
+          observacao: d.observacao?.trim() || null,
+        })
+        .returning();
+      // Saída: o que não foi para a maleta volta para o estoque de origem.
+      if (d.tipo === 'saida' && faltando && d.tratamento === 'retirar') {
+        for (const i of itens.filter((x) => x.esperado > x.conferido)) {
+          const q = i.esperado - i.conferido;
+          await tx.update(maletaItens).set({ enviada: sql`${maletaItens.enviada} - ${q}` }).where(and(eq(maletaItens.maletaId, id), eq(maletaItens.produtoId, i.produtoId)));
+          await this.estoque.mover(tx, { produtoId: i.produtoId, origemId: m.localId, destinoId: m.origemId, quantidade: q, tipo: 'maleta_devolucao', motivo: 'Faltou na conferência de saída', referenciaTipo: 'maleta', referenciaId: id, usuarioId });
+        }
+        await this.documentos.gerar(tx, { pessoaId: m.representanteId, tipo: 'promissoria', maletaId: id }, usuarioId, false);
+      }
+      await this.auditoria.registrar({ usuarioId, acao: `conferencia_${d.tipo}`, entidade: 'maleta', entidadeId: id, dados: { conferidas: c.conferidas, esperadas: c.esperadas, faltando, tratamento: c.tratamento } }, tx);
+      return c;
+    });
   }
 
   async prebaixa(id: string, itens: { produtoId: string; vendida: number; devolvida: number }[], usuarioId: string | null) {

@@ -183,6 +183,32 @@ test('acerto completo recusa peça sem destino', async () => {
   assert.equal(c.status, 'cancelada');
 });
 
+test('conferência da maleta: saída (tira o que faltou) e volta com pré-baixa (o acerto cobra ou deixa pendente), com quem conferiu e observação', async () => {
+  const m = await ok('POST', '/maletas', { representanteId: ctx.rep.id, origemId: ctx.deposito.id, itens: [{ codigoBarras: ctx.prods[0].codigoBarras, quantidade: 3 }, { codigoBarras: ctx.prods[1].codigoBarras, quantidade: 2 }] });
+  const det = await ok('GET', `/maletas/${m.id}`);
+  const [a, b] = [det.itens.find((i) => i.codigoBarras === ctx.prods[0].codigoBarras), det.itens.find((i) => i.codigoBarras === ctx.prods[1].codigoBarras)];
+  assert.equal((await chamar('POST', `/maletas/${m.id}/conferencia`, { tipo: 'saida', itens: [], tratamento: 'cobrar' })).status, 400, 'na saída não se cobra');
+  // Saída: só 2 das 3 peças A foram para a maleta; um código estranho sobrou.
+  const s1 = await ok('POST', `/maletas/${m.id}/conferencia`, { tipo: 'saida', itens: [{ produtoId: a.produtoId, conferido: 2 }, { produtoId: b.produtoId, conferido: 2 }], sobras: [{ codigo: 'XYZ-999', quantidade: 1 }], observacao: 'Faltou um anel no estoque', tratamento: 'retirar' });
+  assert.deepEqual([s1.esperadas, s1.conferidas, s1.faltando, s1.tratamento], [5, 4, 1, 'retirar']);
+  const depois = await ok('GET', `/maletas/${m.id}`);
+  assert.equal(depois.itens.find((i) => i.produtoId === a.produtoId).naMaleta, 2, 'o que faltou saiu da maleta');
+  const cs = depois.conferencias[0];
+  assert.equal(cs.conferidoPor, 'Administrador');
+  assert.equal(cs.observacao, 'Faltou um anel no estoque');
+  assert.deepEqual(cs.sobras, [{ codigo: 'XYZ-999', descricao: null, quantidade: 1 }]);
+  // Volta com pré-baixa: disse que vendeu 1 A e devolve 1 A e 2 B; só voltaram 1 A e 1 B.
+  await ok('POST', `/maletas/${m.id}/prebaixa`, { itens: [{ produtoId: a.produtoId, vendida: 1, devolvida: 1 }, { produtoId: b.produtoId, vendida: 0, devolvida: 2 }] });
+  const v = await ok('POST', `/maletas/${m.id}/conferencia`, { tipo: 'volta', itens: [{ produtoId: a.produtoId, conferido: 1 }, { produtoId: b.produtoId, conferido: 1 }], tratamento: 'cobrar' });
+  assert.deepEqual([v.esperadas, v.conferidas, v.faltando, v.tratamento], [3, 2, 1, 'cobrar']);
+  // O acerto com a peça que faltou como perdida (cobrada pelo custo).
+  await ok('POST', `/maletas/${m.id}/acerto`, { forma: 'avista', modalidade: 'presencial', parcial: false, itens: [{ produtoId: a.produtoId, vendida: 1, devolvida: 1, perdida: 0 }, { produtoId: b.produtoId, vendida: 0, devolvida: 1, perdida: 1 }], parcelas: 1, formaPagamento: 'pix', pagoAgora: true, usarCredito: false });
+  const fim = await ok('GET', `/maletas/${m.id}`);
+  assert.equal(fim.status, 'acertada');
+  assert.equal(fim.conferencias.length, 2);
+  assert.equal((await chamar('POST', `/maletas/${m.id}/conferencia`, { tipo: 'volta', itens: [] })).status, 400, 'maleta acertada não confere mais');
+});
+
 test('alterar a maleta: trocar a consignatária (crédito e promissória) e mudar a data do acerto (gerência direto, os outros pedem autorização)', async () => {
   const cpf = (base) => { const d = String(base).padStart(9, '0').slice(0, 9).split('').map(Number); for (const n of [9, 10]) { let s = 0; for (let i = 0; i < n; i++) s += d[i] * (n + 1 - i); const r = (s * 10) % 11; d.push(r === 10 ? 0 : r); } return d.join(''); };
   const nova = await ok('POST', '/pessoas', { tipo: 'representante', nome: 'Nova Consignataria Teste', documento: cpf(772000011), telefone1: '27997720011', cidade: 'Serra', uf: 'ES', modeloTrabalho: 'consignado', limiteCredito: 100000 });

@@ -25,6 +25,7 @@ import { Estoque } from './paginas/Estoque';
 import { Maletas } from './paginas/Maletas';
 import { NovaMaleta } from './paginas/NovaMaleta';
 import { DetalheMaleta } from './paginas/DetalheMaleta';
+import { ConferenciaMaleta } from './paginas/ConferenciaMaleta';
 import { Acerto } from './paginas/Acerto';
 import { Financeiro } from './paginas/Financeiro';
 import { Configuracoes } from './paginas/Configuracoes';
@@ -117,6 +118,7 @@ ReactDOM.createRoot(document.getElementById('raiz')!).render(
             <Route path="maletas/nova" element={<NovaMaleta />} />
             <Route path="maletas/:id" element={<DetalheMaleta />} />
             <Route path="maletas/:id/acerto" element={<Acerto />} />
+            <Route path="maletas/:id/conferencia" element={<ConferenciaMaleta />} />
             <Route path="financeiro" element={<Financeiro />} />
             <Route path="cobranca" element={<Cobranca />} />
             <Route path="cobranca/devedor/:pessoaId" element={<Devedor />} />
