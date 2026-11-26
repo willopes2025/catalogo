@@ -6,6 +6,7 @@ import { Permissao, Publico, Usuario, temPermissao, type UsuarioLogado } from '.
 import { dataISO, validar } from '../comum/validacao';
 import { maletaItens, maletas, pessoas, produtos } from '../db/schema';
 import { MaletasService, hoje, type DadosAcerto } from './maletas.service';
+import { AsaasService } from '../integracoes/asaas.service';
 import { AuditoriaService } from '../comum/auditoria.service';
 import { Limitador } from '../comum/limitador';
 
@@ -43,7 +44,7 @@ const prebaixaSchema = z.object({ itens: z.array(z.object({ produtoId: z.string(
 
 @Controller('maletas')
 export class MaletasController {
-  constructor(@Inject(DB) private readonly db: Db, private readonly svc: MaletasService, private readonly auditoria: AuditoriaService) {}
+  constructor(@Inject(DB) private readonly db: Db, private readonly svc: MaletasService, private readonly auditoria: AuditoriaService, private readonly asaas: AsaasService) {}
 
   @Get()
   @Permissao('maletas', 'ver')
@@ -182,6 +183,16 @@ export class MaletasController {
   mudarDataAcerto(@Usuario() u: UsuarioLogado, @Param('id', ParseUUIDPipe) id: string, @Body() body: unknown) {
     const d = validar(z.object({ dataLimite: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Data inválida'), motivo: z.string().trim().min(3, 'Informe o motivo').max(300) }), body);
     return this.svc.mudarDataAcerto(id, d, u.id, temPermissao(u.permissoes, 'maletas', 'excluir'));
+  }
+
+  /** Estorna o último acerto (só a gerência: quem pode excluir em Maletas). A maleta volta aberta. */
+  @Post(':id/estornar-acerto')
+  @Permissao('maletas', 'excluir')
+  async estornarAcerto(@Usuario() u: UsuarioLogado, @Param('id', ParseUUIDPipe) id: string, @Body() body: unknown) {
+    const { motivo } = validar(z.object({ motivo: z.string().trim().min(3, 'Informe o motivo') }), body);
+    const r = await this.svc.estornarAcerto(id, motivo, u.id);
+    for (const c of r.apagarNoAsaas) await this.asaas.cancelarCobranca(c);
+    return { ok: true, parcelasCanceladas: r.parcelasCanceladas, viraCredito: r.viraCredito };
   }
 
   @Post(':id/cancelar')

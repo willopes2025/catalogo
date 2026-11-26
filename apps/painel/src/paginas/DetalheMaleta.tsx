@@ -13,7 +13,7 @@ const COLUNAS_ITENS = { codigo: (i: any) => `${i.codigoBarras ?? ''} ${i.referen
 export function DetalheMaleta() {
   const { id } = useParams();
   const qc = useQueryClient();
-  const [modo, setModo] = useState<'ver' | 'incluir' | 'retirar' | 'consignataria' | 'data'>('ver');
+  const [modo, setModo] = useState<'ver' | 'incluir' | 'retirar' | 'consignataria' | 'data' | 'estornar'>('ver');
   const [itens, setItens] = useState<ItemLido[]>([]);
   const [copiado, setCopiado] = useState(false);
   const q = useQuery({ queryKey: ['maleta', id], queryFn: () => api<any>(`/maletas/${id}`) });
@@ -58,6 +58,7 @@ export function DetalheMaleta() {
             {aberta && pode('maletas', 'editar') && <button className="botao claro" onClick={() => { setModo(modo === 'retirar' ? 'ver' : 'retirar'); setItens([]); }}>Retirar peças</button>}
             {aberta && pode('maletas', 'editar') && <button className="botao claro" onClick={() => setModo(modo === 'consignataria' ? 'ver' : 'consignataria')}>Trocar consignatária</button>}
             {aberta && pode('maletas', 'editar') && <button className="botao claro" onClick={() => setModo(modo === 'data' ? 'ver' : 'data')}>Mudar data do acerto</button>}
+            {m.status !== 'cancelada' && m.acertos.length > 0 && pode('maletas', 'excluir') && <button className="botao claro" onClick={() => setModo(modo === 'estornar' ? 'ver' : 'estornar')}>Estornar acerto</button>}
             {aberta && pode('maletas', 'editar') && <Link className="botao claro" to={`/maletas/${id}/conferencia?tipo=saida`}>Conferir saída</Link>}
             {aberta && pode('maletas', 'editar') && <Link className="botao claro" to={`/maletas/${id}/conferencia?tipo=volta`}>Conferir volta</Link>}
             {aberta && pode('maletas', 'editar') && <Link className="botao" to={`/maletas/${id}/acerto`}>Fazer acerto</Link>}
@@ -100,6 +101,7 @@ export function DetalheMaleta() {
 
       <AutorizacoesDaMaleta maletaId={id!} />
       {modo === 'consignataria' && <TrocarConsignataria maletaId={id!} atual={m.representanteId} valor={m.totais.valor} fechar={() => setModo('ver')} />}
+      {modo === 'estornar' && <EstornarAcerto maletaId={id!} acerto={m.acertos.at(-1)} fechar={() => setModo('ver')} />}
       {modo === 'data' && <MudarDataAcerto maletaId={id!} atual={m.dataLimite} retirada={m.dataRetirada} fechar={() => setModo('ver')} />}
 
       {(modo === 'incluir' || modo === 'retirar') && (
@@ -303,6 +305,42 @@ export function AutorizacoesDaMaleta({ maletaId }: { maletaId?: string }) {
         </div>
       ))}
       {decidir.error && <Erro erro={decidir.error} />}
+    </div>
+  );
+}
+
+/** Estorna o último acerto: peças voltam para a maleta, parcelas canceladas, maleta aberta de novo. Só a gerência. */
+function EstornarAcerto({ maletaId, acerto, fechar }: { maletaId: string; acerto: any; fechar: () => void }) {
+  const qc = useQueryClient();
+  const [motivo, setMotivo] = useState('');
+  const [certeza, setCerteza] = useState(false);
+  const estornar = useMutation({
+    mutationFn: () => api<{ parcelasCanceladas: number; viraCredito: number }>(`/maletas/${maletaId}/estornar-acerto`, { corpo: { motivo: motivo.trim() } }),
+    onSuccess: () => { qc.invalidateQueries(); },
+  });
+  if (estornar.data)
+    return (
+      <div className="cartao coluna aviso ok" style={{ marginBottom: 14 }}>
+        <b>Acerto estornado.</b>
+        <span>A maleta está aberta de novo com as peças, e {estornar.data.parcelasCanceladas} parcela(s) do acerto foram canceladas (e os boletos apagados no Asaas).{estornar.data.viraCredito > 0 ? ` ${reais(estornar.data.viraCredito)} que já tinham sido pagos viraram crédito da representante.` : ''}</span>
+        <div><button className="botao claro" onClick={fechar}>Fechar</button></div>
+      </div>
+    );
+  return (
+    <div className="cartao coluna" style={{ marginBottom: 14 }}>
+      <h3 style={{ margin: 0 }}>Estornar o acerto{acerto ? ` de ${data(acerto.data)}` : ''}</h3>
+      <p className="muted" style={{ margin: 0 }}>
+        Desfaz o último acerto: as peças vendidas, devolvidas e perdidas voltam para a maleta, as parcelas do acerto são canceladas (boletos apagados no Asaas),
+        o crédito usado volta, os pontos do acerto saem e o limite volta ao de antes. A maleta fica aberta e a representante volta a dever. Parcela marcada como paga no próprio acerto
+        só é cancelada; pagamento que entrou de verdade depois vira crédito dela.
+      </p>
+      <label className="campo"><span>Motivo</span><input value={motivo} onChange={(e) => setMotivo(e.target.value)} placeholder="Ex.: fecharam o acerto por engano" maxLength={300} /></label>
+      <label className="check"><input type="checkbox" checked={certeza} onChange={(e) => setCerteza(e.target.checked)} /> Entendi: o acerto será desfeito</label>
+      {estornar.error && <Erro erro={estornar.error} />}
+      <div className="flex">
+        <button className="botao perigo" disabled={motivo.trim().length < 3 || !certeza || estornar.isPending} onClick={() => estornar.mutate()}>{estornar.isPending ? 'Estornando…' : 'Estornar acerto'}</button>
+        <button className="botao claro" onClick={fechar}>Desistir</button>
+      </div>
     </div>
   );
 }

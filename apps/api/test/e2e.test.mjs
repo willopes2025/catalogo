@@ -4681,3 +4681,38 @@ test('eventos com centro de custo: vendas do caixa do evento, despesas lançadas
   assert.equal((await chamar('PUT', '/configuracoes/chave/virada', { data: '27/11' })).status, 400);
   await ok('PUT', '/configuracoes/chave/virada', { data: null });
 });
+
+test('estornar acerto: peças voltam para a maleta, parcelas canceladas (paga de verdade vira crédito), maleta aberta; só o último', async () => {
+  const cpf = (base) => { const d = String(base).padStart(9, '0').slice(0, 9).split('').map(Number); for (const n of [9, 10]) { let s = 0; for (let i = 0; i < n; i++) s += d[i] * (n + 1 - i); const r = (s * 10) % 11; d.push(r === 10 ? 0 : r); } return d.join(''); };
+  const rep = await ok('POST', '/pessoas', { tipo: 'representante', nome: 'Estorno Acerto E2E', documento: cpf(481516234), telefone1: '27999994242', cidade: 'Vitória', uf: 'ES', modeloTrabalho: 'consignado', limiteCredito: 500000 });
+  const deposito = (await ok('GET', '/estoque/locais')).find((l) => l.tipo === 'deposito');
+  const [pa, pb] = (await ok('GET', '/produtos')).itens;
+  await ok('POST', '/estoque/entradas', { destinoId: deposito.id, motivo: 'Teste do estorno', itens: [{ codigoBarras: pa.codigoBarras, quantidade: 10 }, { codigoBarras: pb.codigoBarras, quantidade: 10 }] });
+  const saldoA = async () => (await ok('GET', `/estoque/rastreio/${pa.codigoBarras}`)).porLocal.find((l) => l.tipo === 'deposito')?.quantidade ?? 0;
+  const antesDep = await saldoA();
+  const m = await ok('POST', '/maletas', { representanteId: rep.id, origemId: deposito.id, itens: [{ codigoBarras: pa.codigoBarras, quantidade: 3 }, { codigoBarras: pb.codigoBarras, quantidade: 1 }] });
+  const det0 = await ok('GET', `/maletas/${m.id}`);
+  const ia = det0.itens.find((i) => i.produtoId === pa.id);
+  const ib = det0.itens.find((i) => i.produtoId === pb.id);
+  const dataAcerto = new Date(Date.now() - 3 * 3600_000).toISOString().slice(0, 10);
+  const ac = await ok('POST', `/maletas/${m.id}/acerto`, { forma: 'prazo', modalidade: 'presencial', dataAcerto, parcelas: 2, formaPagamento: 'boleto', itens: [{ produtoId: ia.produtoId, vendida: 2, devolvida: 1, perdida: 0 }, { produtoId: ib.produtoId, vendida: 0, devolvida: 0, perdida: 1 }] });
+  assert.equal(ac.fechou, true);
+  const tit = await ok('GET', `/financeiro/titulos?pessoaId=${rep.id}`);
+  assert.equal(tit.itens.length, 2);
+  await ok('POST', `/financeiro/titulos/${tit.itens[0].id}/baixar`, { pagoEm: dataAcerto, valorPago: tit.itens[0].valor, formaPagamento: 'pix' }).catch(async () => ok('POST', `/financeiro/titulos/${tit.itens[0].id}/baixar`, { pagoEm: dataAcerto }));
+
+  assert.equal((await chamar('POST', `/maletas/${m.id}/estornar-acerto`, { motivo: '' })).status, 400, 'pede motivo');
+  const r = await ok('POST', `/maletas/${m.id}/estornar-acerto`, { motivo: 'Fecharam o acerto por engano' });
+  assert.equal(r.parcelasCanceladas, 2);
+  assert.equal(r.viraCredito, tit.itens[0].valor, 'a parcela que teve baixa vira crédito dela');
+  const det = await ok('GET', `/maletas/${m.id}`);
+  assert.equal(det.status, 'aberta');
+  assert.equal(det.acertos.length, 0);
+  assert.equal(det.totais.pecas, 4, 'as 4 peças voltaram para a maleta');
+  assert.equal(await saldoA(), antesDep - 3, 'a devolvida saiu do depósito de volta para a maleta');
+  assert.equal((await ok('GET', `/financeiro/titulos?pessoaId=${rep.id}`)).itens.length, 0, 'parcelas do acerto canceladas: ela volta a dever a maleta');
+  assert.equal((await chamar('POST', `/maletas/${m.id}/estornar-acerto`, { motivo: 'de novo' })).status, 400, 'sem acerto para estornar');
+  // Dá para fazer o acerto certo depois.
+  const ac2 = await ok('POST', `/maletas/${m.id}/acerto`, { forma: 'avista', modalidade: 'presencial', dataAcerto, parcelas: 1, formaPagamento: 'pix', itens: [{ produtoId: ia.produtoId, vendida: 1, devolvida: 2, perdida: 0 }, { produtoId: ib.produtoId, vendida: 0, devolvida: 1, perdida: 0 }] });
+  assert.equal(ac2.fechou, true);
+});

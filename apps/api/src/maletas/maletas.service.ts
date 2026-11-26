@@ -17,7 +17,7 @@ import { AuditoriaService } from '../comum/auditoria.service';
 import { EstoqueService } from '../estoque/estoque.service';
 import { ConfiguracoesService } from '../configuracoes/configuracoes.service';
 import { DocumentosService } from '../documentos/documentos.service';
-import { acertos, creditos, documentos, locaisEstoque, maletaConferencias, maletaItens, maletaSolicitacoes, maletas, pessoas, produtos, titulos, usuarios } from '../db/schema';
+import { acertos, auditoria as auditoriaTb, creditos, documentos, locaisEstoque, maletaConferencias, maletaItens, maletaSolicitacoes, maletas, movimentos, notasFiscais, pessoas, pontos, produtos, titulos, usuarios } from '../db/schema';
 import { PlanoContasService } from '../financeiro/plano.service';
 
 export const hoje = () => new Date(Date.now() - 3 * 3600_000).toISOString().slice(0, 10); // horário de Brasília
@@ -576,6 +576,77 @@ export class MaletasService {
       await tx.update(maletaSolicitacoes).set({ status: aprovar ? 'aprovada' : 'recusada', decididoPor: usuarioId, decididoEm: new Date(), observacaoDecisao: observacao }).where(eq(maletaSolicitacoes.id, id));
       await this.auditoria.registrar({ usuarioId, acao: aprovar ? 'aprovar_solicitacao' : 'recusar_solicitacao', entidade: 'maleta', entidadeId: s.maletaId, dados: { solicitacao: id, tipo: s.tipo, observacao } }, tx);
       return { ok: true };
+    });
+  }
+
+  /**
+   * Estorna o último acerto da maleta (ex.: apertaram "fechar acerto" sem querer): as peças voltam para a maleta,
+   * as parcelas do acerto são canceladas (a representante volta a dever a maleta), crédito usado volta,
+   * pontos do acerto saem e o limite volta ao de antes. Pagamento que entrou de verdade depois vira crédito.
+   * Devolve as cobranças do Asaas a apagar (quem chama apaga fora da transação).
+   */
+  async estornarAcerto(id: string, motivo: string, usuarioId: string) {
+    return this.db.transaction(async (tx) => {
+      const [m] = await tx.select().from(maletas).where(eq(maletas.id, id)).for('update');
+      if (!m) throw new NotFoundException('Maleta não encontrada.');
+      if (m.status === 'cancelada') throw new BadRequestException('Maleta cancelada não tem acerto para estornar.');
+      const [a] = await tx.select().from(acertos).where(eq(acertos.maletaId, id)).orderBy(sql`${acertos.criadoEm} desc`).limit(1);
+      if (!a) throw new BadRequestException('Esta maleta não tem acerto para estornar.');
+      const [nota] = await tx.select({ id: notasFiscais.id }).from(notasFiscais).where(and(eq(notasFiscais.origemTipo, 'acerto'), eq(notasFiscais.origemId, a.id), inArray(notasFiscais.status, ['autorizada', 'processando']))).limit(1);
+      if (nota) throw new BadRequestException('Este acerto tem nota fiscal emitida. Cancele a nota no Fiscal antes de estornar.');
+      const ref = { referenciaTipo: 'maleta', referenciaId: id, usuarioId, permitirNegativo: true, motivo: `Estorno do acerto: ${motivo}` };
+
+      // Peças: desfaz os movimentos gravados junto com o acerto (mesma transação, mesmo horário).
+      const movs = await tx.select().from(movimentos).where(and(eq(movimentos.referenciaTipo, 'maleta'), eq(movimentos.referenciaId, id), sql`${movimentos.criadoEm} = (select ac.criado_em from acertos ac where ac.id = ${a.id})`, inArray(movimentos.tipo, ['maleta_devolucao', 'venda', 'perda'])));
+      const porProduto = new Map<string, { vendida: number; devolvida: number; perdida: number }>();
+      for (const mv of movs) {
+        const q = porProduto.get(mv.produtoId) ?? { vendida: 0, devolvida: 0, perdida: 0 };
+        if (mv.tipo === 'maleta_devolucao') {
+          await this.estoque.mover(tx, { ...ref, produtoId: mv.produtoId, origemId: mv.destinoId, destinoId: m.localId, quantidade: mv.quantidade, tipo: 'maleta_envio' });
+          q.devolvida += mv.quantidade;
+        } else {
+          await this.estoque.mover(tx, { ...ref, produtoId: mv.produtoId, destinoId: m.localId, quantidade: mv.quantidade, tipo: 'ajuste' });
+          if (mv.tipo === 'venda') q.vendida += mv.quantidade;
+          else q.perdida += mv.quantidade;
+        }
+        porProduto.set(mv.produtoId, q);
+      }
+      for (const [produtoId, q] of porProduto)
+        await tx
+          .update(maletaItens)
+          .set({ vendida: sql`greatest(0, ${maletaItens.vendida} - ${q.vendida})`, devolvida: sql`greatest(0, ${maletaItens.devolvida} - ${q.devolvida})`, perdida: sql`greatest(0, ${maletaItens.perdida} - ${q.perdida})` })
+          .where(and(eq(maletaItens.maletaId, id), eq(maletaItens.produtoId, produtoId)));
+
+      // Parcelas: canceladas. A que foi marcada "paga" no próprio acerto (sem dinheiro de verdade) só cancela;
+      // pagamento que entrou depois (Asaas, baixa no financeiro) vira crédito para a representante não perder.
+      const ts = await tx.select().from(titulos).where(and(eq(titulos.origemTipo, 'acerto'), eq(titulos.origemId, a.id)));
+      const apagarNoAsaas: string[] = [];
+      let viraCredito = 0;
+      for (const t of ts) {
+        if (t.status === 'cancelado' || t.status === 'renegociado') continue;
+        if (t.status === 'pago') {
+          // "Pago agora" do próprio acerto: nasceu pago e ninguém deu baixa depois (sem registro de baixa na auditoria).
+          const [baixa] = await tx.select({ id: auditoriaTb.id }).from(auditoriaTb).where(and(eq(auditoriaTb.entidade, 'titulo'), eq(auditoriaTb.entidadeId, t.id))).limit(1);
+          const pagoNoAto = !baixa && !t.cobrancaExternaId && t.pagoEm === a.data;
+          if (!pagoNoAto) viraCredito += t.valorPago ?? t.valor;
+        } else if (t.cobrancaExternaId) apagarNoAsaas.push(t.cobrancaExternaId);
+        await tx.update(titulos).set({ status: 'cancelado' }).where(eq(titulos.id, t.id));
+      }
+      if (viraCredito > 0) await tx.insert(creditos).values({ pessoaId: m.representanteId, valor: viraCredito, descricao: `Pago no acerto estornado da maleta nº ${m.numero}`, origemTipo: 'estorno_acerto', origemId: a.id, usuarioId });
+      // Crédito usado no acerto volta para ela.
+      const usados = await tx.select().from(creditos).where(and(eq(creditos.origemTipo, 'acerto'), eq(creditos.origemId, a.id)));
+      for (const c of usados) await tx.insert(creditos).values({ pessoaId: c.pessoaId, valor: -c.valor, descricao: `Estorno do acerto da maleta nº ${m.numero}`, origemTipo: 'estorno_acerto', origemId: a.id, usuarioId });
+      // Pontos do acerto e das parcelas dele.
+      await tx.delete(pontos).where(and(eq(pontos.origemTipo, 'acerto'), eq(pontos.origemId, a.id)));
+      if (ts.length) await tx.delete(pontos).where(and(eq(pontos.origemTipo, 'titulo'), inArray(pontos.origemId, ts.map((t) => t.id))));
+      // Limite: volta ao de antes, se ninguém mexeu depois.
+      if (a.limiteNovo != null && a.limiteAnterior != null && a.limiteNovo !== a.limiteAnterior) await tx.update(pessoas).set({ limiteCredito: a.limiteAnterior, atualizadoEm: new Date() }).where(and(eq(pessoas.id, m.representanteId), eq(pessoas.limiteCredito, a.limiteNovo)));
+
+      await tx.delete(acertos).where(eq(acertos.id, a.id));
+      const nota2 = `Acerto de ${a.data.split('-').reverse().join('/')} estornado: ${motivo}`;
+      await tx.update(maletas).set({ status: 'aberta', acertadaEm: null, observacaoInterna: sql`concat_ws(E'\n', ${maletas.observacaoInterna}, ${nota2}::text)` }).where(eq(maletas.id, id));
+      await this.auditoria.registrar({ usuarioId, acao: 'estornar_acerto', entidade: 'maleta', entidadeId: id, dados: { motivo, acerto: a, parcelas: ts.map((t) => ({ id: t.id, valor: t.valor, status: t.status })), viraCredito } }, tx);
+      return { ok: true, parcelasCanceladas: ts.length, viraCredito, apagarNoAsaas };
     });
   }
 
