@@ -133,6 +133,10 @@ export class FerramentasAssistente {
       this.emitirSegundaVia(),
       this.registrarPromessa(),
       this.cadastrarPessoa(),
+      this.verEnvios(),
+      this.pausarEnvios(),
+      this.cancelarOuRetomarEnvio(),
+      this.cancelarBoletosDoDia(),
       this.lancarConta(),
       this.criarCompromisso(),
       this.criarTarefaCrm(),
@@ -904,6 +908,90 @@ export class FerramentasAssistente {
       executar: async (e: z.infer<typeof schema>, ctx) => {
         const c = await this.cobranca.registrarContato(await this.cobranca.escopo(ctx.usuario), ctx.usuario, e.pessoaId, { tipo: 'nota', texto: `Promessa de pagamento registrada pelo assistente${e.observacao ? `: ${e.observacao}` : '.'}`, promessaData: e.data, promessaValor: e.valor ? Math.round(e.valor * 100) : null });
         return { registrada: true, id: c.id, data: dataBR(e.data), valor: e.valor ? formatarReais(Math.round(e.valor * 100)) : null };
+      },
+    };
+  }
+
+  // ───────────── Envios em massa e boletos (parar algo que saiu errado) ─────────────
+
+  private verEnvios(): Ferramenta {
+    const schema = z.object({ todos: z.boolean().optional().describe('true = também os que já terminaram') });
+    return {
+      nome: 'ver_envios_em_lote',
+      descricao: 'Lista os envios em massa de WhatsApp (do assistente e da trilha de cobrança): número, quantas foram, quantas faltam, situação. Use antes de pausar ou cancelar.',
+      schema,
+      risco: 'leitura',
+      permitido: algum(pode('crm', 'ver'), pode('cobranca', 'ver')),
+      executar: async (e: z.infer<typeof schema>) => {
+        const l = await this.fila.listar(e.todos ? {} : { status: 'andamento' });
+        return l.map((x) => ({ envioId: x.id, titulo: x.titulo, numero: x.canal, situacao: x.status, enviadas: x.enviados, falhas: x.falhas, faltam: x.restantes, criadoEm: x.criadoEm, aviso: x.aviso }));
+      },
+    };
+  }
+
+  private pausarEnvios(): Ferramenta {
+    const schema = z.object({ envioId: uuid.optional().describe('Envio a pausar; sem ele, pausa TODOS os envios em andamento (parada de emergência)') });
+    return {
+      nome: 'pausar_envios_em_lote',
+      descricao: 'Pausa na hora um envio em massa de WhatsApp, ou todos os que estão em andamento (sem envioId). Use quando mensagens estiverem saindo errado. Pausar não apaga nada: dá para retomar ou cancelar depois.',
+      schema,
+      risco: 'acao',
+      permitido: algum(pode('crm', 'criar'), pode('cobranca', 'editar')),
+      executar: async (e: z.infer<typeof schema>) => {
+        const alvo = e.envioId ? [{ id: e.envioId }] : (await this.fila.listar({ status: 'ativo' })).map((x) => ({ id: x.id }));
+        if (!alvo.length) return { pausados: 0, mensagem: 'Nenhum envio em andamento. Se ainda chegam mensagens, elas não vêm do envio em massa.' };
+        const r = [];
+        for (const a of alvo) r.push(await this.fila.pausar(a.id).then((x) => ({ titulo: x.titulo, faltam: x.restantes })).catch((err: Error) => ({ envioId: a.id, erro: err.message })));
+        return { pausados: r.filter((x) => !('erro' in x)).length, envios: r };
+      },
+    };
+  }
+
+  private cancelarOuRetomarEnvio(): Ferramenta {
+    const schema = z.object({ envioId: uuid, acao: z.enum(['cancelar', 'retomar']) });
+    return {
+      nome: 'cancelar_ou_retomar_envio',
+      descricao: 'Cancela de vez as mensagens que faltam de um envio em massa, ou retoma um envio pausado. Pegue o envioId em ver_envios_em_lote.',
+      schema,
+      risco: 'confirmar',
+      permitido: algum(pode('crm', 'criar'), pode('cobranca', 'editar')),
+      preparar: async (e: z.infer<typeof schema>) => {
+        const x = await this.fila.obter(e.envioId).catch(() => null);
+        if (!x) return { resumo: '', impedimento: 'Envio não encontrado.' };
+        if (e.acao === 'cancelar' && !['ativo', 'pausado'].includes(x.status)) return { resumo: '', impedimento: `Este envio já está ${x.status}.` };
+        if (e.acao === 'retomar' && x.status !== 'pausado') return { resumo: '', impedimento: 'Só dá para retomar um envio pausado.' };
+        return { resumo: e.acao === 'cancelar' ? `Cancelar o envio "${x.titulo}" (número ${x.canal}): as ${x.restantes} mensagem(ns) que faltam não serão enviadas.` : `Retomar o envio "${x.titulo}": as ${x.restantes} mensagem(ns) que faltam voltam a sair, uma a cada ${Math.round(x.janela.intervaloMinS / 60)} a ${Math.round(x.janela.intervaloMaxS / 60)} min.` };
+      },
+      executar: async (e: z.infer<typeof schema>) => {
+        const x = e.acao === 'cancelar' ? await this.fila.cancelar(e.envioId) : await this.fila.retomar(e.envioId);
+        return { titulo: x.titulo, situacao: x.status, enviadas: x.enviados, faltavam: x.restantes };
+      },
+    };
+  }
+
+  private cancelarBoletosDoDia(): Ferramenta {
+    const schema = z.object({ dia: dataIso.describe('Dia em que os boletos foram gerados (ex.: hoje)') });
+    return {
+      nome: 'cancelar_boletos_do_dia',
+      descricao: 'Cancela no Asaas os boletos/Pix GERADOS num dia (ex.: emitidos por engano). Só os criados naquele dia; parcela paga não é mexida e a parcela continua em aberto, só sem o boleto. Só gestão da cobrança.',
+      schema,
+      risco: 'confirmar',
+      permitido: pode('cobranca', 'excluir'),
+      preparar: async (e: z.infer<typeof schema>, ctx) => {
+        try {
+          this.cobranca.exigirGestor(await this.cobranca.escopo(ctx.usuario));
+        } catch {
+          return { resumo: '', impedimento: 'Só a gestão da cobrança pode cancelar boletos.' };
+        }
+        const p = await this.cobranca.cancelarBoletosDoDia(e.dia, true, ctx.usuario.id);
+        const ativos = p.cancelados - p.jaSemBoleto;
+        if (!p.boletos) return { resumo: '', impedimento: `Nenhum boleto foi gerado em ${dataBR(e.dia)}.` };
+        if (ativos <= 0) return { resumo: '', impedimento: `Os boletos gerados em ${dataBR(e.dia)} já foram cancelados${p.pagos ? ` (${p.pagos} pago(s) ficaram como estão)` : ''}.` };
+        return { resumo: `Cancelar no Asaas ${ativos} boleto(s) gerado(s) em ${dataBR(e.dia)} (${formatarReais(p.valor)}). As parcelas continuam em aberto, só sem o boleto.${p.pagos ? ` ${p.pagos} já pago(s) ficam como estão.` : ''} Não tem volta.` };
+      },
+      executar: async (e: z.infer<typeof schema>, ctx) => {
+        const r = await this.cobranca.cancelarBoletosDoDia(e.dia, false, ctx.usuario.id);
+        return { cancelados: r.cancelados - r.jaSemBoleto, pagos: r.pagos, falhas: r.falhas };
       },
     };
   }
