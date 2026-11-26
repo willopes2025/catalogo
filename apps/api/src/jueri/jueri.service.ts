@@ -1017,7 +1017,11 @@ export class JueriService {
           await tx.update(maletas).set({ dataLimite: dataISO(ped.data_acerto) ?? undefined }).where(eq(maletas.id, ja.id));
           if (mudou) pm.atualizados++;
           else pm.ignorados++;
-          for (const it of itens.values()) pecas += it.qtd;
+          for (const [produtoId, it] of itens) {
+            pecas += it.qtd;
+            const [prod] = it.preco && it.preco > 0 ? [{ preco: it.preco }] : await tx.select({ preco: produtos.preco }).from(produtos).where(eq(produtos.id, produtoId));
+            valor += (prod?.preco ?? 0) * it.qtd;
+          }
           continue;
         }
 
