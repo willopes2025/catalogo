@@ -199,6 +199,40 @@ export class ImplantacaoController {
   }
 
   /**
+   * Tira do estoque as peças de exemplo da instalação (as que entraram com "Estoque inicial (exemplo)"):
+   * zera o saldo delas nos locais da empresa (fica o registro no histórico) e desativa esses produtos.
+   * Não mexe em produto importado do Jueri nem em peça que está em maleta.
+   */
+  @Post('limpar-estoque-de-exemplo')
+  @Permissao('estoque', 'editar')
+  async limparEstoqueExemplo(@Usuario() u: UsuarioLogado, @Body() body: unknown) {
+    const { simular } = validar(z.object({ simular: z.boolean().default(true) }), body);
+    const linhas = (
+      await this.db.execute<{ produto_id: string; local_id: string; quantidade: number }>(sql`
+        select s.produto_id, s.local_id, s.quantidade from saldos s
+        join locais_estoque l on l.id = s.local_id and l.tipo <> 'maleta'
+        join produtos p on p.id = s.produto_id and p.id_jueri is null
+        where s.quantidade <> 0
+          and exists (select 1 from movimentos m where m.produto_id = s.produto_id and m.motivo = 'Estoque inicial (exemplo)')`)
+    ).rows;
+    const produtosIds = [...new Set(linhas.map((l) => l.produto_id))];
+    const pecas = linhas.reduce((a, l) => a + Number(l.quantidade), 0);
+    if (simular || !linhas.length) return { produtos: produtosIds.length, pecas, feito: false };
+    await this.db.transaction(async (tx) => {
+      for (const l of linhas) {
+        const q = Number(l.quantidade);
+        await tx.execute(sql`insert into movimentos (produto_id, origem_id, destino_id, quantidade, tipo, motivo, usuario_id)
+          values (${l.produto_id}, ${q > 0 ? l.local_id : null}, ${q < 0 ? l.local_id : null}, ${Math.abs(q)}, 'ajuste', 'Remoção do estoque de exemplo da instalação', ${u.id})`);
+        await tx.execute(sql`update saldos set quantidade = 0 where produto_id = ${l.produto_id} and local_id = ${l.local_id}`);
+      }
+      await tx.execute(sql`update produtos set ativo = false, exibe_catalogo = false where id in (${sql.join(produtosIds.map((id) => sql`${id}`), sql`, `)})
+        and not exists (select 1 from saldos s join locais_estoque l on l.id = s.local_id and l.tipo = 'maleta' where s.produto_id = produtos.id and s.quantidade > 0)`);
+      await this.auditoria.registrar({ usuarioId: u.id, acao: 'limpar_estoque_exemplo', entidade: 'implantacao', dados: { produtos: produtosIds.length, pecas } }, tx);
+    });
+    return { produtos: produtosIds.length, pecas, feito: true };
+  }
+
+  /**
    * Apaga os dados de teste para começar a usar de verdade.
    * Mantém: empresas, locais, usuários, grupos, níveis, categorias, contas, regras, modelos, integrações e auditoria.
    * Só a Diretoria (acesso total), digitando APAGAR. Antes, o servidor já guarda a cópia diária do banco.

@@ -51,6 +51,7 @@ function Saldos({ locais }: { locais: Local[] }) {
           <Indicador tipo="destaque" rotulo="Em maletas na rua" valor={`${resumo.data.emMaletas.pecas} peças`} detalhe={`${reais(resumo.data.emMaletas.valorVenda)} em venda`} />
         </div>
       )}
+      {pode('estoque', 'editar') && <EstoqueDeExemplo />}
       <div className="busca">
         <select value={localId} onChange={(e) => setLocalId(e.target.value)}><option value="">Todos os locais (sem maletas)</option>{locais.map((l) => <option key={l.id} value={l.id}>{l.nome}</option>)}</select>
         <input placeholder="Buscar: anel, brinco ouro, referência…" value={busca} onChange={(e) => setBusca(e.target.value)} />
@@ -160,6 +161,22 @@ function Rastreio({ inicial }: { inicial: string }) {
           </table>
         </>
       )}
+    </div>
+  );
+}
+
+/** Peças de exemplo da instalação ainda no estoque: mostra e tira com um clique. */
+function EstoqueDeExemplo() {
+  const qc = useQueryClient();
+  const q = useQuery({ queryKey: ['estoque-exemplo'], queryFn: () => api<{ produtos: number; pecas: number }>('/implantacao/limpar-estoque-de-exemplo', { corpo: { simular: true } }), staleTime: 300_000 });
+  const limpar = useMutation({ mutationFn: () => api<{ produtos: number; pecas: number }>('/implantacao/limpar-estoque-de-exemplo', { corpo: { simular: false } }), onSuccess: () => qc.invalidateQueries() });
+  if (limpar.data) return <div className="aviso ok" style={{ marginBottom: 12 }}>{limpar.data.pecas} peça(s) de exemplo tiradas do estoque ({limpar.data.produtos} produtos desativados).</div>;
+  if (!q.data?.pecas) return null;
+  return (
+    <div className="aviso alerta" style={{ marginBottom: 12 }}>
+      Ainda há <b>{q.data.pecas} peças de exemplo</b> da instalação no estoque ({q.data.produtos} produtos como "Anel falange Ouro 18k"). Elas não são reais e entram nas contas acima.
+      <div style={{ marginTop: 8 }}><button className="botao pequeno" disabled={limpar.isPending} onClick={() => limpar.mutate()}>{limpar.isPending ? 'Tirando…' : 'Tirar as peças de exemplo'}</button></div>
+      {limpar.error && <Erro erro={limpar.error} />}
     </div>
   );
 }

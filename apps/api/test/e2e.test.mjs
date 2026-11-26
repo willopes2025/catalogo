@@ -4736,3 +4736,20 @@ test('conta fixa: repetir todo mês lança o valor inteiro em cada mês (31 cai 
   assert.ok(r.every((t) => t.pessoaId === forn.id));
   assert.equal((await chamar('POST', '/financeiro/titulos', { empresaId: emp.id, tipo: 'pagar', descricao: 'x y', valor: 100, vencimento: '2027-01-10', repetirMeses: 3, parcelas: 2 })).status, 400, 'repetir e parcelar juntos não');
 });
+
+test('tirar o estoque de exemplo da instalação: zera só as peças de exemplo fora das maletas e desativa', async () => {
+  // Os dados de teste já foram apagados antes: põe uma peça "de exemplo" de novo para conferir.
+  const deposito = (await ok('GET', '/estoque/locais')).find((l) => l.tipo === 'deposito');
+  const [pr] = await ok('POST', '/produtos', { descricao: 'Peça de exemplo E2E', referencia: 'EXE2E', preco: 1000, custo: 300 }).then((x) => [x]);
+  await ok('POST', '/estoque/entradas', { destinoId: deposito.id, motivo: 'Estoque inicial (exemplo)', itens: [{ codigoBarras: pr.codigoBarras, quantidade: 7 }] });
+  const previa = await ok('POST', '/implantacao/limpar-estoque-de-exemplo', { simular: true });
+  assert.deepEqual([previa.produtos, previa.pecas], [1, 7]);
+  const r = await ok('POST', '/implantacao/limpar-estoque-de-exemplo', { simular: false });
+  assert.equal(r.feito, true);
+  const rast = await ok('GET', `/estoque/rastreio/${pr.codigoBarras}`);
+  assert.equal(rast.porLocal.length, 0, 'saldo zerado');
+  assert.equal(rast.produto.ativo, false, 'produto de exemplo desativado');
+  assert.equal((await ok('POST', '/implantacao/limpar-estoque-de-exemplo', { simular: true })).pecas, 0, 'não sobra nada');
+  const res = await ok('GET', '/estoque/resumo');
+  assert.ok(res.locais.every((l) => l.pecas >= 0));
+});
