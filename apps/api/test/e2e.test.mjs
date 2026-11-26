@@ -2962,7 +2962,8 @@ test('cobrança: carteira, terceirizada vê só a dela, contato e promessa, 2ª 
   const passos = [{ dias: 5, canal: 'whatsapp', texto: 'Oi {primeiro_nome}, a parcela de {valor} venceu há {dias} dias. Hoje fica {valor_atualizado}. {link}' }];
   assert.equal((await chamar('PUT', '/cobranca/config', { ...cfg0, regua: { ativa: true, canalId: null, passos } })).status, 400, 'trilha por WhatsApp sem número');
   assert.equal((await chamar('PUT', '/cobranca/config', { ...cfg0, regua: { ativa: true, canalId: canal.id, passos: [...passos, { dias: 60, acao: 'tarefa', texto: 'Ligar para {nome}' }] } })).status, 400, 'tarefa sem quem recebe');
-  await ok('PUT', '/cobranca/config', { ...cfg0, multaPb: 200, jurosMesPb: 100, diasCarencia: 0, regua: { ativa: true, canalId: canal.id, passos } });
+  // Etapa de 38 dias: a Ana (40 dias) acabou de chegar nela; sem essa etapa, o atraso antigo dela não seria cobrado pela trilha.
+  await ok('PUT', '/cobranca/config', { ...cfg0, multaPb: 200, jurosMesPb: 100, diasCarencia: 0, regua: { ativa: true, canalId: canal.id, passos: [...passos, { dias: 38, canal: 'whatsapp', texto: 'Oi {primeiro_nome}, {dias} dias.' }] } });
   const previa = (await ok('GET', '/cobranca/regua/previa')).previa.find((p) => p.pessoaId === b.id);
   assert.equal(previa.texto.split(' Hoje')[0], 'Oi Bruna, a parcela de R$ 100,00 venceu há 5 dias.');
   assert.match(previa.texto, /R\$ 102,17/);
@@ -4476,7 +4477,7 @@ test('cobrança pelo WhatsApp: fila com intervalo e horário do número, trilha 
   const amanha = (agora().getUTCDay() + 1) % 7;
   await ok('PATCH', `/crm/canais/${fin.id}`, { ...LIBERADO, envioIntervaloMinS: 1, envioIntervaloMaxS: 2, envioDias: [amanha] });
 
-  // Devedores: 15 dias, 15 dias com processo ativo, 20 dias que paga antes de a mensagem sair, 65 dias (vira tarefa).
+  // Devedores: 15 dias, 15 dias com processo ativo, 16 dias que paga antes de a mensagem sair, 61 dias (vira tarefa), 200 dias (atraso antigo: a trilha não cobra de uma vez).
   const devedor = async (nome, n, dias) => {
     const p = await ok('POST', '/pessoas', { tipo: 'cliente', nome, documento: cpf(700000000 + n), telefone1: `2799333${String(n).padStart(4, '0')}` });
     const [t] = await ok('POST', '/financeiro/titulos', { empresaId: emp.id, tipo: 'receber', pessoaId: p.id, descricao: `Parcela de ${nome.split(' ')[0]}`, valor: 10000, vencimento: dia(-dias), formaPagamento: 'boleto' });
@@ -4484,8 +4485,9 @@ test('cobrança pelo WhatsApp: fila com intervalo e horário do número, trilha 
   };
   const quinze = await devedor('Quinze Silva Trilha', 15, 15);
   const proc = await devedor('Processo Souza Trilha', 16, 15);
-  const paga = await devedor('Paga Lima Trilha', 20, 20);
-  const sessenta = await devedor('Sessenta Rocha Trilha', 65, 65);
+  const paga = await devedor('Paga Lima Trilha', 20, 16);
+  const sessenta = await devedor('Sessenta Rocha Trilha', 65, 61);
+  const antigo = await devedor('Antigo Reis Trilha', 66, 200);
   await ok('POST', `/cobranca/devedores/${proc.p.id}/processos`, { numero: '5001234-55.2026.8.08.0035', situacao: 'ativo' });
   assert.equal((await ok('GET', `/cobranca/devedores/${proc.p.id}`)).processos[0].situacao, 'ativo');
 
@@ -4494,6 +4496,8 @@ test('cobrança pelo WhatsApp: fila com intervalo e horário do número, trilha 
   await ok('PUT', '/cobranca/config', { ...cfg0, regua: { ativa: true, canalId: fin.id, passos } });
   const r = await ok('POST', '/cobranca/regua/rodar');
   assert.ok(r.foraDaTrilha['tem processo judicial ativo'] >= 1, 'quem tem processo ativo fica fora');
+  assert.ok(!r.previa.some((x) => x.pessoaId === antigo.p.id), 'atraso antigo (200 dias) não entra de uma vez na trilha');
+  assert.equal((await ok('GET', '/financeiro/titulos?tipo=receber&aba=abertos&busca=Antigo Reis')).itens.find((t) => t.id === antigo.t.id).cobrancaUrl ?? null, null, 'nem gera boleto no Asaas');
   assert.ok(r.tarefas >= 1);
   const tarefas = await ok('GET', '/mesa/tarefas');
   assert.ok(tarefas.some((t) => t.titulo === 'Cobrança: Sessenta Rocha Trilha (Contato do Financeiro)'), 'etapa de 60 dias virou tarefa');

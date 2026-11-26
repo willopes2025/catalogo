@@ -27,6 +27,11 @@ export interface Escopo {
 const ehDivida = () => and(eq(titulos.tipo, 'receber'), inArray(titulos.status, ['aberto', 'protestado']), sql`coalesce(${titulos.formaPagamento}, '') not in ('debito', 'credito')`);
 const dataBR = (d: string) => `${d.slice(8, 10)}/${d.slice(5, 7)}/${d.slice(0, 4)}`;
 
+/** Dias de folga para a trilha alcançar uma etapa (ex.: servidor parado no domingo). */
+export const TOLERANCIA_TRILHA_DIAS = 3;
+/** Acima disso, a fila automática da trilha nasce pausada para alguém conferir. */
+export const LIMITE_TRILHA_SEM_CONFERIR = 40;
+
 @Injectable()
 export class CobrancaService implements OnModuleInit, OnModuleDestroy {
   private readonly log = new Logger('Cobrança');
@@ -534,7 +539,9 @@ export class CobrancaService implements OnModuleInit, OnModuleDestroy {
       const principal = todos.reduce((m, x) => (x.t.vencimento < m.t.vencimento ? x : m));
       const maior = atraso(principal.t.vencimento);
       const passo = [...passos].reverse().find((x) => x.dias <= maior);
-      if (!passo) continue;
+      // Só a etapa que a pessoa acabou de alcançar (com folga para um dia sem rodar): a trilha não sai
+      // cobrando o atraso antigo de uma vez. Dívida antiga se cobra por envio em lote ou pela equipe.
+      if (!passo || maior - passo.dias > TOLERANCIA_TRILHA_DIAS) continue;
       const [ja] = await this.db.select({ id: cobrancaEnvios.id }).from(cobrancaEnvios).where(and(eq(cobrancaEnvios.tituloId, principal.t.id), eq(cobrancaEnvios.passo, passo.dias))).limit(1);
       if (ja) continue;
       const motivo = await this.foraDaTrilha(pessoaId);
@@ -627,6 +634,9 @@ export class CobrancaService implements OnModuleInit, OnModuleDestroy {
       const titulo = `Trilha de cobrança ${dataBR(h)}`;
       const aberto = await this.fila.aberto(canal.id, 'trilha', titulo);
       if (aberto) await this.fila.acrescentar(aberto.id, itensFila);
+      // Trava de segurança: muita mensagem de uma vez fica pausada até alguém conferir e retomar.
+      else if (itensFila.length > LIMITE_TRILHA_SEM_CONFERIR)
+        await this.fila.criarLote({ canalId: canal.id, origem: 'trilha', titulo, itens: itensFila, pausado: true, aviso: `${itensFila.length} mensagens de uma vez: confira a lista e clique em Retomar para enviar.` });
       else await this.fila.criarLote({ canalId: canal.id, origem: 'trilha', titulo, itens: itensFila });
     }
     return { enviados, falhas, tarefas, naFila: itensFila.length, previa, foraDaTrilha: Object.fromEntries(fora) };

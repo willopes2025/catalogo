@@ -103,12 +103,12 @@ export class FilaEnvioService implements OnModuleInit, OnModuleDestroy {
     this.aoTerminar.set(origem, fn);
   }
 
-  async criarLote(d: { canalId: string; origem: string; titulo: string; criadoPor?: string | null; acaoId?: string | null; itens: NovoItem[] }) {
+  async criarLote(d: { canalId: string; origem: string; titulo: string; criadoPor?: string | null; acaoId?: string | null; itens: NovoItem[]; pausado?: boolean; aviso?: string | null }) {
     if (!d.itens.length) throw new BadRequestException('Nenhuma mensagem para enviar.');
     const canal = await this.canais.obter(d.canalId);
     if (!canal.ativo || canal.excluidoEm) throw new BadRequestException(`O número "${canal.nome}" está desativado.`);
     return this.db.transaction(async (tx) => {
-      const [l] = await tx.insert(envioLotes).values({ canalId: d.canalId, origem: d.origem, titulo: d.titulo.slice(0, 200), criadoPor: d.criadoPor ?? null, acaoId: d.acaoId ?? null, total: d.itens.length }).returning();
+      const [l] = await tx.insert(envioLotes).values({ canalId: d.canalId, origem: d.origem, titulo: d.titulo.slice(0, 200), criadoPor: d.criadoPor ?? null, acaoId: d.acaoId ?? null, total: d.itens.length, ...(d.pausado ? { status: 'pausado' as const } : {}), aviso: d.aviso ?? null }).returning();
       for (let i = 0; i < d.itens.length; i += 200)
         await tx.insert(envioItens).values(d.itens.slice(i, i + 200).map((x, n) => ({ loteId: l.id, ordem: i + n, pessoaId: x.pessoaId ?? null, nome: x.nome, telefone: x.telefone, texto: x.texto, templateId: x.templateId ?? null, dados: x.dados ?? {} })));
       return l;
