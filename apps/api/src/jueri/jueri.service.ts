@@ -666,6 +666,7 @@ export class JueriService {
     const cats = await this.mapa(tx, categorias, 'cat:');
     const forns = await this.mapa(tx, pessoas, 'forn:');
     let pecas = 0;
+    const foraDoTotal: string[] = [];
     let semPrecoN = 0;
     for (const [i, r] of lista.entries()) {
       this.checar();
@@ -743,8 +744,16 @@ export class JueriService {
         }
         const qtd = inteiro(r.quantidade);
         if (op.atualizarEstoque && qtd !== null) {
-          const alvo = Math.max(0, qtd);
           if (qtd < 0) p.avisos.push(`Produto ${valores.referencia}: estoque negativo no Jueri (${qtd}); ficou 0.`);
+          // O Jueri tem um número só por produto. O que já foi separado aqui para a loja e os eventos (transferência,
+          // inventário) continua lá: o local escolhido fica só com o resto, e o total da empresa bate com o Jueri.
+          const [{ outros }] = (
+            await tx.execute<{ outros: number }>(sql`
+              select coalesce(sum(s.quantidade), 0)::int as outros from saldos s join locais_estoque l on l.id = s.local_id
+              where s.produto_id = ${produtoId} and s.local_id <> ${op.localId} and l.tipo <> 'maleta' and s.quantidade > 0`)
+          ).rows;
+          const alvo = Math.max(0, Math.max(0, qtd) - outros);
+          if (Math.max(0, qtd) < outros) foraDoTotal.push(`${valores.referencia} (Jueri ${Math.max(0, qtd)}, separadas aqui ${outros})`);
           const atual = await this.estoque.saldo(tx, produtoId, op.localId);
           const dif = alvo - atual;
           if (dif) await this.estoque.mover(tx, { produtoId, origemId: dif < 0 ? op.localId : null, destinoId: dif > 0 ? op.localId : null, quantidade: Math.abs(dif), tipo: 'ajuste', motivo: 'Migração do Jueri', usuarioId });
@@ -754,7 +763,8 @@ export class JueriService {
         this.erro(p, `Produto ${r.id} (${txt(r.referencia) ?? txt(r.descricao) ?? ''})`, (e as Error).message);
       }
     }
-    if (op.atualizarEstoque) p.avisos.push(`${pecas} peça(s) no estoque da empresa, conforme o Jueri.`);
+    if (op.atualizarEstoque) p.avisos.push(`${pecas} peça(s) no local escolhido; o que já foi separado para loja e eventos ficou onde está, e o total da empresa bate com o Jueri.`);
+    if (foraDoTotal.length) p.avisos.push(`${foraDoTotal.length} produto(s) com mais peças separadas na loja/eventos do que o Jueri tem no total (confira no inventário): ${foraDoTotal.slice(0, 15).join('; ')}.`);
     if (semPrecoN) p.avisos.push(`${semPrecoN} produto(s) sem preço de varejo no Jueri: entram inativos e fora do catálogo. Defina o preço antes de usar (Produtos › mostrar inativos).`);
   }
 

@@ -1219,9 +1219,19 @@ test('Jueri pela API: testa a conexão, simula sem gravar, importa tudo e repeti
   assert.equal(hp.linhas.find((l) => l.mes === '2026-10').jueri, 9000);
   assert.equal((await ok('GET', `/pessoas/${rev.id}`)).maletas.length, 1, 'acerto antigo não vira maleta');
 
+  // Separar na loja o que é da loja: a próxima importação não devolve para o depósito (o total continua o do Jueri).
+  const lojaJ = (await ok('GET', '/estoque/locais')).find((l) => l.tipo === 'loja' && l.id !== local.id);
+  const noLocal = async () => (await ok('GET', `/estoque/inventario/${local.id}`)).find((x) => x.codigoBarras === '7899990090010')?.quantidade ?? 0;
+  const naLoja = async () => (await ok('GET', `/estoque/inventario/${lojaJ.id}`)).find((x) => x.codigoBarras === '7899990090010')?.quantidade ?? 0;
+  const totalJ = await noLocal();
+  const lojaAntes = await naLoja();
+  await ok('POST', '/estoque/transferencias', { origemId: local.id, destinoId: lojaJ.id, itens: [{ codigoBarras: '7899990090010', quantidade: 2 }] });
+
   // Repetir: atualiza, não duplica.
   await ok('POST', '/jueri/importar', { simular: false, etapas: todas, localId: local.id });
   ex = await esperar();
+  assert.equal(await naLoja(), lojaAntes + 2, 'o que foi para a loja continua na loja');
+  assert.equal(await noLocal(), totalJ - 2, 'o local da importação fica com o resto do total do Jueri');
   assert.equal(ex.partes['Produtos'].criados, 0);
   assert.equal(ex.partes['Produtos'].atualizados, 3);
   assert.equal(ex.partes['Fotos'].ignorados, 2, 'fotos já baixadas não baixam de novo');
