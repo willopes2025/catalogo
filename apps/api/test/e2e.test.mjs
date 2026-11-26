@@ -610,6 +610,20 @@ test('inventário: ajuste pela contagem registra só as diferenças', async () =
   assert.equal(igual.diferencas.length, 0);
 });
 
+test('transferência sem saldo: bloqueada por padrão; marcada, a origem fica negativa e o inventário acerta', async () => {
+  const p = ctx.pv[2];
+  const loja = (await ok('GET', `/estoque/rastreio/${p.codigoBarras}`)).porLocal.find((l) => l.tipo === 'loja').quantidade;
+  const pedido = { origemId: ctx.loja.id, destinoId: ctx.deposito.id, itens: [{ codigoBarras: p.codigoBarras, quantidade: loja + 3 }] };
+  const r = await chamar('POST', '/estoque/transferencias', pedido);
+  assert.equal(r.status, 400);
+  assert.match(JSON.stringify(r.dados), /insuficiente/);
+  await ok('POST', '/estoque/transferencias', { ...pedido, semSaldo: true });
+  const depois = (await ok('GET', `/estoque/rastreio/${p.codigoBarras}`)).porLocal.find((l) => l.tipo === 'loja').quantidade;
+  assert.equal(depois, -3, 'origem negativa até a contagem');
+  const aj = await ok('POST', '/estoque/ajustes', { localId: ctx.loja.id, motivo: 'Contagem depois da transferência', itens: [{ codigoBarras: p.codigoBarras, quantidadeContada: 1 }] });
+  assert.deepEqual(aj.diferencas[0], { codigoBarras: p.codigoBarras, antes: -3, depois: 1 });
+});
+
 test('lotes de banho', async () => {
   await ok('POST', '/lotes', { codigo: 'LOTE-E2E-01', fabricacao: '2026-10-01' });
   assert.ok((await ok('GET', '/lotes')).some((l) => l.codigo === 'LOTE-E2E-01'));

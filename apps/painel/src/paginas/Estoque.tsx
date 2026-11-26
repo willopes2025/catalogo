@@ -90,12 +90,13 @@ function Movimentar({ tipo, locais }: { tipo: 'entrada' | 'transferencia'; locai
   const [origemId, setOrigemId] = useState('');
   const [motivo, setMotivo] = useState('');
   const [chaveNota, setChaveNota] = useState('');
+  const [semSaldo, setSemSaldo] = useState(false);
   const m = useMutation({
     mutationFn: () =>
       tipo === 'entrada'
         ? api('/estoque/entradas', { corpo: { destinoId, motivo: motivo || undefined, chaveNota: chaveNota || undefined, itens: itens.map((i) => ({ codigoBarras: i.codigoBarras, quantidade: i.quantidade })) } })
-        : api('/estoque/transferencias', { corpo: { origemId, destinoId, motivo: motivo || undefined, itens: itens.map((i) => ({ codigoBarras: i.codigoBarras, quantidade: i.quantidade })) } }),
-    onSuccess: () => { setItens([]); setMotivo(''); setChaveNota(''); qc.invalidateQueries(); },
+        : api('/estoque/transferencias', { corpo: { origemId, destinoId, motivo: motivo || undefined, semSaldo: semSaldo || undefined, itens: itens.map((i) => ({ codigoBarras: i.codigoBarras, quantidade: i.quantidade })) } }),
+    onSuccess: () => { setItens([]); setMotivo(''); setChaveNota(''); setSemSaldo(false); qc.invalidateQueries(); },
   });
   if (!pode('estoque', 'criar')) return <div className="aviso alerta">Você não tem permissão para movimentar o estoque.</div>;
   return (
@@ -105,8 +106,14 @@ function Movimentar({ tipo, locais }: { tipo: 'entrada' | 'transferencia'; locai
         <Campo rotulo={tipo === 'entrada' ? 'Local que recebe' : 'Para'}><select value={destinoId} onChange={(e) => setDestinoId(e.target.value)}><option value="">Escolha</option>{locais.filter((l) => l.id !== origemId).map((l) => <option key={l.id} value={l.id}>{l.nome}</option>)}</select></Campo>
         {tipo === 'entrada' && <Campo rotulo="Chave da nota do fornecedor"><input value={chaveNota} onChange={(e) => setChaveNota(e.target.value)} /></Campo>}
         <Campo rotulo="Observação" className={tipo === 'entrada' ? '' : 'l2'}><input value={motivo} onChange={(e) => setMotivo(e.target.value)} /></Campo>
+        {tipo === 'transferencia' && pode('estoque', 'editar') && (
+          <div className="campo" style={{ gridColumn: "1 / -1" }}>
+            <label className="check"><input type="checkbox" checked={semSaldo} onChange={(e) => setSemSaldo(e.target.checked)} /> Transferir mesmo sem saldo na origem</label>
+            {semSaldo && <div className="aviso alerta" style={{ marginTop: 6 }}>A origem pode ficar com quantidade negativa. Depois faça o inventário (Inventário e ajuste) da origem para acertar a contagem.</div>}
+          </div>
+        )}
       </div>
-      <div className="cartao"><Leitor itens={itens} mudar={setItens} localId={tipo === 'transferencia' && origemId ? origemId : undefined} /></div>
+      <div className="cartao"><Leitor itens={itens} mudar={setItens} localId={tipo === 'transferencia' && origemId && !semSaldo ? origemId : undefined} /></div>
       {m.error && <Erro erro={m.error} />}
       {m.isSuccess && <div className="aviso ok">{tipo === 'entrada' ? 'Entrada registrada.' : 'Transferência registrada.'}</div>}
       <div><button className="botao" disabled={!itens.length || !destinoId || (tipo === 'transferencia' && !origemId) || m.isPending} onClick={() => m.mutate()}>{tipo === 'entrada' ? 'Registrar entrada' : 'Transferir'}</button></div>

@@ -1,10 +1,10 @@
 import { filtroBuscaProduto } from '../produtos/busca';
-import { BadRequestException, Body, Controller, Get, Inject, NotFoundException, Param, ParseUUIDPipe, Post, Query } from '@nestjs/common';
+import { BadRequestException, Body, Controller, ForbiddenException, Get, Inject, NotFoundException, Param, ParseUUIDPipe, Post, Query } from '@nestjs/common';
 import { and, asc, desc, eq, ilike, inArray, ne, or, sql } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 import { z } from 'zod';
 import { DB, type Db } from '../comum/db.module';
-import { Permissao, Usuario, type UsuarioLogado } from '../comum/auth';
+import { Permissao, Usuario, temPermissao, type UsuarioLogado } from '../comum/auth';
 import { validar } from '../comum/validacao';
 import { AuditoriaService } from '../comum/auditoria.service';
 import { categorias, locaisEstoque, maletas, movimentos, pessoas, produtos, saldos, usuarios, empresas } from '../db/schema';
@@ -18,7 +18,7 @@ const ajusteSchema = z.object({
   motivo: z.string().min(3, 'Informe o motivo do ajuste').max(300),
   itens: z.array(z.object({ codigoBarras: z.string().min(1), quantidadeContada: z.number().int().min(0) })).min(1),
 });
-const transferenciaSchema = z.object({ origemId: z.string().uuid(), destinoId: z.string().uuid(), motivo: z.string().max(300).optional(), itens: itensSchema });
+const transferenciaSchema = z.object({ origemId: z.string().uuid(), destinoId: z.string().uuid(), motivo: z.string().max(300).optional(), itens: itensSchema, semSaldo: z.boolean().optional() });
 
 @Controller('estoque')
 export class EstoqueController {
@@ -219,11 +219,13 @@ export class EstoqueController {
   async transferencia(@Usuario() u: UsuarioLogado, @Body() body: unknown) {
     const d = validar(transferenciaSchema, body);
     if (d.origemId === d.destinoId) throw new BadRequestException('Origem e destino são o mesmo local.');
+    // Transferir sem saldo deixa a origem negativa até o inventário: só quem pode ajustar o estoque.
+    if (d.semSaldo && !temPermissao(u.permissoes, 'estoque', 'editar')) throw new ForbiddenException('Transferir sem saldo exige permissão de ajustar o estoque.');
     await this.exigirLocaisComuns(d.origemId, d.destinoId);
     const mapa = await this.produtosPorCodigo(d.itens.map((i) => i.codigoBarras));
     await this.db.transaction(async (tx) => {
       for (const i of d.itens) {
-        await this.estoque.mover(tx, { produtoId: mapa.get(i.codigoBarras)!, origemId: d.origemId, destinoId: d.destinoId, quantidade: i.quantidade, tipo: 'transferencia', motivo: d.motivo ?? 'Transferência', usuarioId: u.id });
+        await this.estoque.mover(tx, { produtoId: mapa.get(i.codigoBarras)!, origemId: d.origemId, destinoId: d.destinoId, quantidade: i.quantidade, tipo: 'transferencia', motivo: [d.motivo ?? 'Transferência', d.semSaldo && 'sem saldo na origem (acertar no inventário)'].filter(Boolean).join(' · '), usuarioId: u.id, permitirNegativo: !!d.semSaldo });
       }
       await this.auditoria.registrar({ usuarioId: u.id, acao: 'transferencia', entidade: 'estoque', dados: d }, tx);
     });

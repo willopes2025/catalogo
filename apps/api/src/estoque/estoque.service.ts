@@ -15,12 +15,14 @@ export interface Movimento {
   referenciaTipo?: string | null;
   referenciaId?: string | null;
   usuarioId?: string | null;
+  /** Só a transferência "sem saldo": deixa a origem ficar negativa até o inventário acertar. */
+  permitirNegativo?: boolean;
 }
 
 /**
  * Único ponto do sistema que mexe no estoque.
  * Grava o movimento (livro-caixa) e atualiza os saldos de origem e destino na mesma transação.
- * Nunca deixa um saldo ficar negativo.
+ * Não deixa um saldo ficar negativo (exceto na transferência marcada como "sem saldo", corrigida depois pelo inventário).
  */
 @Injectable()
 export class EstoqueService {
@@ -28,7 +30,8 @@ export class EstoqueService {
     if (!Number.isInteger(m.quantidade) || m.quantidade <= 0) throw new BadRequestException('Quantidade deve ser maior que zero.');
     if (!m.origemId && !m.destinoId) throw new BadRequestException('Movimento sem origem nem destino.');
 
-    await tx.insert(movimentos).values({ ...m });
+    const { permitirNegativo, ...mov } = m;
+    await tx.insert(movimentos).values(mov);
 
     if (m.origemId) {
       const [s] = await tx
@@ -36,7 +39,7 @@ export class EstoqueService {
         .values({ produtoId: m.produtoId, localId: m.origemId, quantidade: -m.quantidade })
         .onConflictDoUpdate({ target: [saldos.produtoId, saldos.localId], set: { quantidade: sql`${saldos.quantidade} - ${m.quantidade}` } })
         .returning();
-      if (s.quantidade < 0) {
+      if (s.quantidade < 0 && !permitirNegativo) {
         const [p] = await tx.select({ d: produtos.descricao, c: produtos.codigoBarras }).from(produtos).where(eq(produtos.id, m.produtoId));
         throw new BadRequestException(`Estoque insuficiente de ${p?.d ?? 'produto'} (${p?.c ?? ''}): faltam ${-s.quantidade}.`);
       }
