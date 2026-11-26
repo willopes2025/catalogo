@@ -18,6 +18,9 @@ const estiloFolha = `
   .folha .assinatura { margin-top: 48px; display: flex; gap: 40px; }
   .folha .assinatura div { flex: 1; border-top: 1px solid #2b231d; padding-top: 4px; text-align: center; }
   .acoes-impressao { position: fixed; top: 12px; right: 12px; display: flex; gap: 8px; }
+  .folha .quebra { break-before: page; page-break-before: always; margin-top: 24px; }
+  .folha .foto-imp { width: 34px; height: 34px; object-fit: cover; border-radius: 4px; display: block; }
+  .folha .linha-digitavel { font-family: ui-monospace, monospace; font-size: 15px; letter-spacing: .5px; padding: 10px; border: 1px dashed #5c4a3d; margin: 10px 0; word-break: break-all; }
   @media print { .acoes-impressao { display: none; } }
 `;
 
@@ -44,6 +47,8 @@ export function ImprimirMaleta() {
   const { id } = useParams();
   const [params] = useSearchParams();
   const via = params.get('via') === 'separacao' ? 'separacao' : 'pedido';
+  // O que sai junto com o pedido: promissória, contrato e/ou boleto de garantia (escolhido na maleta).
+  const partes = new Set((params.get('partes') ?? 'pedido').split(','));
   const q = useQuery({ queryKey: ['maleta', id], queryFn: () => api<any>(`/maletas/${id}`) });
   if (q.isLoading) return <Carregando />;
   if (q.error) return <Erro erro={q.error} />;
@@ -65,16 +70,16 @@ export function ImprimirMaleta() {
         </div>
       </div>
       <table>
-        <thead><tr><th style={{ width: 24 }}>{via === 'separacao' ? '✓' : '#'}</th><th>Código</th><th>Ref.</th><th>Descrição</th><th className="num">Qtd.</th>{via === 'pedido' && <><th className="num">Preço</th><th className="num">Total</th></>}</tr></thead>
+        <thead><tr><th style={{ width: 24 }}>{via === 'separacao' ? '✓' : '#'}</th>{via === 'pedido' && <th style={{ width: 40 }}>Foto</th>}<th>Código</th><th>Ref.</th><th>Descrição</th><th className="num">Qtd.</th>{via === 'pedido' && <><th className="num">Preço</th><th className="num">Total</th></>}</tr></thead>
         <tbody>
           {itens.map((i: any, n: number) => (
             <tr key={i.id}>
-              <td>{via === 'separacao' ? '☐' : n + 1}</td><td>{i.codigoBarras}</td><td>{i.referencia}</td><td>{i.descricao}</td><td className="num">{i.enviada}</td>
+              <td>{via === 'separacao' ? '☐' : n + 1}</td>{via === 'pedido' && <td>{i.foto ? <img className="foto-imp" src={i.foto} alt="" onError={(e) => { e.currentTarget.style.visibility = "hidden"; }} /> : null}</td>}<td>{i.codigoBarras}</td><td>{i.referencia}</td><td>{i.descricao}</td><td className="num">{i.enviada}</td>
               {via === 'pedido' && <><td className="num">{reais(i.preco)}</td><td className="num">{reais(i.preco * i.enviada)}</td></>}
             </tr>
           ))}
         </tbody>
-        <tfoot><tr><th colSpan={4}>Total</th><th className="num">{m.totais.pecasEnviadas}</th>{via === 'pedido' && <><th></th><th className="num">{reais(m.totais.valorEnviado)}</th></>}</tr></tfoot>
+        <tfoot><tr><th colSpan={via === 'pedido' ? 5 : 4}>Total</th><th className="num">{m.totais.pecasEnviadas}</th>{via === 'pedido' && <><th></th><th className="num">{reais(m.totais.valorEnviado)}</th></>}</tr></tfoot>
       </table>
       {via === 'pedido' && (
         <>
@@ -84,8 +89,47 @@ export function ImprimirMaleta() {
         </>
       )}
       {via === 'separacao' && <div className="assinatura"><div>Separado por</div><div>Conferido por</div></div>}
-      <p style={{ marginTop: 20, fontSize: 10, color: '#777' }}>Emitido em {dataHora(new Date().toISOString())}</p>
+      <p style={{ marginTop: 20, fontSize: 10, color: '#777' }}>Emitido em {dataHora(new Date().toISOString())} · {m.totais.pecas} peça(s) na maleta agora</p>
+      {via === 'pedido' && partes.has('promissoria') && m.documentos?.filter((d: any) => d.tipo === 'promissoria').slice(-1).map((d: any) => <div key={d.id} className="quebra"><CorpoDocumento id={d.id} /></div>)}
+      {via === 'pedido' && partes.has('contrato') && m.documentos?.filter((d: any) => d.tipo === 'contrato').slice(-1).map((d: any) => <div key={d.id} className="quebra"><CorpoDocumento id={d.id} /></div>)}
+      {via === 'pedido' && partes.has('boleto') && m.garantiaCobrancaId && (
+        <div className="quebra">
+          <div className="cab"><img src="/logo-marrom.png" alt="Aritana" style={{ width: 120 }} /><div style={{ textAlign: 'right' }}>Boleto de garantia · Maleta nº {m.numero}</div></div>
+          <h1>Boleto bancário de garantia</h1>
+          <p>Pagadora: <b>{m.representante}</b></p>
+          <p>Valor: <b>{reais(m.garantiaValor)}</b> · Vencimento: <b>{data(m.garantiaVencimento)}</b></p>
+          {m.garantiaLinha && <><div>Linha digitável:</div><div className="linha-digitavel">{m.garantiaLinha}</div></>}
+          {m.garantiaUrl && <p>Boleto completo (com código de barras): <span style={{ wordBreak: 'break-all' }}>{m.garantiaUrl}</span></p>}
+          <p style={{ fontSize: 11.5 }}>Este boleto garante as peças da maleta no lugar da nota promissória. No acerto ele é cancelado e você paga só o que vendeu. Se pagar este boleto, o valor vira crédito para o acerto.</p>
+        </div>
+      )}
     </Folha>
+  );
+}
+
+/** Texto do contrato/promissória com o registro da assinatura (usado sozinho ou junto com o pedido). */
+function CorpoDocumento({ id }: { id: string }) {
+  const q = useQuery({ queryKey: ['documento', id], queryFn: () => api<any>(`/documentos/${id}`) });
+  if (q.isLoading) return <Carregando />;
+  if (q.error) return <Erro erro={q.error} />;
+  const d = q.data;
+  return (
+    <>
+      <div className="cab"><img src="/logo-marrom.png" alt="Aritana" style={{ width: 120 }} /><div style={{ textAlign: 'right' }}>{d.status === 'assinado' ? 'Assinado eletronicamente' : `Situação: ${d.status}`}</div></div>
+      <h1>{d.titulo}</h1>
+      <div style={{ whiteSpace: 'pre-wrap', lineHeight: 1.55, marginTop: 10 }}>{d.conteudo}</div>
+      {d.status === 'assinado' ? (
+        <div style={{ marginTop: 24, border: '1px solid #ccc', padding: 10, fontSize: 11 }}>
+          <b>Registro da assinatura eletrônica</b><br />
+          Assinado por: {d.assinaturaNome}{d.assinaturaDocumento ? ` · CPF ${d.assinaturaDocumento.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, '$1.$2.$3-$4')}` : ''}<br />
+          Data e hora: {dataHora(d.assinadoEm)} · Confirmação por código enviado a {d.enviadoPara}<br />
+          Endereço de internet: {d.ip} · Aparelho: {d.userAgent}<br />
+          Código de verificação do documento (SHA-256): <span style={{ wordBreak: 'break-all' }}>{d.hash}</span>
+        </div>
+      ) : (
+        <div className="assinatura"><div>{d.pessoa}</div></div>
+      )}
+    </>
   );
 }
 

@@ -165,8 +165,11 @@ export class MaletasController {
 
   @Post(':id/acerto')
   @Permissao('maletas', 'editar')
-  acertar(@Usuario() u: UsuarioLogado, @Param('id', ParseUUIDPipe) id: string, @Body() body: unknown) {
-    return this.svc.acertar(id, validar(acertoSchema, body) as DadosAcerto, u.id);
+  async acertar(@Usuario() u: UsuarioLogado, @Param('id', ParseUUIDPipe) id: string, @Body() body: unknown) {
+    const r = await this.svc.acertar(id, validar(acertoSchema, body) as DadosAcerto, u.id);
+    // O boleto de garantia deixa de valer no acerto (no parcial, o valor da maleta mudou).
+    await this.asaas.cancelarGarantiaMaleta(id).catch(() => undefined);
+    return r;
   }
 
   /** Passa a maleta para outra consignatária (crédito conferido; promissória nova). */
@@ -183,6 +186,13 @@ export class MaletasController {
   mudarDataAcerto(@Usuario() u: UsuarioLogado, @Param('id', ParseUUIDPipe) id: string, @Body() body: unknown) {
     const d = validar(z.object({ dataLimite: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Data inválida'), motivo: z.string().trim().min(3, 'Informe o motivo').max(300) }), body);
     return this.svc.mudarDataAcerto(id, d, u.id, temPermissao(u.permissoes, 'maletas', 'excluir'));
+  }
+
+  /** Boleto de garantia no lugar da promissória: valor atual da maleta, vence no acerto. */
+  @Post(':id/boleto-garantia')
+  @Permissao('maletas', 'editar')
+  boletoGarantia(@Usuario() u: UsuarioLogado, @Param('id', ParseUUIDPipe) id: string) {
+    return this.asaas.boletoGarantiaMaleta(id, u.id);
   }
 
   /** Contas para receber o acerto (onde o dinheiro entrou). */
@@ -223,9 +233,11 @@ export class MaletasController {
 
   @Post(':id/cancelar')
   @Permissao('maletas', 'excluir')
-  cancelar(@Usuario() u: UsuarioLogado, @Param('id', ParseUUIDPipe) id: string, @Body() body: unknown) {
+  async cancelar(@Usuario() u: UsuarioLogado, @Param('id', ParseUUIDPipe) id: string, @Body() body: unknown) {
     const { motivo } = validar(z.object({ motivo: z.string().min(3, 'Informe o motivo') }), body);
-    return this.svc.cancelar(id, motivo, u.id);
+    const r = await this.svc.cancelar(id, motivo, u.id);
+    await this.asaas.cancelarGarantiaMaleta(id).catch(() => undefined);
+    return r;
   }
 
   @Post(':id/envio')

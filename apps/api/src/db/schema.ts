@@ -338,6 +338,13 @@ export const maletas = pgTable(
     prebaixaEm: timestamp('prebaixa_em', { withTimezone: true }),
     observacao: text('observacao'),
     observacaoInterna: text('observacao_interna'),
+    /** Boleto de garantia (no lugar da promissória): valor da maleta, vence no acerto; cancelado no acerto. */
+    garantiaCobrancaId: text('garantia_cobranca_id'),
+    garantiaUrl: text('garantia_url'),
+    garantiaLinha: text('garantia_linha'),
+    garantiaValor: integer('garantia_valor'),
+    garantiaVencimento: date('garantia_vencimento', { mode: 'string' }),
+    garantiaPagaEm: date('garantia_paga_em', { mode: 'string' }),
     usuarioId: uuid('usuario_id').references(() => usuarios.id),
     /** Pedido de origem no Jueri (maletas migradas). */
     idJueri: text('id_jueri'),

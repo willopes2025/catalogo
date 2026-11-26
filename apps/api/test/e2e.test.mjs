@@ -4719,8 +4719,16 @@ test('estornar acerto: peças voltam para a maleta, parcelas canceladas (paga de
   const ia = det0.itens.find((i) => i.produtoId === pa.id);
   const ib = det0.itens.find((i) => i.produtoId === pb.id);
   const dataAcerto = new Date(Date.now() - 3 * 3600_000).toISOString().slice(0, 10);
+  // Boleto de garantia no lugar da promissória: valor da maleta, vence no acerto; repetir não gera outro.
+  const bg = await ok('POST', `/maletas/${m.id}/boleto-garantia`, {});
+  assert.equal(bg.valor, det0.totais.valor);
+  assert.equal((await ok('POST', `/maletas/${m.id}/boleto-garantia`, {})).jaExistia, true);
+  const comBoleto = await ok('GET', `/maletas/${m.id}`);
+  assert.equal(comBoleto.garantiaCobrancaId, bg.id);
+  assert.ok(comBoleto.documentos.some((d) => d.tipo === 'promissoria'), 'a promissória continua disponível para imprimir');
   const ac = await ok('POST', `/maletas/${m.id}/acerto`, { forma: 'prazo', modalidade: 'presencial', dataAcerto, parcelas: 2, formaPagamento: 'boleto', itens: [{ produtoId: ia.produtoId, vendida: 2, devolvida: 1, perdida: 0 }, { produtoId: ib.produtoId, vendida: 0, devolvida: 0, perdida: 1 }] });
   assert.equal(ac.fechou, true);
+  assert.equal((await ok('GET', `/maletas/${m.id}`)).garantiaCobrancaId, null, 'o boleto de garantia é cancelado no acerto');
   const tit = await ok('GET', `/financeiro/titulos?pessoaId=${rep.id}`);
   assert.equal(tit.itens.length, 2);
   await ok('POST', `/financeiro/titulos/${tit.itens[0].id}/baixar`, { pagoEm: dataAcerto, valorPago: tit.itens[0].valor, formaPagamento: 'pix' }).catch(async () => ok('POST', `/financeiro/titulos/${tit.itens[0].id}/baixar`, { pagoEm: dataAcerto }));

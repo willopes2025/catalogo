@@ -13,7 +13,7 @@ const COLUNAS_ITENS = { codigo: (i: any) => `${i.codigoBarras ?? ''} ${i.referen
 export function DetalheMaleta() {
   const { id } = useParams();
   const qc = useQueryClient();
-  const [modo, setModo] = useState<'ver' | 'incluir' | 'retirar' | 'consignataria' | 'data' | 'estornar'>('ver');
+  const [modo, setModo] = useState<'ver' | 'incluir' | 'retirar' | 'consignataria' | 'data' | 'estornar' | 'imprimir'>('ver');
   const [itens, setItens] = useState<ItemLido[]>([]);
   const [copiado, setCopiado] = useState(false);
   const q = useQuery({ queryKey: ['maleta', id], queryFn: () => api<any>(`/maletas/${id}`) });
@@ -52,7 +52,7 @@ export function DetalheMaleta() {
         sub={<><StatusMaleta status={m.status} diasAtraso={m.diasAtraso} /> &nbsp; Retirada {data(m.dataRetirada)} · Acerto até <b>{data(m.dataLimite)}</b> · {telefone(m.telefone)} · {m.cidade}</>}
         acoes={(
           <>
-            <a className="botao claro" href={`/imprimir/maleta/${id}?via=pedido`} target="_blank" rel="noreferrer">Imprimir pedido</a>
+            <button className="botao claro" onClick={() => setModo(modo === 'imprimir' ? 'ver' : 'imprimir')}>Imprimir…</button>
             {aberta && <a className="botao claro" href={`/imprimir/maleta/${id}?via=separacao`} target="_blank" rel="noreferrer">Separação</a>}
             {aberta && pode('maletas', 'editar') && <button className="botao claro" onClick={() => { setModo(modo === 'incluir' ? 'ver' : 'incluir'); setItens([]); }}>Incluir peças</button>}
             {aberta && pode('maletas', 'editar') && <button className="botao claro" onClick={() => { setModo(modo === 'retirar' ? 'ver' : 'retirar'); setItens([]); }}>Retirar peças</button>}
@@ -102,6 +102,7 @@ export function DetalheMaleta() {
       <AutorizacoesDaMaleta maletaId={id!} />
       {modo === 'consignataria' && <TrocarConsignataria maletaId={id!} atual={m.representanteId} valor={m.totais.valor} fechar={() => setModo('ver')} />}
       {m.parcelasAcerto?.length > 0 && <ReceberAcerto maletaId={id!} parcelas={m.parcelasAcerto} />}
+      {modo === 'imprimir' && <EscolherImpressao m={m} fechar={() => setModo('ver')} />}
       {modo === 'estornar' && <EstornarAcerto maletaId={id!} acerto={m.acertos.at(-1)} fechar={() => setModo('ver')} />}
       {modo === 'data' && <MudarDataAcerto maletaId={id!} atual={m.dataLimite} retirada={m.dataRetirada} fechar={() => setModo('ver')} />}
 
@@ -414,6 +415,46 @@ function ReceberAcerto({ maletaId, parcelas }: { maletaId: string; parcelas: any
       </table>
       {receber.error && <Erro erro={receber.error} />}
       {cobrar.error && <Erro erro={cobrar.error} />}
+    </div>
+  );
+}
+
+/** Escolhe o que imprimir com o pedido (com fotos): promissória, contrato e/ou boleto de garantia. */
+function EscolherImpressao({ m, fechar }: { m: any; fechar: () => void }) {
+  const qc = useQueryClient();
+  const promissoria = m.documentos?.find((d: any) => d.tipo === 'promissoria');
+  const contrato = m.documentos?.find((d: any) => d.tipo === 'contrato');
+  const [p, setP] = useState({ promissoria: !!promissoria, contrato: false, boleto: false });
+  const valorAgora = m.totais?.valor ?? 0;
+  const boletoAtual = m.garantiaCobrancaId && !m.garantiaPagaEm && m.garantiaValor === valorAgora;
+  const gerar = useMutation({ mutationFn: () => api(`/maletas/${m.id}/boleto-garantia`, { corpo: {} }), onSuccess: () => qc.invalidateQueries({ queryKey: ['maleta', m.id] }) });
+  const abrir = () => {
+    const partes = ['pedido', ...(p.promissoria ? ['promissoria'] : []), ...(p.contrato ? ['contrato'] : []), ...(p.boleto ? ['boleto'] : [])].join(',');
+    window.open(`/imprimir/maleta/${m.id}?via=pedido&partes=${partes}`, '_blank');
+  };
+  const precisaBoleto = p.boleto && !boletoAtual;
+  return (
+    <div className="cartao coluna" style={{ marginBottom: 14 }}>
+      <h3 style={{ margin: 0 }}>Imprimir</h3>
+      <label className="check"><input type="checkbox" checked disabled /> Pedido com as fotos das peças</label>
+      <label className="check"><input type="checkbox" checked={p.promissoria} disabled={!promissoria} onChange={(e) => setP({ ...p, promissoria: e.target.checked })} /> Nota promissória{!promissoria ? ' (esta maleta não tem)' : ''}</label>
+      <label className="check"><input type="checkbox" checked={p.contrato} disabled={!contrato} onChange={(e) => setP({ ...p, contrato: e.target.checked })} /> Contrato da representante{!contrato ? ' (não tem contrato)' : ''}</label>
+      <label className="check"><input type="checkbox" checked={p.boleto} onChange={(e) => setP({ ...p, boleto: e.target.checked, promissoria: e.target.checked ? false : p.promissoria })} /> Boleto bancário de garantia (no lugar da promissória)</label>
+      {p.boleto && (
+        <div className="aviso" style={{ fontSize: 13 }}>
+          Boleto do valor da maleta ({reais(valorAgora)}), vencendo no acerto ({data(m.dataLimite)}), emitido no Asaas. No acerto ele é cancelado e sai o boleto só do que ela vendeu; se ela pagar este, vira crédito.
+          {m.garantiaCobrancaId && !boletoAtual && !m.garantiaPagaEm && <div style={{ marginTop: 4 }}><b>A maleta mudou desde o último boleto ({reais(m.garantiaValor)}):</b> ao emitir, o antigo é cancelado.</div>}
+          {m.garantiaPagaEm && <div style={{ marginTop: 4 }}>O boleto de garantia já foi pago em {data(m.garantiaPagaEm)} (virou crédito).</div>}
+          {precisaBoleto && <div style={{ marginTop: 8 }}><button className="botao pequeno" disabled={gerar.isPending} onClick={() => gerar.mutate()}>{gerar.isPending ? 'Emitindo…' : 'Emitir o boleto agora'}</button></div>}
+          {boletoAtual && <div style={{ marginTop: 4 }}>Boleto emitido: {reais(m.garantiaValor)}, vence {data(m.garantiaVencimento)}.{m.garantiaUrl && <> <a className="link" href={m.garantiaUrl} target="_blank" rel="noreferrer">Abrir boleto</a></>}</div>}
+          {gerar.error && <Erro erro={gerar.error} />}
+        </div>
+      )}
+      <div className="flex">
+        <button className="botao" disabled={precisaBoleto} onClick={abrir}>Imprimir</button>
+        <a className="botao claro" href={`/imprimir/maleta/${m.id}?via=separacao`} target="_blank" rel="noreferrer">Lista de separação</a>
+        <button className="botao claro" onClick={fechar}>Fechar</button>
+      </div>
     </div>
   );
 }

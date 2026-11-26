@@ -351,6 +351,13 @@
       "when": 1795697106269,
       "tag": "0049_centro_custo_evento",
       "breakpoints": true
+    },
+    {
+      "idx": 50,
+      "version": "7",
+      "when": 1795725965079,
+      "tag": "0050_maleta_boleto_garantia",
+      "breakpoints": true
     }
   ]
 }

@@ -248,6 +248,14 @@ export class MaletasService {
       .select({ id: documentos.id, tipo: documentos.tipo, status: documentos.status, token: documentos.token, assinadoEm: documentos.assinadoEm })
       .from(documentos)
       .where(and(eq(documentos.maletaId, id), sql`${documentos.status} <> 'cancelado'`));
+    // Contrato é da representante (não da maleta): o mais recente, para imprimir junto se quiser.
+    const [contrato] = await this.db
+      .select({ id: documentos.id, tipo: documentos.tipo, status: documentos.status, token: documentos.token, assinadoEm: documentos.assinadoEm })
+      .from(documentos)
+      .where(and(eq(documentos.pessoaId, m.maleta.representanteId), eq(documentos.tipo, 'contrato'), sql`${documentos.status} <> 'cancelado'`))
+      .orderBy(sql`${documentos.criadoEm} desc`)
+      .limit(1);
+    if (contrato && !docs.some((d) => d.id === contrato.id)) docs.push(contrato);
     // Parcelas dos acertos (para receber na própria maleta: baixa ou Pix/boleto).
     const parcelasAcerto = historico.length
       ? await this.db
