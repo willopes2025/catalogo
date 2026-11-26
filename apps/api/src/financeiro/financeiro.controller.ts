@@ -40,6 +40,9 @@ export class FinanceiroController {
     @Query('planoContaId') planoContaId?: string,
     @Query('empresaId') empresaId?: string,
     @Query('centroCustoId') centroCustoId?: string,
+    /** Separa o que é de renegociação (parcelas de acordo) do "a receber" normal. */
+    @Query('separarRenegociados') separarRenegociados?: string,
+    @Query('originais') originais?: string,
   ) {
     const f: SQL[] = [eq(titulos.tipo, tipo)];
     if (empresaId && /^[0-9a-f-]{36}$/i.test(empresaId)) f.push(eq(titulos.empresaId, empresaId));
@@ -49,8 +52,12 @@ export class FinanceiroController {
     if (semPlano === '1') f.push(isNull(titulos.planoContaId));
     if (planoContaId && /^[0-9a-f-]{36}$/i.test(planoContaId)) f.push(eq(titulos.planoContaId, planoContaId));
     if (busca?.trim()) f.push(or(ilike(titulos.descricao, `%${busca.trim()}%`), ilike(pessoas.nome, `%${busca.trim()}%`))!);
+    const deAcordo = sql`coalesce(${titulos.origemTipo}, '') = 'acordo'`;
     if (aba === 'abertos') f.push(eq(titulos.status, 'aberto'));
     if (aba === 'vencidos') f.push(eq(titulos.status, 'aberto'), lt(titulos.vencimento, hoje()));
+    if ((aba === 'abertos' || aba === 'vencidos') && separarRenegociados === '1') f.push(sql`not (${deAcordo})`);
+    // Renegociado: parcelas dos acordos ainda a receber; com "originais", os títulos que entraram no acordo.
+    if (aba === 'renegociados') f.push(originais === '1' ? eq(titulos.status, 'renegociado') : and(deAcordo, inArray(titulos.status, ['aberto', 'protestado']))!);
     if (aba === 'pagos') f.push(eq(titulos.status, 'pago'));
     if (aba === 'protestados') f.push(eq(titulos.status, 'protestado'));
     if (pessoaId) f.push(eq(titulos.pessoaId, pessoaId));

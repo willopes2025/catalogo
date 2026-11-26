@@ -32,13 +32,14 @@ export function Financeiro() {
   return <Titulos secoes={secoes} />;
 }
 
-type Aba = 'abertos' | 'vencidos' | 'pagos' | 'cartoes';
+type Aba = 'abertos' | 'vencidos' | 'renegociados' | 'pagos' | 'cartoes';
 
 function Titulos({ secoes }: { secoes: React.ReactNode }) {
   const [params, setParams] = useSearchParams();
   const filtroPlano = params.get('plano') ?? '';
   const [tipo, setTipo] = useState<'receber' | 'pagar'>(params.get('semPlano') === '1' ? 'pagar' : 'receber');
   const [aba, setAba] = useState<Aba>('abertos');
+  const [originais, setOriginais] = useState(false);
   const [contaId, setContaId] = useState('');
   const [busca, setBusca] = useState('');
   const [semPessoa, setSemPessoa] = useState(false);
@@ -54,7 +55,7 @@ function Titulos({ secoes }: { secoes: React.ReactNode }) {
   const eventos = usarEventos();
   const visao = usarVisao();
   const qc = useQueryClient();
-  const filtro = `tipo=${tipo}&aba=${aba}${evento ? `&centroCustoId=${evento}` : ''}${visao ? `&empresaId=${visao}` : ''}${busca.trim() ? `&busca=${encodeURIComponent(busca.trim())}` : ''}${semPessoa ? '&semPessoa=1' : ''}${semPlano ? '&semPlano=1' : ''}${filtroPlano ? `&planoContaId=${filtroPlano}` : ''}`;
+  const filtro = `tipo=${tipo}&aba=${aba}${tipo === 'receber' ? '&separarRenegociados=1' : ''}${aba === 'renegociados' && originais ? '&originais=1' : ''}${evento ? `&centroCustoId=${evento}` : ''}${visao ? `&empresaId=${visao}` : ''}${busca.trim() ? `&busca=${encodeURIComponent(busca.trim())}` : ''}${semPessoa ? '&semPessoa=1' : ''}${semPlano ? '&semPlano=1' : ''}${filtroPlano ? `&planoContaId=${filtroPlano}` : ''}`;
   const q = useQuery({ queryKey: ['titulos', filtro], queryFn: () => api<{ itens: any[]; total: number; quantidade: number }>(`/financeiro/titulos?${filtro}`) });
   const contas = useQuery({ queryKey: ['contas', visao], queryFn: () => api<any[]>(comVisao('/financeiro/contas', visao)) });
   const [cobranca, setCobranca] = useState<any | null>(null);
@@ -81,14 +82,14 @@ function Titulos({ secoes }: { secoes: React.ReactNode }) {
   };
   return (
     <>
-      <Topo eb="Financeiro" titulo={tipo === 'receber' ? 'Contas a receber' : 'Contas a pagar'} acoes={<div className="flex">{pode('financeiro', 'criar') && <button className="botao" onClick={() => setNovo(true)}>+ Novo lançamento</button>}<button className={`botao ${tipo === 'receber' ? '' : 'claro'}`} onClick={() => setTipo('receber')}>A receber</button><button className={`botao ${tipo === 'pagar' ? '' : 'claro'}`} onClick={() => { setTipo('pagar'); if (aba === 'cartoes') setAba('abertos'); }}>A pagar</button></div>} />
+      <Topo eb="Financeiro" titulo={tipo === 'receber' ? 'Contas a receber' : 'Contas a pagar'} acoes={<div className="flex">{pode('financeiro', 'criar') && <button className="botao" onClick={() => setNovo(true)}>+ Novo lançamento</button>}<button className={`botao ${tipo === 'receber' ? '' : 'claro'}`} onClick={() => setTipo('receber')}>A receber</button><button className={`botao ${tipo === 'pagar' ? '' : 'claro'}`} onClick={() => { setTipo('pagar'); if (aba === 'cartoes' || aba === 'renegociados') setAba('abertos'); }}>A pagar</button></div>} />
       {secoes}
       {contas.data && (
         <div className="grade g4" style={{ marginBottom: 14 }}>
           {contas.data.slice(0, 4).map((c) => <Indicador key={c.id} rotulo={c.nome} valor={reais(c.saldo)} detalhe={c.empresa} />)}
         </div>
       )}
-      <Abas ativa={aba} mudar={setAba} abas={[['abertos', 'Em aberto'], ['vencidos', 'Vencidos'], ['pagos', 'Pagos'], ...(tipo === 'receber' ? ([['cartoes', 'Cartões (conciliar)']] as [Aba, string][]) : [])]} />
+      <Abas ativa={aba} mudar={setAba} abas={[['abertos', tipo === 'receber' ? 'A receber' : 'Em aberto'], ['vencidos', 'Vencidos'], ...(tipo === 'receber' ? ([['renegociados', 'Renegociado']] as [Aba, string][]) : []), ['pagos', 'Pagos'], ...(tipo === 'receber' ? ([['cartoes', 'Cartões (conciliar)']] as [Aba, string][]) : [])]} />
       {aba === 'cartoes' ? <ConciliarCartao contas={contas.data ?? []} /> : <>
       <div className="busca">
         <input placeholder="Buscar por descrição ou nome…" value={busca} onChange={(e) => setBusca(e.target.value)} />
@@ -102,6 +103,12 @@ function Titulos({ secoes }: { secoes: React.ReactNode }) {
           </select>
         )}
       </div>
+      {aba === 'renegociados' && (
+        <div className="aviso" style={{ marginBottom: 12 }}>
+          {originais ? 'Títulos originais que entraram em acordo (não se cobram mais; voltam a valer se o acordo quebrar).' : 'Parcelas dos acordos de renegociação ainda a receber. Ficam fora da aba "A receber" para não misturar.'}{' '}
+          <label className="check" style={{ display: 'inline-flex', marginLeft: 8 }}><input type="checkbox" checked={originais} onChange={(e) => setOriginais(e.target.checked)} /> Ver os títulos originais</label>
+        </div>
+      )}
       {contaFiltro && (
         <div className="aviso" style={{ marginBottom: 12 }}>
           Mostrando só a conta <b>{contaFiltro.codigo} {contaFiltro.nome}</b>. <button className="botao claro pequeno" onClick={() => setParams({})}>Ver todas</button>
