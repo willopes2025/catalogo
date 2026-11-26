@@ -80,7 +80,7 @@ export function PontoDeVenda({ localId, tipo, aoConcluir }: { localId: string; t
   return (
     <div className="grade" style={{ gridTemplateColumns: '1fr 380px', alignItems: 'start' }}>
       <div className="cartao">
-        <Leitor itens={itens} mudar={setItens} usarAtacado={tipo === 'revenda'} />
+        <Leitor itens={itens} mudar={setItens} usarAtacado={tipo === 'revenda'} localId={localId} />
       </div>
       <div className="coluna" style={{ position: 'sticky', top: 20 }}>
         <div className="cartao coluna">

@@ -1,3 +1,4 @@
+import { filtroBuscaProduto } from './busca';
 import { BadRequestException, Body, Controller, Get, Inject, NotFoundException, Param, ParseUUIDPipe, Patch, Post, Query } from '@nestjs/common';
 import { and, asc, eq, ilike, or, sql, type SQL } from 'drizzle-orm';
 import { z } from 'zod';
@@ -52,16 +53,17 @@ export class ProdutosController {
 
   @Get()
   @Permissao('produtos', 'ver')
-  async listar(@Query('busca') busca?: string, @Query('categoriaId') categoriaId?: string, @Query('pagina') paginaQ = '1', @Query('inativos') inativos?: string) {
+  async listar(@Query('busca') busca?: string, @Query('categoriaId') categoriaId?: string, @Query('pagina') paginaQ = '1', @Query('inativos') inativos?: string, @Query('localId') localId?: string, @Query('comSaldo') comSaldo?: string) {
     const pagina = Math.max(1, Number(paginaQ) || 1);
     const porPagina = 50;
     const f: SQL[] = [];
     if (!inativos) f.push(eq(produtos.ativo, true));
     if (categoriaId) f.push(eq(produtos.categoriaId, categoriaId));
-    if (busca?.trim()) {
-      const b = `%${busca.trim()}%`;
-      f.push(or(ilike(produtos.descricao, b), ilike(produtos.referencia, b), eq(produtos.codigoBarras, busca.trim()))!);
-    }
+    if (busca?.trim()) f.push(filtroBuscaProduto(busca)!);
+    // Só o que tem no local (ex.: caixa do evento, depósito de onde sai a maleta).
+    const local = localId && /^[0-9a-f-]{36}$/i.test(localId) ? localId : null;
+    const saldoLocal = local ? sql<number>`coalesce((select s.quantidade from ${saldos} s where s.produto_id = ${produtos.id} and s.local_id = ${local}::uuid), 0)::int` : null;
+    if (saldoLocal && comSaldo) f.push(sql`${saldoLocal} > 0`);
     const where = f.length ? and(...f) : undefined;
     const itens = await this.db
       .select({
@@ -78,6 +80,7 @@ export class ProdutosController {
         ativo: produtos.ativo,
         estoque: sql<number>`coalesce((select sum(s.quantidade) from ${saldos} s join ${locaisEstoque} l on l.id = s.local_id where s.produto_id = ${produtos.id} and l.tipo <> 'maleta'),0)::int`,
         emMaletas: sql<number>`coalesce((select sum(s.quantidade) from ${saldos} s join ${locaisEstoque} l on l.id = s.local_id where s.produto_id = ${produtos.id} and l.tipo = 'maleta'),0)::int`,
+        saldoLocal: saldoLocal ?? sql<null>`null`,
       })
       .from(produtos)
       .leftJoin(categorias, eq(categorias.id, produtos.categoriaId))

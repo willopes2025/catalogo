@@ -95,7 +95,7 @@ export function NovaMaleta() {
                 )}
               </div>
             )}
-            <Leitor itens={itens} mudar={setItens} />
+            <Leitor itens={itens} mudar={setItens} localId={origemId || undefined} />
           </div>
         </div>
         <div className="coluna" style={{ position: 'sticky', top: 20 }}>

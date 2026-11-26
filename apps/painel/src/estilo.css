@@ -212,3 +212,23 @@ input.invalido { border-color: var(--erro); }
 .kanban-cartao:hover, .kanban-cartao.ativo { border-color: var(--dourado); }
 
 .bolha-menu { margin-left: 6px; background: #c0392b; color: #fff; border-radius: 10px; font-size: 11px; font-weight: 700; padding: 1px 7px; }
+
+/* Foto da peça: miniatura que aumenta na mesma tela */
+.foto-peca { border: 0; padding: 0; background: none; cursor: zoom-in; line-height: 0; border-radius: 6px; }
+.foto-peca:focus-visible { outline: 2px solid var(--dourado); outline-offset: 2px; }
+.zoom-foto { position: fixed; inset: 0; z-index: 200; background: rgba(40, 28, 20, 0.72); display: grid; place-items: center; padding: 20px; cursor: zoom-out; }
+.zoom-foto figure { margin: 0; display: flex; flex-direction: column; align-items: center; gap: 10px; max-width: 100%; }
+.zoom-foto img { max-width: min(92vw, 720px); max-height: 80vh; border-radius: 12px; background: #fff; box-shadow: 0 10px 40px rgba(0, 0, 0, 0.35); object-fit: contain; }
+.zoom-foto figcaption { color: #faf6ef; font-weight: 600; text-align: center; }
+
+/* Filtro digitado no cabeçalho das tabelas */
+.tabela .linha-filtro th { background: var(--creme-2); padding: 5px 8px; }
+.tabela .linha-filtro input { width: 100%; min-width: 70px; box-sizing: border-box; padding: 5px 8px; border: 1px solid var(--linha); border-radius: 6px; font: inherit; font-size: 12.5px; font-weight: 400; background: #fff; color: var(--tinta); }
+
+/* Sugestões da busca de peça pela descrição */
+.busca-peca { position: relative; }
+.busca-peca .sugestoes { position: absolute; z-index: 30; left: 0; right: 0; top: calc(100% + 4px); background: var(--papel, #fff); border: 1px solid var(--linha); border-radius: 10px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12); max-height: 360px; overflow-y: auto; }
+.busca-peca .sugestao { display: flex; align-items: center; gap: 10px; width: 100%; padding: 7px 10px; border: 0; border-bottom: 1px solid var(--linha); background: none; text-align: left; font: inherit; cursor: pointer; }
+.busca-peca .sugestao:hover, .busca-peca .sugestao.ativa { background: var(--creme-2); }
+.busca-peca .sugestao .info { flex: 1; min-width: 0; }
+.busca-peca .sugestao .info small { display: block; color: var(--suave); }

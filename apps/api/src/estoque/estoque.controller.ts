@@ -1,3 +1,4 @@
+import { filtroBuscaProduto } from '../produtos/busca';
 import { BadRequestException, Body, Controller, Get, Inject, NotFoundException, Param, ParseUUIDPipe, Post, Query } from '@nestjs/common';
 import { and, asc, desc, eq, ilike, inArray, ne, or, sql } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
@@ -81,7 +82,7 @@ export class EstoqueController {
   @Permissao('estoque', 'ver')
   inventario(@Param('localId', ParseUUIDPipe) localId: string) {
     return this.db
-      .select({ produtoId: produtos.id, codigoBarras: produtos.codigoBarras, referencia: produtos.referencia, descricao: produtos.descricao, preco: produtos.preco, quantidade: saldos.quantidade })
+      .select({ produtoId: produtos.id, codigoBarras: produtos.codigoBarras, referencia: produtos.referencia, descricao: produtos.descricao, foto: sql<string | null>`${produtos.fotos}->>0`, preco: produtos.preco, quantidade: saldos.quantidade })
       .from(saldos)
       .innerJoin(produtos, eq(produtos.id, saldos.produtoId))
       .where(and(eq(saldos.localId, localId), ne(saldos.quantidade, 0)))
@@ -92,10 +93,7 @@ export class EstoqueController {
   @Permissao('estoque', 'ver')
   async saldos(@Query('localId') localId?: string, @Query('busca') busca?: string, @Query('critico') critico?: string) {
     const filtros = [eq(produtos.ativo, true)];
-    if (busca?.trim()) {
-      const b = `%${busca.trim()}%`;
-      filtros.push(or(ilike(produtos.descricao, b), ilike(produtos.referencia, b), eq(produtos.codigoBarras, busca.trim()))!);
-    }
+    if (busca?.trim()) filtros.push(filtroBuscaProduto(busca)!);
     const total = localId
       ? sql<number>`coalesce((select quantidade from ${saldos} s where s.produto_id = ${produtos.id} and s.local_id = ${localId}),0)::int`
       : sql<number>`coalesce((select sum(s.quantidade) from ${saldos} s join ${locaisEstoque} l on l.id = s.local_id where s.produto_id = ${produtos.id} and l.tipo <> 'maleta'),0)::int`;
@@ -106,6 +104,7 @@ export class EstoqueController {
         codigoBarras: produtos.codigoBarras,
         referencia: produtos.referencia,
         descricao: produtos.descricao,
+        foto: sql<string | null>`${produtos.fotos}->>0`,
         categoria: categorias.nome,
         preco: produtos.preco,
         custo: produtos.custo,

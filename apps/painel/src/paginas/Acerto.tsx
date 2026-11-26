@@ -4,8 +4,12 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { api, ErroApi } from '../api';
 import { data, pct, reais } from '../formato';
 import { Campo, Carregando, Erro, Topo } from '../componentes/ui';
+import { BuscaPeca, type PecaSugerida } from '../componentes/BuscaPeca';
+import { FotoPeca, LinhaFiltro, useFiltroColunas } from '../componentes/Peca';
 
-interface Linha { produtoId: string; codigoBarras: string; referencia: string; descricao: string; preco: number; custo: number; naMaleta: number; vendida: number; devolvida: number; perdida: number }
+interface Linha { produtoId: string; codigoBarras: string; referencia: string; descricao: string; foto?: string | null; preco: number; custo: number; naMaleta: number; vendida: number; devolvida: number; perdida: number }
+
+const COLUNAS = { referencia: (l: Linha) => `${l.referencia} ${l.codigoBarras}`, descricao: (l: Linha) => l.descricao };
 
 export function Acerto() {
   const { id } = useParams();
@@ -14,7 +18,6 @@ export function Acerto() {
   const q = useQuery({ queryKey: ['maleta', id], queryFn: () => api<any>(`/maletas/${id}`) });
   const [linhas, setLinhas] = useState<Linha[]>([]);
   const [bipagem, setBipagem] = useState(true);
-  const [codigo, setCodigo] = useState('');
   const [avisoBip, setAvisoBip] = useState<string | null>(null);
   const [op, setOp] = useState({ forma: 'avista' as 'avista' | 'prazo', modalidade: 'presencial', parcial: false, parcelas: 1, primeiroVencimento: '', formaPagamento: 'pix', pagoAgora: true, usarCredito: true });
   const leitor = useRef<HTMLInputElement>(null);
@@ -66,9 +69,10 @@ export function Acerto() {
     if (bipagem && !conf) setLinhas((ls) => ls.map((l) => ({ ...l, vendida: l.naMaleta - l.perdida, devolvida: 0 })));
   }, [bipagem, conf]);
 
-  function bipar() {
-    const c = codigo.trim();
-    setCodigo('');
+  const tabela = useFiltroColunas(linhas, COLUNAS);
+  const opcoes: PecaSugerida[] = useMemo(() => linhas.map((l) => ({ produtoId: l.produtoId, codigoBarras: l.codigoBarras ?? l.referencia, referencia: l.referencia, descricao: l.descricao, foto: l.foto, preco: l.preco, quantidade: l.naMaleta - l.devolvida - l.perdida })), [linhas]);
+
+  function bipar(c: string) {
     if (!c) return;
     const l = linhas.find((x) => x.codigoBarras === c || x.referencia === c);
     if (!l) return setAvisoBip(`Peça ${c} não é desta maleta.`);
@@ -124,10 +128,7 @@ export function Acerto() {
             {bipagem ? (
               <>
                 <p className="muted">Bipe cada peça que a representante devolveu. O que não for bipado conta como vendido. Peça perdida ou quebrada: marque na coluna “Perdida”.</p>
-                <div className="leitor">
-                  <input ref={leitor} autoFocus placeholder="Bipe a peça devolvida" value={codigo} onChange={(e) => setCodigo(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); bipar(); } }} />
-                  <button className="botao" onClick={bipar}>Devolver</button>
-                </div>
+                <BuscaPeca entradaRef={leitor} botao="Devolver" placeholder="Bipe a peça devolvida ou digite o nome (peça sem etiqueta)" opcoes={opcoes} aoCodigo={bipar} aoEscolher={(p) => bipar(p.codigoBarras)} />
                 {avisoBip && <div className="muted">{avisoBip}</div>}
               </>
             ) : conf ? (
@@ -136,10 +137,14 @@ export function Acerto() {
               <div className="aviso alerta">Quantidades preenchidas com a pré-baixa informada pela representante. Confira antes de fechar.</div>
             ) : null}
             <table className="tabela">
-              <thead><tr><th>Ref.</th><th>Descrição</th><th className="num">Preço</th><th className="num">Na maleta</th><th className="num">Vendida</th><th className="num">Devolvida</th><th className="num">Perdida</th></tr></thead>
+              <thead>
+                <tr><th></th><th>Ref.</th><th>Descrição</th><th className="num">Preço</th><th className="num">Na maleta</th><th className="num">Vendida</th><th className="num">Devolvida</th><th className="num">Perdida</th></tr>
+                {linhas.length > 1 && <LinhaFiltro celulas={[null, 'referencia', 'descricao', null, null, null, null, null]} filtro={tabela.filtro} setFiltro={tabela.setFiltro} />}
+              </thead>
               <tbody>
-                {linhas.map((l) => (
+                {tabela.filtrados.map((l) => (
                   <tr key={l.produtoId}>
+                    <td><FotoPeca src={l.foto} alt={l.descricao} /></td>
                     <td>{l.referencia}</td>
                     <td>{l.descricao}</td>
                     <td className="num">{reais(l.preco)}</td>

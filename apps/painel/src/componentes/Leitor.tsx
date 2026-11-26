@@ -1,6 +1,8 @@
 import { useRef, useState } from 'react';
 import { api, ErroApi } from '../api';
 import { reais } from '../formato';
+import { BuscaPeca, type PecaSugerida } from './BuscaPeca';
+import { FotoPeca, LinhaFiltro, useFiltroColunas } from './Peca';
 
 export interface ItemLido {
   produtoId: string;
@@ -8,32 +10,33 @@ export interface ItemLido {
   codigoBarras: string;
   referencia: string;
   descricao: string;
+  foto?: string | null;
   preco: number;
   custo: number;
   quantidade: number;
 }
 
+const COLUNAS = { codigo: (i: ItemLido) => `${i.codigoBarras} ${i.referencia}`, descricao: (i: ItemLido) => i.descricao };
+
 /**
  * Campo do leitor de código de barras: a peça é bipada (o leitor "digita" o código e aperta Enter)
  * e entra na lista. Bipar o mesmo código de novo soma a quantidade.
  */
-export function Leitor({ itens, mudar, editavelQtd = true, usarAtacado = false }: { itens: ItemLido[]; mudar: (i: ItemLido[]) => void; editavelQtd?: boolean; usarAtacado?: boolean }) {
+export function Leitor({ itens, mudar, editavelQtd = true, usarAtacado = false, localId, opcoes }: { itens: ItemLido[]; mudar: (i: ItemLido[]) => void; editavelQtd?: boolean; usarAtacado?: boolean; /** Procura pela descrição só o que tem saldo neste local. */ localId?: string; /** Procura pela descrição só nesta lista (ex.: peças da maleta). */ opcoes?: PecaSugerida[] }) {
   const precoDe = (i: ItemLido) => (usarAtacado ? i.precoAtacado ?? i.preco : i.preco);
-  const [codigo, setCodigo] = useState('');
   const [erro, setErro] = useState<string | null>(null);
   const [ultimo, setUltimo] = useState<string | null>(null);
   const ref = useRef<HTMLInputElement>(null);
+  const tabela = useFiltroColunas(itens, COLUNAS);
 
-  async function ler() {
-    const c = codigo.trim();
+  async function ler(c: string) {
     if (!c) return;
-    setCodigo('');
     setErro(null);
     try {
-      const p = await api<{ id: string; codigoBarras: string; referencia: string; descricao: string; preco: number; precoAtacado: number | null; custo: number; ativo: boolean }>(`/produtos/codigo/${encodeURIComponent(c)}`);
+      const p = await api<{ id: string; codigoBarras: string; referencia: string; descricao: string; preco: number; precoAtacado: number | null; custo: number; ativo: boolean; fotos?: string[] | null }>(`/produtos/codigo/${encodeURIComponent(c)}`);
       if (!p.ativo) throw new Error(`${p.descricao} está inativo.`);
       const existe = itens.find((i) => i.produtoId === p.id);
-      mudar(existe ? itens.map((i) => (i.produtoId === p.id ? { ...i, quantidade: i.quantidade + 1 } : i)) : [{ produtoId: p.id, codigoBarras: p.codigoBarras, referencia: p.referencia, descricao: p.descricao, preco: p.preco, precoAtacado: p.precoAtacado, custo: p.custo, quantidade: 1 }, ...itens]);
+      mudar(existe ? itens.map((i) => (i.produtoId === p.id ? { ...i, quantidade: i.quantidade + 1 } : i)) : [{ produtoId: p.id, codigoBarras: p.codigoBarras, referencia: p.referencia, descricao: p.descricao, foto: p.fotos?.[0] ?? null, preco: p.preco, precoAtacado: p.precoAtacado, custo: p.custo, quantidade: 1 }, ...itens]);
       setUltimo(p.descricao);
     } catch (e) {
       setErro(e instanceof ErroApi ? e.dados.mensagem ?? 'Erro' : (e as Error).message);
@@ -47,26 +50,19 @@ export function Leitor({ itens, mudar, editavelQtd = true, usarAtacado = false }
 
   return (
     <div className="coluna">
-      <div className="leitor">
-        <input
-          ref={ref}
-          autoFocus
-          placeholder="Bipe a peça ou digite o código e aperte Enter"
-          value={codigo}
-          onChange={(e) => setCodigo(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); ler(); } }}
-          aria-label="Código de barras"
-        />
-        <button type="button" className="botao" onClick={ler}>Incluir</button>
-      </div>
+      <BuscaPeca entradaRef={ref} aoCodigo={ler} aoEscolher={(p) => ler(p.codigoBarras)} localId={localId} opcoes={opcoes} />
       {erro && <div className="aviso erro">{erro}</div>}
       {!erro && ultimo && <div className="muted">Última peça: <b>{ultimo}</b></div>}
       {itens.length > 0 && (
         <table className="tabela">
-          <thead><tr><th>Código</th><th>Ref.</th><th>Descrição</th><th className="num">Preço</th><th className="num">Qtd.</th><th className="num">Total</th><th></th></tr></thead>
+          <thead>
+            <tr><th></th><th>Código</th><th>Ref.</th><th>Descrição</th><th className="num">Preço</th><th className="num">Qtd.</th><th className="num">Total</th><th></th></tr>
+            {itens.length > 1 && <LinhaFiltro celulas={[null, 'codigo', null, 'descricao', null, null, null, null]} filtro={tabela.filtro} setFiltro={tabela.setFiltro} />}
+          </thead>
           <tbody>
-            {itens.map((i) => (
+            {tabela.filtrados.map((i) => (
               <tr key={i.produtoId}>
+                <td><FotoPeca src={i.foto} alt={i.descricao} /></td>
                 <td className="muted">{i.codigoBarras}</td>
                 <td>{i.referencia}</td>
                 <td>{i.descricao}</td>
@@ -79,7 +75,7 @@ export function Leitor({ itens, mudar, editavelQtd = true, usarAtacado = false }
               </tr>
             ))}
           </tbody>
-          <tfoot><tr><td colSpan={4}>Total</td><td className="num">{pecas}</td><td className="num">{reais(total)}</td><td></td></tr></tfoot>
+          <tfoot><tr><td colSpan={5}>Total{tabela.ativo ? ` (todas as ${itens.length} linhas, não só as filtradas)` : ''}</td><td className="num">{pecas}</td><td className="num">{reais(total)}</td><td></td></tr></tfoot>
         </table>
       )}
     </div>

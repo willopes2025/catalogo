@@ -4,6 +4,7 @@ import { useParams } from 'react-router-dom';
 import { api } from '../api';
 import { data, reais } from '../formato';
 import { Carregando, Erro } from '../componentes/ui';
+import { FotoPeca } from '../componentes/Peca';
 
 /** Página que a representante abre pelo link enviado no WhatsApp. Feita para celular, sem login. */
 export function LinkPedido() {
@@ -47,7 +48,7 @@ export function LinkPedido() {
           <div style={{ marginTop: 10 }}>
             {m.itens.map((i: any) => (
               <div key={i.produtoId} className="peca">
-                {i.foto ? <img className="miniatura" src={i.foto} alt="" /> : <span className="miniatura" />}
+                <FotoPeca src={i.foto} alt={i.descricao ?? ""} />
                 <div className="info"><b>{i.descricao}</b><div className="muted">ref. {i.referencia} · {reais(i.preco)}</div></div>
                 {modo ? (
                   <div className="flex">

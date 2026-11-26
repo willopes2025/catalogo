@@ -4,6 +4,10 @@ import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { api, lerSessao } from '../api';
 import { dataHora } from '../formato';
 import { Campo, Carregando, Erro, Topo } from '../componentes/ui';
+import { BuscaPeca, type PecaSugerida } from '../componentes/BuscaPeca';
+import { FotoPeca, LinhaFiltro, useFiltroColunas } from '../componentes/Peca';
+
+const COLUNAS = { codigo: (l: Linha) => `${l.codigoBarras ?? ''} ${l.referencia}`, descricao: (l: Linha) => l.descricao };
 
 interface Linha { produtoId: string; codigoBarras: string | null; referencia: string; descricao: string; foto: string | null; naMaleta: number; esperado: number; conferido: number }
 
@@ -20,7 +24,6 @@ export function ConferenciaMaleta() {
   const q = useQuery({ queryKey: ['maleta', id], queryFn: () => api<any>(`/maletas/${id}`) });
   const [lidos, setLidos] = useState<Record<string, number>>({});
   const [sobras, setSobras] = useState<Record<string, number>>({});
-  const [codigo, setCodigo] = useState('');
   const [aviso, setAviso] = useState<{ texto: string; ok: boolean } | null>(null);
   const [observacao, setObservacao] = useState('');
   const [tratamento, setTratamento] = useState<'nada' | 'retirar' | 'cobrar' | 'investigar'>('nada');
@@ -46,10 +49,10 @@ export function ConferenciaMaleta() {
     },
   });
 
-  function bipar() {
-    const c = codigo.trim();
-    setCodigo('');
-    leitor.current?.focus();
+  const tabela = useFiltroColunas(linhas, COLUNAS);
+  const opcoes: PecaSugerida[] = useMemo(() => linhas.map((l) => ({ produtoId: l.produtoId, codigoBarras: l.codigoBarras ?? l.referencia, referencia: l.referencia, descricao: l.descricao, foto: l.foto, quantidade: l.naMaleta - l.conferido })), [linhas]);
+
+  function bipar(c: string) {
     if (!c) return;
     const l = linhas.find((x) => x.codigoBarras === c || x.referencia === c);
     if (!l) {
@@ -84,19 +87,19 @@ export function ConferenciaMaleta() {
       />
       <div className="grade" style={{ gridTemplateColumns: 'minmax(0, 1fr) 340px', alignItems: 'start' }}>
         <div className="cartao coluna" style={{ minWidth: 0 }}>
-          <div className="leitor">
-            <input ref={leitor} autoFocus placeholder="Bipe a peça (ou digite o código e Enter)" value={codigo} onChange={(e) => setCodigo(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); bipar(); } }} />
-            <button className="botao" onClick={bipar}>Conferir</button>
-          </div>
+          <BuscaPeca entradaRef={leitor} botao="Conferir" placeholder="Bipe a peça ou digite o nome (peça sem etiqueta)" opcoes={opcoes} aoCodigo={bipar} aoEscolher={(p) => bipar(p.codigoBarras)} />
           {aviso && <div className={aviso.ok ? 'muted' : 'aviso alerta'}>{aviso.texto}</div>}
           <div style={{ overflowX: 'auto' }}>
             <table className="tabela">
-              <thead><tr><th>Código</th><th>Descrição</th><th className="num">{tipo === 'volta' && comPrebaixa ? 'Devia voltar' : tipo === 'volta' ? 'Na maleta' : 'Esperado'}</th><th className="num">Conferido</th><th></th></tr></thead>
+              <thead><tr><th></th><th>Código</th><th>Descrição</th><th className="num">{tipo === 'volta' && comPrebaixa ? 'Devia voltar' : tipo === 'volta' ? 'Na maleta' : 'Esperado'}</th><th className="num">Conferido</th><th></th></tr>
+                <LinhaFiltro celulas={[null, 'codigo', 'descricao', null, null, null]} filtro={tabela.filtro} setFiltro={tabela.setFiltro} />
+              </thead>
               <tbody>
-                {linhas.map((l) => {
+                {tabela.filtrados.map((l) => {
                   const ok = l.conferido >= l.esperado && l.esperado > 0;
                   return (
                     <tr key={l.produtoId} className={ok ? 'linha-ok' : ''}>
+                      <td><FotoPeca src={l.foto} alt={l.descricao} /></td>
                       <td className="muted">{l.codigoBarras ?? l.referencia}</td>
                       <td>{l.descricao}</td>
                       <td className="num">{l.esperado}</td>

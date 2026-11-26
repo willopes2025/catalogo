@@ -4,6 +4,7 @@ import { api, pode } from '../api';
 import { data, reais } from '../formato';
 import { Campo, Carregando, Erro } from '../componentes/ui';
 import { Leitor, type ItemLido } from '../componentes/Leitor';
+import { FotoPeca } from '../componentes/Peca';
 
 interface Local { id: string; nome: string; tipo: string }
 
@@ -29,8 +30,8 @@ export function Inventario({ locais }: { locais: Local[] }) {
   const linhas = useMemo(() => {
     const noSistema = new Map((sistema.data ?? []).map((s) => [s.codigoBarras, s]));
     const contadas = new Map(itens.map((i) => [i.codigoBarras, i]));
-    const l = itens.map((i) => ({ codigoBarras: i.codigoBarras, descricao: i.descricao, referencia: i.referencia, preco: i.preco, sistema: noSistema.get(i.codigoBarras)?.quantidade ?? 0, contada: i.quantidade }));
-    if (modo === 'completo') for (const s of sistema.data ?? []) if (!contadas.has(s.codigoBarras)) l.push({ codigoBarras: s.codigoBarras, descricao: s.descricao, referencia: s.referencia, preco: s.preco, sistema: s.quantidade, contada: 0 });
+    const l = itens.map((i) => ({ codigoBarras: i.codigoBarras, foto: i.foto, descricao: i.descricao, referencia: i.referencia, preco: i.preco, sistema: noSistema.get(i.codigoBarras)?.quantidade ?? 0, contada: i.quantidade }));
+    if (modo === 'completo') for (const s of sistema.data ?? []) if (!contadas.has(s.codigoBarras)) l.push({ codigoBarras: s.codigoBarras, foto: (s as any).foto ?? null, descricao: s.descricao, referencia: s.referencia, preco: s.preco, sistema: s.quantidade, contada: 0 });
     return l;
   }, [itens, sistema.data, modo]);
   const diferentes = linhas.filter((l) => l.sistema !== l.contada);
@@ -68,10 +69,11 @@ export function Inventario({ locais }: { locais: Local[] }) {
           </div>
           {diferentes.length ? (
             <table className="tabela">
-              <thead><tr><th>Código</th><th>Peça</th><th className="num">No sistema</th><th className="num">Contada</th><th className="num">Diferença</th></tr></thead>
+              <thead><tr><th></th><th>Código</th><th>Peça</th><th className="num">No sistema</th><th className="num">Contada</th><th className="num">Diferença</th></tr></thead>
               <tbody>
                 {diferentes.map((l) => (
                   <tr key={l.codigoBarras}>
+                    <td><FotoPeca src={l.foto} alt={l.descricao} /></td>
                     <td className="muted">{l.codigoBarras}</td>
                     <td>{l.descricao}<div className="muted">ref. {l.referencia}</div></td>
                     <td className="num">{l.sistema}</td>

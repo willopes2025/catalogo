@@ -1,10 +1,14 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useParams } from 'react-router-dom';
 import { api, pode } from '../api';
 import { data, dataHora, reais, telefone } from '../formato';
 import { Carregando, Erro, StatusMaleta, Topo } from '../componentes/ui';
 import { Leitor, type ItemLido } from '../componentes/Leitor';
+import { type PecaSugerida } from '../componentes/BuscaPeca';
+import { FotoPeca, LinhaFiltro, useFiltroColunas } from '../componentes/Peca';
+
+const COLUNAS_ITENS = { codigo: (i: any) => `${i.codigoBarras ?? ''} ${i.referencia}`, descricao: (i: any) => i.descricao };
 
 export function DetalheMaleta() {
   const { id } = useParams();
@@ -30,6 +34,8 @@ export function DetalheMaleta() {
     mutationFn: (motivo: string) => api(`/maletas/${id}/cancelar`, { corpo: { motivo } }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['maleta', id] }),
   });
+  const tabela = useFiltroColunas<any>(q.data?.itens ?? [], COLUNAS_ITENS);
+  const pecasDaMaleta: PecaSugerida[] = useMemo(() => (q.data?.itens ?? []).filter((i: any) => i.naMaleta > 0).map((i: any) => ({ produtoId: i.produtoId, codigoBarras: i.codigoBarras, referencia: i.referencia, descricao: i.descricao, foto: i.foto, preco: i.preco, quantidade: i.naMaleta })), [q.data]);
   if (q.isLoading) return <Carregando />;
   if (q.error) return <Erro erro={q.error} />;
   const m = q.data;
@@ -99,17 +105,20 @@ export function DetalheMaleta() {
       {(modo === 'incluir' || modo === 'retirar') && (
         <div className="cartao coluna" style={{ marginBottom: 14 }}>
           <h3>{modo === 'incluir' ? 'Incluir peças (troca no meio do ciclo)' : 'Retirar peças que voltam para a matriz'}</h3>
-          <Leitor itens={itens} mudar={setItens} />
+          <Leitor itens={itens} mudar={setItens} localId={modo === 'incluir' ? m.origemId ?? undefined : undefined} opcoes={modo === 'retirar' ? pecasDaMaleta : undefined} />
           {troca.error && <Erro erro={troca.error} />}
           <div className="flex"><button className="botao" disabled={!itens.length || troca.isPending} onClick={() => troca.mutate()}>Confirmar</button><button className="botao claro" onClick={() => setModo('ver')}>Desistir</button></div>
         </div>
       )}
 
       <table className="tabela">
-        <thead><tr><th>Código</th><th>Ref.</th><th>Descrição</th><th className="num">Preço</th><th className="num">Enviada</th><th className="num">Vendida</th><th className="num">Devolvida</th><th className="num">Perdida</th><th className="num">Na maleta</th>{temPrebaixa && <th className="num">Pré-baixa: vendeu</th>}</tr></thead>
+        <thead><tr><th></th><th>Código</th><th>Ref.</th><th>Descrição</th><th className="num">Preço</th><th className="num">Enviada</th><th className="num">Vendida</th><th className="num">Devolvida</th><th className="num">Perdida</th><th className="num">Na maleta</th>{temPrebaixa && <th className="num">Pré-baixa: vendeu</th>}</tr>
+          {m.itens.length > 1 && <LinhaFiltro celulas={[null, 'codigo', 'codigo', 'descricao', null, null, null, null, null, null, ...(temPrebaixa ? [null] : [])]} filtro={tabela.filtro} setFiltro={tabela.setFiltro} />}
+        </thead>
         <tbody>
-          {m.itens.map((i: any) => (
+          {tabela.filtrados.map((i: any) => (
             <tr key={i.id}>
+              <td><FotoPeca src={i.foto} alt={i.descricao} /></td>
               <td className="muted">{i.codigoBarras}</td><td>{i.referencia}</td><td>{i.descricao}</td><td className="num">{reais(i.preco)}</td>
               <td className="num">{i.enviada}</td><td className="num">{i.vendida || '—'}</td><td className="num">{i.devolvida || '—'}</td><td className="num">{i.perdida || '—'}</td><td className="num"><b>{i.naMaleta}</b></td>
               {temPrebaixa && <td className="num">{i.prebaixaVendida ?? '—'}</td>}

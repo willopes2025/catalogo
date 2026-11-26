@@ -5,6 +5,9 @@ import { api, pode } from '../api';
 import { dataHora, reais } from '../formato';
 import { Abas, Campo, Carregando, Erro, Indicador, Topo } from '../componentes/ui';
 import { Leitor, type ItemLido } from '../componentes/Leitor';
+import { FotoPeca, LinhaFiltro, useFiltroColunas } from '../componentes/Peca';
+
+const COLUNAS_SALDO = { codigo: (s: any) => s.codigoBarras, ref: (s: any) => s.referencia, descricao: (s: any) => s.descricao, categoria: (s: any) => s.categoria };
 import { Inventario, Etiquetas, Lotes } from './EstoqueExtra';
 
 interface Local { id: string; nome: string; tipo: string; empresa: string }
@@ -39,6 +42,7 @@ function Saldos({ locais }: { locais: Local[] }) {
     queryKey: ['saldos', localId, busca, critico],
     queryFn: () => api<any[]>(`/estoque/saldos?${new URLSearchParams({ ...(localId && { localId }), ...(busca && { busca }), ...(critico && { critico: '1' }) })}`),
   });
+  const tabela = useFiltroColunas<any>(q.data ?? [], COLUNAS_SALDO);
   return (
     <>
       {resumo.data && (
@@ -49,15 +53,19 @@ function Saldos({ locais }: { locais: Local[] }) {
       )}
       <div className="busca">
         <select value={localId} onChange={(e) => setLocalId(e.target.value)}><option value="">Todos os locais (sem maletas)</option>{locais.map((l) => <option key={l.id} value={l.id}>{l.nome}</option>)}</select>
-        <input placeholder="Buscar produto" value={busca} onChange={(e) => setBusca(e.target.value)} />
+        <input placeholder="Buscar: anel, brinco ouro, referência…" value={busca} onChange={(e) => setBusca(e.target.value)} />
         <label className="check"><input type="checkbox" checked={critico} onChange={(e) => setCritico(e.target.checked)} /> Só estoque crítico</label>
       </div>
       {q.isLoading ? <Carregando /> : q.error ? <Erro erro={q.error} /> : (
         <table className="tabela">
-          <thead><tr><th>Código</th><th>Ref.</th><th>Descrição</th><th>Categoria</th><th className="num">Mínimo</th><th className="num">Quantidade</th><th className="num">Em maletas</th><th className="num">Valor (venda)</th></tr></thead>
+          <thead>
+            <tr><th></th><th>Código</th><th>Ref.</th><th>Descrição</th><th>Categoria</th><th className="num">Mínimo</th><th className="num">Quantidade</th><th className="num">Em maletas</th><th className="num">Valor (venda)</th></tr>
+            <LinhaFiltro celulas={[null, 'codigo', 'ref', 'descricao', 'categoria', null, null, null, null]} filtro={tabela.filtro} setFiltro={tabela.setFiltro} />
+          </thead>
           <tbody>
-            {q.data!.map((s) => (
+            {tabela.filtrados.map((s) => (
               <tr key={s.id}>
+                <td><FotoPeca src={s.foto} alt={s.descricao} /></td>
                 <td className="muted"><Link to={`/estoque?rastreio=${s.codigoBarras}`} onClick={() => window.scrollTo(0, 0)}>{s.codigoBarras}</Link></td>
                 <td>{s.referencia}</td>
                 <td>{s.descricao}</td>
@@ -98,7 +106,7 @@ function Movimentar({ tipo, locais }: { tipo: 'entrada' | 'transferencia'; locai
         {tipo === 'entrada' && <Campo rotulo="Chave da nota do fornecedor"><input value={chaveNota} onChange={(e) => setChaveNota(e.target.value)} /></Campo>}
         <Campo rotulo="Observação" className={tipo === 'entrada' ? '' : 'l2'}><input value={motivo} onChange={(e) => setMotivo(e.target.value)} /></Campo>
       </div>
-      <div className="cartao"><Leitor itens={itens} mudar={setItens} /></div>
+      <div className="cartao"><Leitor itens={itens} mudar={setItens} localId={tipo === 'transferencia' && origemId ? origemId : undefined} /></div>
       {m.error && <Erro erro={m.error} />}
       {m.isSuccess && <div className="aviso ok">{tipo === 'entrada' ? 'Entrada registrada.' : 'Transferência registrada.'}</div>}
       <div><button className="botao" disabled={!itens.length || !destinoId || (tipo === 'transferencia' && !origemId) || m.isPending} onClick={() => m.mutate()}>{tipo === 'entrada' ? 'Registrar entrada' : 'Transferir'}</button></div>

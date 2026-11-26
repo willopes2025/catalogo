@@ -98,6 +98,21 @@ test('cria maleta: peças saem do depósito e vão para a maleta', async () => {
   assert.equal(depois.porLocal.find((l) => l.tipo === 'maleta').quantidade, 3);
 });
 
+test('busca de peça sem etiqueta: por palavras da descrição (sem acento, em qualquer ordem), com saldo no local e foto', async () => {
+  const [a] = ctx.prods;
+  const palavras = a.descricao.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().split(/\s+/).filter((p) => p.length > 2);
+  const termo = palavras.slice(0, 2).reverse().join(' ');
+  const r = await ok('GET', `/produtos?${new URLSearchParams({ busca: termo })}`);
+  assert.ok(r.itens.some((p) => p.id === a.id), `"${termo}" acha ${a.descricao}`);
+  assert.ok(r.itens.every((p) => 'foto' in p), 'a lista traz a foto');
+  const local = await ok('GET', `/produtos?${new URLSearchParams({ busca: termo, localId: ctx.deposito.id, comSaldo: '1' })}`);
+  assert.ok(local.itens.length && local.itens.every((p) => p.saldoLocal > 0), 'só peças com saldo no local');
+  const nada = await ok('GET', `/produtos?${new URLSearchParams({ busca: termo + ' zzqx' })}`);
+  assert.equal(nada.itens.length, 0, 'todas as palavras precisam casar');
+  const saldos = await ok('GET', `/estoque/saldos?${new URLSearchParams({ busca: termo })}`);
+  assert.ok(saldos.some((s) => s.codigoBarras === a.codigoBarras) && saldos.every((s) => 'foto' in s));
+});
+
 test('segunda maleta é bloqueada (máximo de 1 aberta)', async () => {
   const r = await chamar('POST', '/maletas', { representanteId: ctx.rep.id, origemId: ctx.deposito.id, itens: [{ codigoBarras: ctx.prods[2].codigoBarras, quantidade: 1 }] });
   assert.equal(r.status, 400);

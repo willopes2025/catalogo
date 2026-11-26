@@ -4,6 +4,7 @@ import { Link } from 'react-router-dom';
 import { api, pode } from '../api';
 import { reais } from '../formato';
 import { Campo, Erro } from './ui';
+import { FotoPeca } from './Peca';
 
 export interface EstadoIa { texto: boolean; imagem: boolean; modelo: string; estilos: { chave: string; nome: string }[] }
 /** O que da IA está ligado (chave do Claude e da OpenAI). */
@@ -72,7 +73,7 @@ export function BuscaPorFoto({ escolher, fechar }: { escolher?: (c: Candidato) =
             <tbody>
               {buscar.data.candidatos.map((c) => (
                 <tr key={c.id}>
-                  <td>{c.foto ? <img className="miniatura" src={c.foto} alt="" /> : <span className="miniatura" />}</td>
+                  <td><FotoPeca src={c.foto} alt={c.descricao ?? ""} /></td>
                   <td>{c.referencia}</td>
                   <td>{c.descricao}{c.categoria && <div className="muted" style={{ fontSize: 12 }}>{c.categoria}</div>}</td>
                   <td className="num">{reais(c.preco)}</td>

@@ -5,6 +5,9 @@ import { api, ErroApi, pode } from '../api';
 import { centavosParaTexto, paraCentavos, pct, reais } from '../formato';
 import { Campo, Carregando, Erro, Topo } from '../componentes/ui';
 import { BuscaPorFoto, FotosProduto, usarIa } from '../componentes/ia';
+import { FotoPeca, LinhaFiltro, useFiltroColunas } from '../componentes/Peca';
+
+const COLUNAS_PRODUTO = { codigo: (p: any) => p.codigoBarras, ref: (p: any) => p.referencia, descricao: (p: any) => p.descricao, categoria: (p: any) => p.categoria };
 
 interface Linha { id: string; codigoBarras: string; referencia: string; descricao: string; categoria: string | null; cor: string | null; custo: number; preco: number; foto: string | null; estoque: number; emMaletas: number; ativo: boolean }
 
@@ -14,6 +17,7 @@ export function Produtos() {
   const navegar = useNavigate();
   const cats = useQuery({ queryKey: ['categorias'], queryFn: () => api<{ id: string; nome: string; caminho: string }[]>('/produtos/categorias') });
   const q = useQuery({ queryKey: ['produtos', params.toString()], queryFn: () => api<{ itens: Linha[]; total: number }>(`/produtos?${params.toString()}`) });
+  const tabela = useFiltroColunas<Linha>(q.data?.itens ?? [], COLUNAS_PRODUTO);
   const ia = usarIa();
   const [porFoto, setPorFoto] = useState(false);
   return (
@@ -31,11 +35,13 @@ export function Produtos() {
       {porFoto && <BuscaPorFoto fechar={() => setPorFoto(false)} />}
       {q.isLoading ? <Carregando /> : q.error ? <Erro erro={q.error} /> : (
         <table className="tabela">
-          <thead><tr><th></th><th>Código</th><th>Ref.</th><th>Descrição</th><th>Categoria</th><th className="num">Custo</th><th className="num">Preço</th><th className="num">Margem</th><th className="num">Estoque</th><th className="num">Em maletas</th></tr></thead>
+          <thead><tr><th></th><th>Código</th><th>Ref.</th><th>Descrição</th><th>Categoria</th><th className="num">Custo</th><th className="num">Preço</th><th className="num">Margem</th><th className="num">Estoque</th><th className="num">Em maletas</th></tr>
+            <LinhaFiltro celulas={[null, 'codigo', 'ref', 'descricao', 'categoria', null, null, null, null, null]} filtro={tabela.filtro} setFiltro={tabela.setFiltro} />
+          </thead>
           <tbody>
-            {q.data!.itens.map((p) => (
+            {tabela.filtrados.map((p) => (
               <tr key={p.id} className="clicavel" onClick={() => navegar(`/produtos/${p.id}`)}>
-                <td>{p.foto ? <img className="miniatura" src={p.foto} alt="" /> : <span className="miniatura" />}</td>
+                <td><FotoPeca src={p.foto} alt={p.descricao} /></td>
                 <td className="muted">{p.codigoBarras}</td>
                 <td>{p.referencia}</td>
                 <td><b>{p.descricao}</b></td>
