@@ -1,9 +1,10 @@
-import { Fragment, useState } from 'react';
+import { Fragment, useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../../api';
 import { data, reais } from '../../formato';
 import { Carregando, Erro } from '../../componentes/ui';
 import { mesAtual, nomeMes, somarMeses } from './comum';
+import { mudarVisao, usarVisao } from '../../visao';
 
 interface Linha { id: string; codigo: string; nome: string; nivel: number; calculada: boolean; ativo: boolean; valores: number[]; total: number; filhos: Linha[] }
 interface Grupo { chave: string; nome: string; id: string | null; valores: number[]; total: number; contas: Linha[] }
@@ -30,7 +31,10 @@ export function Dre({ irParaTitulos }: { irParaTitulos: () => void }) {
   const [abertos, setAbertos] = useState<Set<string>>(() => new Set(['receita', 'deducoes', 'custos', 'despesas_vendas', 'despesas_pessoal', 'despesas_administrativas', 'financeiro', 'outras']));
   const [zeradas, setZeradas] = useState(false);
   const [foco, setFoco] = useState<{ contaId: string; mes: string; nome: string } | null>(null);
-  const [empresaId, setEmpresaId] = useState('');
+  const visao = usarVisao();
+  const [empresaId, setEmpresaIdLocal] = useState(visao);
+  useEffect(() => setEmpresaIdLocal(visao), [visao]);
+  const setEmpresaId = (id: string) => { setEmpresaIdLocal(id); mudarVisao(id); };
   const empresas = useQuery({ queryKey: ['empresas'], queryFn: () => api<{ id: string; nome: string }[]>('/empresas') });
   const daEmpresa = empresaId ? `&empresaId=${empresaId}` : '';
   const q = useQuery({ queryKey: ['dre', de, ate, regime, empresaId], queryFn: () => api<DreDados>(`/financeiro/dre?de=${de}&ate=${ate}&regime=${regime}${daEmpresa}`), placeholderData: (a) => a });

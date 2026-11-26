@@ -47,6 +47,7 @@ export function Implantacao() {
         </div>
       </div>
       {confirmar.error && <Erro erro={confirmar.error} />}
+      <DataVirada />
       <details className="cartao">
         <summary style={{ fontWeight: 600, cursor: 'pointer' }}>Roteiro do dia da virada (saída do Jueri)</summary>
         <ol style={{ margin: '10px 0 0', paddingLeft: 20, lineHeight: 1.7 }}>
@@ -118,6 +119,36 @@ function ApagarDadosDeTeste({ pendente }: { pendente: boolean }) {
           {m.error && <Erro erro={m.error} />}
         </div>
       )}
+    </div>
+  );
+}
+
+/** Dia da virada: a partir dele as baixas de pagamento são feitas só aqui, e a importação do Jueri não encerra mais contas. */
+function DataVirada() {
+  const qc = useQueryClient();
+  const q = useQuery({ queryKey: ['config', 'virada'], queryFn: () => api<{ data: string | null }>('/configuracoes/chave/virada') });
+  const [data, setData] = useState<string | null>(null);
+  const salvar = useMutation({ mutationFn: (d: string | null) => api('/configuracoes/chave/virada', { metodo: 'PUT', corpo: { data: d } }), onSuccess: () => { setData(null); qc.invalidateQueries({ queryKey: ['config', 'virada'] }); } });
+  const atual = q.data?.data ?? null;
+  const hojeISO = new Date(Date.now() - 3 * 3600_000).toISOString().slice(0, 10);
+  const dias = atual ? Math.round((Date.parse(atual) - Date.parse(hojeISO)) / 86400000) : null;
+  return (
+    <div className="cartao flex entre" style={{ flexWrap: 'wrap', gap: 10 }}>
+      <div style={{ minWidth: 0 }}>
+        <h3 style={{ margin: 0 }}>Dia da virada</h3>
+        <p className="muted" style={{ margin: '4px 0 0' }}>
+          {atual
+            ? dias! > 0 ? `${atual.split('-').reverse().join('/')}: faltam ${dias} dia(s). Até lá, a importação do Jueri ainda encerra aqui o que foi pago lá.` : dias === 0 ? `Hoje (${atual.split('-').reverse().join('/')}). A partir de amanhã as baixas são só no sistema novo.` : `${atual.split('-').reverse().join('/')}: as baixas de pagamento já são só no sistema novo. Importar do Jueri não encerra mais contas aqui.`
+            : 'Marque o dia em que o Jueri para: depois dele, as baixas de pagamento são só no sistema novo.'}
+        </p>
+      </div>
+      {pode('configuracoes', 'editar') && (
+        <div className="flex" style={{ gap: 6 }}>
+          <input type="date" value={data ?? atual ?? ''} onChange={(e) => setData(e.target.value)} aria-label="Dia da virada" />
+          <button className="botao pequeno" disabled={salvar.isPending || data === null || data === atual} onClick={() => salvar.mutate(data || null)}>Salvar</button>
+        </div>
+      )}
+      {salvar.error && <Erro erro={salvar.error} />}
     </div>
   );
 }

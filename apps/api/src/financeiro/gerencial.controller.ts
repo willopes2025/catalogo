@@ -157,11 +157,18 @@ export class GerencialController {
   @Patch('titulos/:id')
   @Permissao('financeiro', 'editar')
   async editarTitulo(@Usuario() u: UsuarioLogado, @Param('id', ParseUUIDPipe) id: string, @Body() body: unknown) {
-    const d = validar(z.object({ descricao: z.string().trim().min(2).max(200).optional(), planoContaId: uuid.nullable().optional(), vencimento: dataISO.optional(), valor: centavos.refine((v) => v > 0, 'Informe o valor').optional() }), body);
+    const d = validar(z.object({ descricao: z.string().trim().min(2).max(200).optional(), planoContaId: uuid.nullable().optional(), centroCustoId: uuid.nullable().optional(), vencimento: dataISO.optional(), valor: centavos.refine((v) => v > 0, 'Informe o valor').optional() }), body);
     const [t] = await this.db.select().from(titulos).where(eq(titulos.id, id));
     if (!t) throw new NotFoundException('Título não encontrado.');
     const mudar: Partial<typeof titulos.$inferInsert> = {};
     if (d.descricao) mudar.descricao = d.descricao;
+    if (d.centroCustoId !== undefined) {
+      if (d.centroCustoId) {
+        const [l] = await this.db.execute<{ tipo: string }>(sql`select tipo::text from locais_estoque where id = ${d.centroCustoId}::uuid`).then((r) => r.rows);
+        if (l?.tipo !== 'evento') throw new BadRequestException('O centro de custo precisa ser um evento cadastrado.');
+      }
+      mudar.centroCustoId = d.centroCustoId;
+    }
     if (d.planoContaId !== undefined) {
       const conta = d.planoContaId ? await this.plano.paraLancar(d.planoContaId) : null;
       mudar.planoContaId = conta?.id ?? null;
@@ -192,6 +199,62 @@ export class GerencialController {
   @Permissao('financeiro', 'ver')
   lancamentos(@Query('contaId') contaId = '', @Query('mes') mes = '', @Query('regime') regime?: string, @Query('empresaId') empresaId?: string) {
     return this.dre.lancamentos({ contaId, mes, regime: (regime === 'competencia' ? 'competencia' : 'caixa') as Regime, empresaId: umaEmpresa(empresaId) });
+  }
+
+  // ───── Centro de custo por evento ─────
+
+  /**
+   * Resultado de cada evento: vendas do PDV do evento (líquidas de devolução), custo das peças vendidas,
+   * despesas e outras receitas lançadas com o evento como centro de custo (pela data de vencimento). Sem período = tudo.
+   */
+  @Get('eventos/resultado')
+  @Permissao('financeiro', 'ver')
+  async resultadoEventos(@Query('de') de?: string, @Query('ate') ate?: string, @Query('empresaId') empresaId?: string, @Query('localId') localId?: string) {
+    const ok = (d?: string) => (d && /^\d{4}-\d{2}-\d{2}$/.test(d) ? d : null);
+    const ini = ok(de);
+    const fim = ok(ate);
+    const emp = umaEmpresa(empresaId);
+    const um = localId && /^[0-9a-f-]{36}$/i.test(localId) ? localId : null;
+    const dia = sql`(v.criado_em at time zone 'America/Sao_Paulo')::date`;
+    const periodoV = sql`${ini ? sql` and ${dia} >= ${ini}::date` : sql``}${fim ? sql` and ${dia} <= ${fim}::date` : sql``}`;
+    const periodoT = sql`${ini ? sql` and t.vencimento >= ${ini}::date` : sql``}${fim ? sql` and t.vencimento <= ${fim}::date` : sql``}`;
+    const eventos = numeros<{ id: string; nome: string; empresa: string; ativo: boolean; vendas: number; qtd: number; descontos: number; devolvido: number; cmv: number; despesas: number; despesas_abertas: number; receitas: number; primeira: string | null; ultima: string | null }>(
+      await this.db.execute(sql`
+        select l.id, l.nome, e.nome as empresa, l.ativo,
+          coalesce((select sum(v.total - v.devolvido) from vendas v where v.local_id = l.id and v.status = 'concluida'${periodoV}), 0) as vendas,
+          coalesce((select count(*) from vendas v where v.local_id = l.id and v.status = 'concluida'${periodoV}), 0)::int as qtd,
+          coalesce((select sum(v.desconto) from vendas v where v.local_id = l.id and v.status = 'concluida'${periodoV}), 0) as descontos,
+          coalesce((select sum(v.devolvido) from vendas v where v.local_id = l.id and v.status = 'concluida'${periodoV}), 0) as devolvido,
+          coalesce((select sum(vi.custo * (vi.quantidade - vi.devolvida)) from venda_itens vi join vendas v on v.id = vi.venda_id where v.local_id = l.id and v.status = 'concluida'${periodoV}), 0) as cmv,
+          coalesce((select sum(t.valor) from titulos t where t.centro_custo_id = l.id and t.tipo = 'pagar' and t.status not in ('cancelado')${periodoT}), 0) as despesas,
+          coalesce((select sum(t.valor) from titulos t where t.centro_custo_id = l.id and t.tipo = 'pagar' and t.status = 'aberto'${periodoT}), 0) as despesas_abertas,
+          coalesce((select sum(t.valor) from titulos t where t.centro_custo_id = l.id and t.tipo = 'receber' and t.status not in ('cancelado')${periodoT}), 0) as receitas,
+          (select min(${dia})::text from vendas v where v.local_id = l.id and v.status = 'concluida') as primeira,
+          (select max(${dia})::text from vendas v where v.local_id = l.id and v.status = 'concluida') as ultima
+        from locais_estoque l join empresas e on e.id = l.empresa_id
+        where l.tipo = 'evento'${emp ? sql` and l.empresa_id = ${emp}::uuid` : sql``}${um ? sql` and l.id = ${um}::uuid` : sql``}
+        order by (select max(v.criado_em) from vendas v where v.local_id = l.id) desc nulls last, l.nome`),
+    ).map((x) => {
+      const resultado = x.vendas - x.cmv - x.despesas + x.receitas;
+      return { id: x.id, nome: x.nome, empresa: x.empresa, ativo: x.ativo, vendas: x.vendas, qtdVendas: x.qtd, descontos: x.descontos, devolvido: x.devolvido, cmv: x.cmv, despesas: x.despesas, despesasAbertas: x.despesas_abertas, outrasReceitas: x.receitas, resultado, margemPb: x.vendas ? Math.round((resultado * 10000) / x.vendas) : null, primeiraVenda: x.primeira, ultimaVenda: x.ultima };
+    });
+    if (!um) return { de: ini, ate: fim, eventos };
+    // Um evento: despesas por conta e os lançamentos.
+    const porConta = numeros<{ conta: string; tipo: string; valor: number; qtd: number }>(
+      await this.db.execute(sql`
+        select coalesce(pc.codigo || ' ' || pc.nome, nullif(t.categoria, ''), 'Sem conta') as conta, t.tipo, sum(t.valor) as valor, count(*)::int as qtd
+        from titulos t left join plano_contas pc on pc.id = t.plano_conta_id
+        where t.centro_custo_id = ${um}::uuid and t.status not in ('cancelado')${periodoT}
+        group by 1, 2 order by 3 desc`),
+    );
+    const lancamentos = numeros<Record<string, unknown>>(
+      await this.db.execute(sql`
+        select t.id, t.tipo, t.descricao, t.valor, t.vencimento::text as vencimento, t.status::text as status, t.pago_em::text as "pagoEm", p.nome as pessoa, coalesce(pc.nome, t.categoria) as conta
+        from titulos t left join pessoas p on p.id = t.pessoa_id left join plano_contas pc on pc.id = t.plano_conta_id
+        where t.centro_custo_id = ${um}::uuid and t.status not in ('cancelado')${periodoT}
+        order by t.vencimento desc limit 300`),
+    );
+    return { de: ini, ate: fim, evento: eventos[0] ?? null, porConta, lancamentos };
   }
 
   // ───── Contas bancárias e caixas ─────

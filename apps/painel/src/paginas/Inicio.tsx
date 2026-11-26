@@ -8,6 +8,7 @@ import { Carregando, Erro } from '../componentes/ui';
 import { usarImplantacao } from './Implantacao';
 import { BarraMeta, type MetasResp } from './indicadores/Metas';
 import './inicio.css';
+import { comVisao, usarVisao } from '../visao';
 
 interface Atividade { id: string; criadoEm: string; acao: string; entidade: string; entidadeId: string | null; dados: Record<string, any> | null; usuarioId: string | null; usuario: string | null }
 interface Pendencia { chave: string; rotulo: string; quantidade: number; link: string; tom: 'erro' | 'alerta' | 'info' }
@@ -128,7 +129,8 @@ const saudacao = () => {
 };
 
 export function Inicio() {
-  const q = useQuery({ queryKey: ['inicio'], queryFn: () => api<Inicio>('/painel/inicio'), refetchInterval: 60_000 });
+  const visao = usarVisao();
+  const q = useQuery({ queryKey: ['inicio', visao], queryFn: () => api<Inicio>(comVisao('/painel/inicio', visao)), refetchInterval: 60_000 });
   if (q.isLoading) return <Carregando />;
   if (q.error) return <Erro erro={q.error} />;
   const d = q.data!;

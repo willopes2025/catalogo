@@ -4560,3 +4560,65 @@ test('cobrança pelo WhatsApp: fila com intervalo e horário do número, trilha 
   await ok('PATCH', `/crm/ia-agentes/${esp.id}`, { ativo: false, canais: [] });
   await ok('PUT', '/crm/ia-agente', semExtras);
 });
+
+test('eventos com centro de custo: vendas do caixa do evento, despesas lançadas no evento e resultado; visão por CNPJ e dia da virada', async () => {
+  const empresas = await ok('GET', '/empresas');
+  const matriz = empresas.find((e) => e.tipo === 'matriz');
+  const loja = empresas.find((e) => e.tipo === 'loja');
+  assert.equal((await chamar('POST', '/eventos', { nome: 'Bioma Teste', inicio: '2026-12-10', fim: '2026-12-01' })).status, 400, 'fim antes do início');
+  const ev = await ok('POST', '/eventos', { nome: 'Bioma Teste', inicio: '2026-12-01', fim: '2026-12-10', cidade: 'Vitória' });
+  assert.equal(ev.empresaId, matriz.id, 'sem escolher, o evento fica no CNPJ da matriz');
+  assert.equal((await chamar('POST', '/eventos', { nome: 'bioma teste' })).status, 400, 'nome repetido');
+  assert.ok((await ok('GET', '/estoque/locais')).some((l) => l.id === ev.id && l.tipo === 'evento'), 'o evento vira ponto de venda');
+  // Leva peças para o evento e vende pelo caixa dele.
+  const p = (await ok('GET', '/produtos')).itens.find((x) => x.preco > 0 && x.custo > 0);
+  await ok('POST', '/estoque/entradas', { destinoId: ev.id, itens: [{ codigoBarras: p.codigoBarras, quantidade: 3 }] });
+  await ok('POST', '/caixas/abrir', { localId: ev.id, valorAbertura: 0 });
+  const v = await ok('POST', '/vendas', { localId: ev.id, tipo: 'balcao', itens: [{ codigoBarras: p.codigoBarras, quantidade: 2 }], pagamentos: [{ forma: 'pix', valor: p.preco * 2 }] });
+  assert.equal(v.empresaId ?? matriz.id, matriz.id);
+  // Despesas do evento: uma já paga, uma a pagar; e uma da operação (sem evento).
+  const conta = (await ok('GET', '/financeiro/contas'))[0];
+  assert.equal((await chamar('POST', '/financeiro/titulos', { empresaId: matriz.id, tipo: 'pagar', descricao: 'Errado', valor: 100, vencimento: '2026-12-01', centroCustoId: ctx.loja.id })).status, 400, 'centro de custo só pode ser evento');
+  const [espaco] = await ok('POST', '/financeiro/titulos', { empresaId: matriz.id, tipo: 'pagar', descricao: 'Espaço no Bioma', valor: 50000, vencimento: '2026-11-20', centroCustoId: ev.id, pagoEm: '2026-11-20', contaId: conta.id });
+  await ok('POST', '/financeiro/titulos', { empresaId: matriz.id, tipo: 'pagar', descricao: 'Alimentação da equipe', valor: 8000, vencimento: '2026-12-11', centroCustoId: ev.id });
+  const [outra] = await ok('POST', '/financeiro/titulos', { empresaId: matriz.id, tipo: 'pagar', descricao: 'Transporte (lançado sem evento)', valor: 3000, vencimento: '2026-12-11' });
+  await ok('POST', '/financeiro/titulos/centro-custo', { ids: [outra.id], centroCustoId: ev.id });
+  const lista = await ok('GET', `/financeiro/titulos?tipo=pagar&aba=abertos&centroCustoId=${ev.id}`);
+  assert.equal(lista.itens.length, 2);
+  assert.equal(lista.itens[0].centroCusto, 'Bioma Teste');
+  const r = await ok('GET', `/financeiro/eventos/resultado?localId=${ev.id}`);
+  assert.equal(r.evento.vendas, p.preco * 2);
+  assert.equal(r.evento.cmv, p.custo * 2);
+  assert.equal(r.evento.despesas, 61000);
+  assert.equal(r.evento.despesasAbertas, 11000);
+  assert.equal(r.evento.resultado, p.preco * 2 - p.custo * 2 - 61000);
+  assert.equal(r.lancamentos.length, 3);
+  assert.ok(r.lancamentos.some((t) => t.id === espaco.id));
+  // Período: a despesa paga em novembro fica fora de dezembro.
+  const dez = await ok('GET', `/financeiro/eventos/resultado?localId=${ev.id}&de=2026-12-01&ate=2026-12-31`);
+  assert.equal(dez.evento.despesas, 11000);
+  // Encerrar: com peça no estoque ou caixa aberto não deixa.
+  assert.equal((await chamar('PATCH', `/eventos/${ev.id}`, { ativo: false })).status, 400);
+  // Visão por CNPJ: a venda do evento está na matriz, não na loja.
+  const soMatriz = await ok('GET', `/vendas?localId=${ev.id}&empresaId=${matriz.id}`);
+  const soLoja = await ok('GET', `/vendas?localId=${ev.id}&empresaId=${loja.id}`);
+  assert.equal(soMatriz.itens.length, 1);
+  assert.equal(soLoja.itens.length, 0);
+  const tudo = await ok('GET', '/indicadores/geral');
+  const gm = await ok('GET', `/indicadores/geral?empresaId=${matriz.id}`);
+  const gl = await ok('GET', `/indicadores/geral?empresaId=${loja.id}`);
+  assert.equal(gm.atual.faturamento + gl.atual.faturamento, tudo.atual.faturamento, 'consolidado = soma dos CNPJs');
+  assert.ok(gm.atual.eventos >= p.preco * 2);
+  assert.equal(gl.atual.eventos, 0);
+  const im = await ok('GET', `/painel/inicio?empresaId=${loja.id}`);
+  assert.equal(im.maletas.abertas, 0, 'as maletas são da matriz');
+  await ok('GET', `/indicadores/financeiro?empresaId=${matriz.id}`);
+  const fl = await ok('GET', `/financeiro/titulos?tipo=pagar&aba=abertos&empresaId=${loja.id}`);
+  assert.ok(!fl.itens.some((t) => t.centroCusto === 'Bioma Teste'));
+  // Dia da virada.
+  assert.deepEqual(await ok('GET', '/configuracoes/chave/virada'), { data: null });
+  await ok('PUT', '/configuracoes/chave/virada', { data: '2026-11-27' });
+  assert.equal((await ok('GET', '/configuracoes/chave/virada')).data, '2026-11-27');
+  assert.equal((await chamar('PUT', '/configuracoes/chave/virada', { data: '27/11' })).status, 400);
+  await ok('PUT', '/configuracoes/chave/virada', { data: null });
+});

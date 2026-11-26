@@ -25,6 +25,7 @@ import { Estoque } from './paginas/Estoque';
 import { Maletas } from './paginas/Maletas';
 import { NovaMaleta } from './paginas/NovaMaleta';
 import { DetalheMaleta } from './paginas/DetalheMaleta';
+import { Eventos } from './paginas/Eventos';
 import { ConferenciaMaleta } from './paginas/ConferenciaMaleta';
 import { Acerto } from './paginas/Acerto';
 import { Financeiro } from './paginas/Financeiro';
@@ -123,6 +124,7 @@ ReactDOM.createRoot(document.getElementById('raiz')!).render(
             <Route path="cobranca" element={<Cobranca />} />
             <Route path="cobranca/devedor/:pessoaId" element={<Devedor />} />
             <Route path="lojas" element={<Lojas />} />
+            <Route path="lojas/eventos" element={<Eventos />} />
             <Route path="vendas" element={<Vendas />} />
             <Route path="vendas/nova" element={<NovaVenda />} />
             <Route path="vendas/:id" element={<DetalheVenda />} />

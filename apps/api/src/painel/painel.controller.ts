@@ -5,6 +5,7 @@ import { DB, type Db } from '../comum/db.module';
 import { Permissao, Usuario, temPermissao, type UsuarioLogado } from '../comum/auth';
 import { acertos, auditoria, grupos, maletaItens, maletas, pessoas, titulos, usuarios } from '../db/schema';
 import { hoje } from '../maletas/maletas.service';
+import { daEmpresa, empresaDaVisao } from '../relatorios/fontes';
 
 /** Considera "conectado" quem falou com o servidor nos últimos 5 minutos (o painel aberto consulta a cada minuto). */
 const ONLINE_MS = 5 * 60_000;
@@ -19,7 +20,8 @@ export class PainelController {
 
   @Get('inicio')
   @Permissao('inicio', 'ver')
-  async inicio(@Usuario() u: UsuarioLogado) {
+  async inicio(@Usuario() u: UsuarioLogado, @Query('empresaId') empresa?: string) {
+    const emp = empresaDaVisao(empresa);
     const pode = (m: string, a = 'ver') => temPermissao(u.permissoes, m, a);
     const gestao = pode('configuracoes');
     const h = hoje();
@@ -39,7 +41,7 @@ export class PainelController {
       })
       .from(maletas)
       .leftJoin(maletaItens, eq(maletaItens.maletaId, maletas.id))
-      .where(eq(maletas.status, 'aberta'));
+      .where(and(eq(maletas.status, 'aberta'), emp ? eq(maletas.empresaId, emp) : undefined));
 
     const [rede] = await this.db
       .select({
@@ -61,7 +63,7 @@ export class PainelController {
       })
       .from(titulos)
       // Cartão é repasse da maquininha, não dívida de cliente: não entra em "vencido".
-      .where(and(eq(titulos.tipo, 'receber'), eq(titulos.status, 'aberto'), sql`coalesce(${titulos.formaPagamento}, '') not in ('debito', 'credito')`));
+      .where(and(eq(titulos.tipo, 'receber'), eq(titulos.status, 'aberto'), sql`coalesce(${titulos.formaPagamento}, '') not in ('debito', 'credito')`, emp ? eq(titulos.empresaId, emp) : undefined));
 
     const [mes] = await this.db
       .select({
@@ -71,9 +73,9 @@ export class PainelController {
         percentualMedio: sql<number>`coalesce(avg((${acertos.resultado}->>'percentualVendidoPb')::int),0)::int`,
       })
       .from(acertos)
-      .where(sql`${acertos.data} >= ${inicioMes}::date`);
+      .where(and(sql`${acertos.data} >= ${inicioMes}::date`, emp ? sql`exists (select 1 from maletas mm where mm.id = ${acertos.maletaId} and mm.empresa_id = ${emp}::uuid)` : undefined));
 
-    const vendas = pode('vendas') || pode('maletas') || pode('lojas') ? await this.vendas(h, inicioMes) : null;
+    const vendas = pode('vendas') || pode('maletas') || pode('lojas') ? await this.vendas(h, inicioMes, emp) : null;
     const pendencias = await this.pendencias(u, pode, h);
     const tarefas = pode('crm') ? await this.minhasTarefas(u.id) : [];
     const equipe = gestao ? await this.equipe() : null;
@@ -119,7 +121,8 @@ export class PainelController {
   }
 
   /** Vendas do dia e do mês: rede (acertos das consultoras) separada das lojas e eventos. */
-  private async vendas(h: string, inicioMes: string) {
+  private async vendas(h: string, inicioMes: string, emp: string | null = null) {
+    const e = (c: string) => daEmpresa(emp, c);
     const inicio30 = somarDias(h, -29);
     const dia = sql`(v.criado_em at time zone 'America/Sao_Paulo')::date`;
     const porLocal = linhas<{ id: string; nome: string; tipo: string; hoje: number; mes: number; qtdMes: number }>(
@@ -129,20 +132,20 @@ export class PainelController {
           coalesce(sum(v.total - v.devolvido),0)::bigint as mes,
           count(v.id)::int as "qtdMes"
         from vendas v join locais_estoque l on l.id = v.local_id
-        where v.status = 'concluida' and ${dia} >= ${inicioMes}::date
+        where v.status = 'concluida' and ${dia} >= ${inicioMes}::date${e('v.empresa_id')}
         group by l.id, l.nome, l.tipo
         order by sum(v.total) desc`),
     ).map((x) => n(x) as typeof x);
 
     const [redeHoje] = linhas<{ hoje: number; qtd: number }>(
-      await this.db.execute(sql`select coalesce(sum((resultado->>'totalVendido')::int),0)::bigint as hoje, count(*)::int as qtd from acertos where data = ${h}::date`),
+      await this.db.execute(sql`select coalesce(sum((resultado->>'totalVendido')::int),0)::bigint as hoje, count(*)::int as qtd from acertos a where a.data = ${h}::date and exists (select 1 from maletas m where m.id = a.maleta_id${e('m.empresa_id')})`),
     ).map((x) => n(x) as typeof x);
 
     const consultoras = linhas<{ id: string; nome: string; vendido: number; acertos: number }>(
       await this.db.execute(sql`
         select p.id, p.nome, coalesce(sum((a.resultado->>'totalVendido')::int),0)::bigint as vendido, count(a.id)::int as acertos
         from acertos a join maletas m on m.id = a.maleta_id join pessoas p on p.id = m.representante_id
-        where a.data >= ${inicioMes}::date
+        where a.data >= ${inicioMes}::date${e('m.empresa_id')}
         group by p.id, p.nome
         order by sum((a.resultado->>'totalVendido')::int) desc nulls last
         limit 6`),
@@ -152,7 +155,7 @@ export class PainelController {
       await this.db.execute(sql`
         select u.id, u.nome, coalesce(sum(v.total - v.devolvido),0)::bigint as vendido, count(v.id)::int as vendas
         from vendas v join usuarios u on u.id = v.vendedor_id
-        where v.status = 'concluida' and ${dia} >= ${inicioMes}::date
+        where v.status = 'concluida' and ${dia} >= ${inicioMes}::date${e('v.empresa_id')}
         group by u.id, u.nome
         order by sum(v.total) desc
         limit 6`),
@@ -161,11 +164,11 @@ export class PainelController {
     const serie = linhas<{ dia: string; rede: number; lojas: number; eventos: number }>(
       await this.db.execute(sql`
         with dias as (select generate_series(${inicio30}::date, ${h}::date, interval '1 day')::date as dia),
-        r as (select data as dia, sum((resultado->>'totalVendido')::int) as t from acertos where data >= ${inicio30}::date group by data),
+        r as (select a.data as dia, sum((a.resultado->>'totalVendido')::int) as t from acertos a join maletas m on m.id = a.maleta_id where a.data >= ${inicio30}::date${e('m.empresa_id')} group by a.data),
         lv as (
           select ${dia} as dia, sum(v.total - v.devolvido) filter (where l.tipo = 'evento') as ev, sum(v.total - v.devolvido) filter (where l.tipo <> 'evento') as lj
           from vendas v join locais_estoque l on l.id = v.local_id
-          where v.status = 'concluida' and ${dia} >= ${inicio30}::date group by 1)
+          where v.status = 'concluida' and ${dia} >= ${inicio30}::date${e('v.empresa_id')} group by 1)
         select to_char(d.dia, 'YYYY-MM-DD') as dia, coalesce(r.t,0)::bigint as rede, coalesce(lv.lj,0)::bigint as lojas, coalesce(lv.ev,0)::bigint as eventos
         from dias d left join r on r.dia = d.dia left join lv on lv.dia = d.dia order by d.dia`),
     ).map((x) => n(x) as typeof x);

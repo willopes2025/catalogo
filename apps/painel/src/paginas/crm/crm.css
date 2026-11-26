@@ -65,6 +65,11 @@
 .sugestoes button { display: block; width: 100%; text-align: left; border: none; background: none; padding: 7px 10px; font: inherit; font-size: 13px; cursor: pointer; }
 .sugestoes button:hover { background: var(--creme-2); }
 .inbox-lado { border-left: 1px solid var(--linha); overflow-y: auto; padding: 14px; display: flex; flex-direction: column; gap: 12px; }
+.inbox.sem-card { grid-template-columns: 330px 1fr 34px; }
+.inbox-ocultar-card { align-self: flex-end; }
+.inbox-mostrar-card { border: 0; border-left: 1px solid var(--linha); background: var(--creme-2, #f7f2ea); color: var(--tinta); cursor: pointer; font: inherit; font-size: 13px; font-weight: 600; display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 14px 0; }
+.inbox-mostrar-card span { writing-mode: vertical-rl; }
+.inbox-mostrar-card:hover { background: var(--papel); }
 
 /* Card do lead */
 .lead-topo { display: flex; justify-content: space-between; gap: 14px; align-items: flex-start; flex-wrap: wrap; margin-bottom: 12px; }
@@ -102,7 +107,8 @@
 
 @media (max-width: 1100px) {
   .inbox { grid-template-columns: 280px 1fr; }
-  .inbox-lado { display: none; }
+  .inbox-lado, .inbox-mostrar-card { display: none; }
+  .inbox.sem-card { grid-template-columns: 280px 1fr; }
   .lead-grade { grid-template-columns: 1fr; }
 }
 

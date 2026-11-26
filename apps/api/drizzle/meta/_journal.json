@@ -344,6 +344,13 @@
       "when": 1795696500542,
       "tag": "0048_maleta_conferencia",
       "breakpoints": true
+    },
+    {
+      "idx": 49,
+      "version": "7",
+      "when": 1795697106269,
+      "tag": "0049_centro_custo_evento",
+      "breakpoints": true
     }
   ]
 }

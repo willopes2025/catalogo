@@ -1,3 +1,4 @@
+import { mudarVisao, usarVisao } from '../visao';
 import { useState } from 'react';
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { MODULOS } from '@aritana/regras';
@@ -43,6 +44,22 @@ export function Layout() {
       }
       return n;
     });
+  // Menu lateral recolhido (mais espaço para a tela); fica guardado neste navegador.
+  const [recolhido, setRecolhido] = useState(() => {
+    try {
+      return localStorage.getItem('aritana.menu.recolhido') === '1';
+    } catch {
+      return false;
+    }
+  });
+  const recolher = (v: boolean) => {
+    setRecolhido(v);
+    try {
+      localStorage.setItem('aritana.menu.recolhido', v ? '1' : '0');
+    } catch {
+      /* sem armazenamento: vale até recarregar */
+    }
+  };
   const navegar = useNavigate();
   // Relê as permissões do servidor (a gerência pode ter mudado o grupo desde o login).
   useQuery({ queryKey: ['eu'], queryFn: async () => { const u = await api<any>('/auth/eu'); atualizarUsuario({ id: u.id, nome: u.nome, email: u.email, grupo: u.grupo, permissoes: u.permissoes }); return u; }, staleTime: 60_000 });
@@ -76,11 +93,20 @@ export function Layout() {
       return { ...g, aberto: !g.titulo || !!termo || aqui || !fechados.includes(g.titulo), aviso: (g.itens.some((m) => m.chave === 'crm') ? avisoCrm : 0) + (g.itens.some((m) => m.chave === 'meu-ponto') ? avisoPonto : 0) };
     });
   return (
-    <div className="app">
-      <aside className="lateral">
+    <div className={`app${recolhido ? ' menu-recolhido' : ''}`}>
+      {recolhido && (
+        <button type="button" className="abrir-menu" onClick={() => recolher(false)} aria-label="Abrir o menu" title="Abrir o menu">
+          ☰
+        </button>
+      )}
+      <aside className="lateral" hidden={recolhido}>
         <div className="marca">
           <img src="/logo-creme.png" alt="Aritana Semijoias" />
+          <button type="button" className="recolher-menu" onClick={() => recolher(true)} aria-label="Recolher o menu" title="Recolher o menu">
+            «
+          </button>
         </div>
+        <SeletorVisao />
         <input className="busca-menu" type="search" placeholder="Buscar no menu" aria-label="Buscar no menu" value={busca} onChange={(e) => setBusca(e.target.value)} />
         <nav aria-label="Módulos">
           {grupos.map((g) => (
@@ -132,5 +158,23 @@ export function Layout() {
       <Softphone />
       <AvisosDaMesa avisos={mesa.avisos} fechar={mesa.fechar} />
     </div>
+  );
+}
+
+/** Consolidado ou um CNPJ só: vale para Início, Indicadores, Financeiro e DRE. Só aparece com mais de uma empresa. */
+function SeletorVisao() {
+  const visao = usarVisao();
+  const empresas = useQuery({ queryKey: ['empresas'], queryFn: () => api<{ id: string; nome: string; cnpj: string | null; ativo: boolean }[]>('/empresas'), staleTime: 300_000 });
+  const lista = (empresas.data ?? []).filter((e) => e.ativo);
+  if (lista.length < 2) return null;
+  const cnpj = (c: string | null) => (c && c.length === 14 ? ` · ${c.slice(0, 2)}.${c.slice(2, 5)}.${c.slice(5, 8)}/${c.slice(8, 12)}-${c.slice(12)}` : '');
+  return (
+    <label className="visao-menu" title="Os números do Início, Indicadores, Financeiro e DRE seguem esta visão">
+      <span>Visão</span>
+      <select value={lista.some((e) => e.id === visao) ? visao : ''} onChange={(e) => mudarVisao(e.target.value)} aria-label="Visão por empresa (CNPJ)">
+        <option value="">Consolidado (todos os CNPJs)</option>
+        {lista.map((e) => <option key={e.id} value={e.id}>{e.nome}{cnpj(e.cnpj)}</option>)}
+      </select>
+    </label>
   );
 }

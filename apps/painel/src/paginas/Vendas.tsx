@@ -7,6 +7,7 @@ import { Abas, Campo, Carregando, Erro, Topo } from '../componentes/ui';
 import { FORMAS, PontoDeVenda } from '../componentes/PontoDeVenda';
 import { BotaoNfce } from './Lojas';
 import { PedidosLink } from './PedidosLink';
+import { usarVisao } from '../visao';
 
 const TIPO: Record<string, string> = { balcao: 'Loja / evento', avulsa: 'Avulsa (matriz)', revenda: 'Revenda' };
 const nomeForma = (f: string) => FORMAS.find((x) => x[0] === f)?.[1] ?? f;
@@ -17,7 +18,10 @@ export function Vendas() {
   const [de, setDe] = useState('');
   const [ate, setAte] = useState('');
   const navegar = useNavigate();
-  const q = useQuery({ enabled: aba !== 'link', queryKey: ['vendas', aba, tipo, de, ate], queryFn: () => api<{ itens: any[]; total: number }>(`/vendas?${new URLSearchParams({ aba, ...(tipo && { tipo }), ...(de && { de }), ...(ate && { ate }) })}`) });
+  const [params, setParams] = useSearchParams();
+  const localId = params.get('localId') ?? '';
+  const visao = usarVisao();
+  const q = useQuery({ enabled: aba !== 'link', queryKey: ['vendas', aba, tipo, de, ate, localId, visao], queryFn: () => api<{ itens: any[]; total: number }>(`/vendas?${new URLSearchParams({ aba, ...(tipo && { tipo }), ...(de && { de }), ...(ate && { ate }), ...(localId && { localId }), ...(visao && { empresaId: visao }) })}`) });
   return (
     <>
       <Topo eb="Vendas" titulo="Vendas" sub={q.data && `${q.data.itens.length} vendas · ${reais(q.data.total)}`} acoes={pode('vendas', 'criar') && <><Link className="botao claro" to="/vendas/nova?tipo=revenda">Venda de revenda</Link><Link className="botao" to="/vendas/nova?tipo=avulsa">Venda avulsa</Link></>} />
@@ -27,6 +31,7 @@ export function Vendas() {
         <select value={tipo} onChange={(e) => setTipo(e.target.value)}><option value="">Todos os tipos</option>{Object.entries(TIPO).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select>
         <input type="date" value={de} onChange={(e) => setDe(e.target.value)} style={{ maxWidth: 170 }} />
         <input type="date" value={ate} onChange={(e) => setAte(e.target.value)} style={{ maxWidth: 170 }} />
+        {localId && <span className="etiqueta neutra" style={{ alignSelf: 'center' }}>Só um local · <button className="link" onClick={() => setParams({})}>ver todos</button></span>}
       </div>
       {q.isLoading ? <Carregando /> : q.error ? <Erro erro={q.error} /> : q.data!.itens.length === 0 ? <div className="cartao vazio">Nenhuma venda.</div> : (
         <table className="tabela">

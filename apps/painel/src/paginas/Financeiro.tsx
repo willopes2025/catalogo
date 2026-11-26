@@ -12,6 +12,10 @@ import { ContasBancarias } from './financeiro/ContasBancarias';
 import { Asaas } from './financeiro/Asaas';
 import { SeletorPlano, usePlano } from './financeiro/comum';
 import './financeiro/financeiro.css';
+import { comVisao, usarVisao } from '../visao';
+
+/** Eventos cadastrados (cada um é um centro de custo). */
+export const usarEventos = () => useQuery({ queryKey: ['eventos'], queryFn: () => api<{ id: string; nome: string; ativo: boolean; inicio: string | null }[]>('/eventos'), staleTime: 60_000 });
 
 type Secao = 'lancamentos' | 'dre' | 'plano' | 'contas' | 'asaas';
 
@@ -46,10 +50,13 @@ function Titulos({ secoes }: { secoes: React.ReactNode }) {
   const plano = usePlano();
   const contaFiltro = plano.data?.contas.find((c) => c.id === filtroPlano);
   const [ligando, setLigando] = useState<string | null>(null);
+  const [evento, setEvento] = useState(params.get('evento') ?? '');
+  const eventos = usarEventos();
+  const visao = usarVisao();
   const qc = useQueryClient();
-  const filtro = `tipo=${tipo}&aba=${aba}${busca.trim() ? `&busca=${encodeURIComponent(busca.trim())}` : ''}${semPessoa ? '&semPessoa=1' : ''}${semPlano ? '&semPlano=1' : ''}${filtroPlano ? `&planoContaId=${filtroPlano}` : ''}`;
+  const filtro = `tipo=${tipo}&aba=${aba}${evento ? `&centroCustoId=${evento}` : ''}${visao ? `&empresaId=${visao}` : ''}${busca.trim() ? `&busca=${encodeURIComponent(busca.trim())}` : ''}${semPessoa ? '&semPessoa=1' : ''}${semPlano ? '&semPlano=1' : ''}${filtroPlano ? `&planoContaId=${filtroPlano}` : ''}`;
   const q = useQuery({ queryKey: ['titulos', filtro], queryFn: () => api<{ itens: any[]; total: number; quantidade: number }>(`/financeiro/titulos?${filtro}`) });
-  const contas = useQuery({ queryKey: ['contas'], queryFn: () => api<any[]>('/financeiro/contas') });
+  const contas = useQuery({ queryKey: ['contas', visao], queryFn: () => api<any[]>(comVisao('/financeiro/contas', visao)) });
   const [cobranca, setCobranca] = useState<any | null>(null);
   const cobrar = useMutation({
     mutationFn: ({ id, tipo }: { id: string; tipo: 'PIX' | 'BOLETO' }) => api<any>(`/financeiro/titulos/${id}/cobranca`, { corpo: { tipo } }),
@@ -87,6 +94,13 @@ function Titulos({ secoes }: { secoes: React.ReactNode }) {
         <input placeholder="Buscar por descrição ou nome…" value={busca} onChange={(e) => setBusca(e.target.value)} />
         <label className="check" style={{ alignSelf: 'center' }}><input type="checkbox" checked={semPessoa} onChange={(e) => setSemPessoa(e.target.checked)} /> Só sem pessoa ligada</label>
         <label className="check" style={{ alignSelf: 'center' }}><input type="checkbox" checked={semPlano} onChange={(e) => setSemPlano(e.target.checked)} /> Só sem conta do plano</label>
+        {(eventos.data?.length ?? 0) > 0 && (
+          <select value={evento} onChange={(e) => setEvento(e.target.value)} aria-label="Evento (centro de custo)" style={{ maxWidth: 240 }}>
+            <option value="">Todos os eventos e a operação</option>
+            <option value="sem">Sem evento (operação)</option>
+            {eventos.data!.map((e) => <option key={e.id} value={e.id}>Evento: {e.nome}</option>)}
+          </select>
+        )}
       </div>
       {contaFiltro && (
         <div className="aviso" style={{ marginBottom: 12 }}>
@@ -134,7 +148,7 @@ function Titulos({ secoes }: { secoes: React.ReactNode }) {
               <tr key={t.id}>
                 {pode('financeiro', 'editar') && <td><input type="checkbox" aria-label={`Marcar ${t.descricao}`} checked={marcados.includes(t.id)} onChange={() => setMarcados((m) => (m.includes(t.id) ? m.filter((x) => x !== t.id) : [...m, t.id]))} /></td>}
                 <td>{data(t.vencimento)}</td>
-                <td>{t.descricao}</td>
+                <td>{t.descricao}{t.centroCusto && <> <span className="etiqueta neutra" title="Centro de custo">Evento: {t.centroCusto}</span></>}</td>
                 <td>
                   {t.planoNome ? <span title={t.planoCodigo}>{t.planoNome}</span> : <span className="etiqueta alerta">Sem conta</span>}
                   {pode('financeiro', 'editar') && <> <button className="botao claro pequeno" onClick={() => setEditando(t)}>Editar</button></>}
@@ -178,19 +192,22 @@ function Titulos({ secoes }: { secoes: React.ReactNode }) {
 const hojeISO = () => new Date(Date.now() - 3 * 3600_000).toISOString().slice(0, 10);
 
 /** Lançamento novo (receita ou despesa, parcelado ou já pago) ou correção de um título que existe. */
-function Lancamento({ titulo, tipoInicial, contas, fechar }: { titulo?: any; tipoInicial: 'receber' | 'pagar'; contas: any[]; fechar: () => void }) {
+export function Lancamento({ titulo, tipoInicial, contas, fechar, centroCustoInicial }: { titulo?: any; tipoInicial: 'receber' | 'pagar'; contas: any[]; fechar: () => void; centroCustoInicial?: string }) {
   const qc = useQueryClient();
   const empresas = useQuery({ queryKey: ['empresas'], queryFn: () => api<any[]>('/empresas') });
+  const eventos = usarEventos();
+  const visao = usarVisao();
   const [f, setF] = useState({
-    tipo: tipoInicial, empresaId: '', descricao: titulo?.descricao ?? '', planoContaId: titulo?.planoContaId ?? '', valor: titulo ? (titulo.valor / 100).toFixed(2).replace('.', ',') : '',
+    centroCustoId: titulo?.centroCustoId ?? centroCustoInicial ?? '',
+    tipo: tipoInicial, empresaId: visao, descricao: titulo?.descricao ?? '', planoContaId: titulo?.planoContaId ?? '', valor: titulo ? (titulo.valor / 100).toFixed(2).replace('.', ',') : '',
     vencimento: titulo?.vencimento ?? hojeISO(), parcelas: '1', formaPagamento: '', pago: false, pagoEm: hojeISO(), contaId: '',
   });
   const travado = !!titulo && (titulo.status !== 'aberto' || !!titulo.cobrancaUrl);
   const salvar = useMutation({
     mutationFn: () => titulo
-      ? api(`/financeiro/titulos/${titulo.id}`, { metodo: 'PATCH', corpo: { descricao: f.descricao, planoContaId: f.planoContaId || null, ...(travado ? {} : { vencimento: f.vencimento, ...(titulo.origemTipo ? {} : { valor: paraCentavos(f.valor) }) }) } })
-      : api('/financeiro/titulos', { corpo: { empresaId: f.empresaId || empresas.data?.[0]?.id, tipo: f.tipo, descricao: f.descricao, planoContaId: f.planoContaId || null, valor: paraCentavos(f.valor), vencimento: f.pago ? f.pagoEm : f.vencimento, parcelas: f.pago ? 1 : Number(f.parcelas) || 1, formaPagamento: f.formaPagamento || null, ...(f.pago ? { pagoEm: f.pagoEm, contaId: f.contaId || null } : {}) } }),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['titulos'] }); qc.invalidateQueries({ queryKey: ['contas'] }); qc.invalidateQueries({ queryKey: ['dre'] }); qc.invalidateQueries({ queryKey: ['plano-contas'] }); fechar(); },
+      ? api(`/financeiro/titulos/${titulo.id}`, { metodo: 'PATCH', corpo: { descricao: f.descricao, planoContaId: f.planoContaId || null, centroCustoId: f.centroCustoId || null, ...(travado ? {} : { vencimento: f.vencimento, ...(titulo.origemTipo ? {} : { valor: paraCentavos(f.valor) }) }) } })
+      : api('/financeiro/titulos', { corpo: { empresaId: f.empresaId || empresas.data?.[0]?.id, tipo: f.tipo, descricao: f.descricao, planoContaId: f.planoContaId || null, centroCustoId: f.centroCustoId || null, valor: paraCentavos(f.valor), vencimento: f.pago ? f.pagoEm : f.vencimento, parcelas: f.pago ? 1 : Number(f.parcelas) || 1, formaPagamento: f.formaPagamento || null, ...(f.pago ? { pagoEm: f.pagoEm, contaId: f.contaId || null } : {}) } }),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['titulos'] }); qc.invalidateQueries({ queryKey: ['contas'] }); qc.invalidateQueries({ queryKey: ['dre'] }); qc.invalidateQueries({ queryKey: ['plano-contas'] }); qc.invalidateQueries({ queryKey: ['eventos-resultado'] }); fechar(); },
   });
   const erros = camposComErro(salvar.error);
   return (
@@ -211,6 +228,14 @@ function Lancamento({ titulo, tipoInicial, contas, fechar }: { titulo?: any; tip
           )}
           <Campo rotulo="Descrição" erro={erros.descricao} className="l2"><input autoFocus maxLength={200} value={f.descricao} onChange={(e) => setF({ ...f, descricao: e.target.value })} placeholder={f.tipo === 'pagar' ? 'Ex.: Aluguel da matriz · novembro' : 'Ex.: Conserto de colar'} /></Campo>
           <Campo rotulo="Conta do plano de contas" erro={erros.planoContaId} className="l2" ajuda="É o que define em que linha da DRE o lançamento aparece."><SeletorPlano valor={f.planoContaId} mudar={(id) => setF({ ...f, planoContaId: id })} tipo={titulo ? titulo.tipo ?? tipoInicial : f.tipo} /></Campo>
+          {(eventos.data?.length ?? 0) > 0 && (
+            <Campo rotulo="Evento (centro de custo)" erro={erros.centroCustoId} className="l2" ajuda="Despesa ou receita de um evento entra no resultado dele (Lojas e eventos › Eventos).">
+              <select value={f.centroCustoId} onChange={(e) => setF({ ...f, centroCustoId: e.target.value })}>
+                <option value="">Nenhum (operação normal)</option>
+                {eventos.data!.filter((e) => e.ativo || e.id === f.centroCustoId).map((e) => <option key={e.id} value={e.id}>{e.nome}</option>)}
+              </select>
+            </Campo>
+          )}
           <Campo rotulo="Valor (R$)" erro={erros.valor} ajuda={titulo?.origemTipo ? 'Veio de uma venda, acerto ou acordo: não muda aqui.' : undefined}><input inputMode="decimal" disabled={travado || !!titulo?.origemTipo} value={f.valor} onChange={(e) => setF({ ...f, valor: e.target.value })} placeholder="0,00" /></Campo>
           {!f.pago && <Campo rotulo="Vencimento" erro={erros.vencimento}><input type="date" disabled={travado} value={f.vencimento} onChange={(e) => setF({ ...f, vencimento: e.target.value })} /></Campo>}
           {!titulo && !f.pago && <Campo rotulo="Parcelas" erro={erros.parcelas} ajuda="Uma por mês, a partir do vencimento."><input type="number" min={1} max={48} value={f.parcelas} onChange={(e) => setF({ ...f, parcelas: e.target.value })} /></Campo>}

@@ -1204,7 +1204,11 @@ export class JueriService {
       `Ligação com a pessoa: ${ligacao.campo + ligacao.documento + ligacao.tipo} pelo cadastro do Jueri, ${ligacao.nome} pelo nome, ${ligacao.nenhuma} sem pessoa (entram só com a descrição e o nome do contato).`,
     );
     // Contas trazidas antes que não estão mais em aberto no Jueri (pagas ou canceladas lá).
-    if (contas.length) {
+    // Depois do dia da virada as baixas são feitas só aqui: o Jueri não encerra mais nada.
+    const virada = (await this.config.ler('virada', tx)).data;
+    const depoisDaVirada = !!virada && hoje() > virada;
+    if (depoisDaVirada) pc.avisos.push(`Depois da virada (${virada.split('-').reverse().join('/')}), as baixas são só no sistema novo: contas pagas ou canceladas no Jueri não foram encerradas aqui.`);
+    if (contas.length && !depoisDaVirada) {
       const antigas = await tx
         .select({ id: titulos.id, j: titulos.idJueri, desc: titulos.descricao, pago: titulos.valorPago, cobranca: titulos.cobrancaExternaId })
         .from(titulos)

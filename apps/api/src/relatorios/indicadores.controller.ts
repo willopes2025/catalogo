@@ -5,7 +5,7 @@ import { DB, type Db } from '../comum/db.module';
 import { Permissao } from '../comum/auth';
 import { ConfiguracoesService } from '../configuracoes/configuracoes.service';
 import { hoje } from '../maletas/maletas.service';
-import { E_CARTAO, ITENS_DEVOLVIDOS_REDE, ITENS_VENDIDOS, NAO_E_CARTAO, numeros } from './fontes';
+import { E_CARTAO, ITENS_DEVOLVIDOS_REDE, ITENS_VENDIDOS, NAO_E_CARTAO, daEmpresa, empresaDaVisao, numeros } from './fontes';
 
 type N = Record<string, number>;
 const pb = (parte: number, todo: number) => (todo > 0 ? Math.round((parte * 10000) / todo) : 0);
@@ -34,17 +34,18 @@ export class IndicadoresController {
   }
 
   /** Números de um período: faturamento por canal, comissão, custo, margem, acertos, recebimentos. */
-  private async resultado(ini: string, fim: string) {
+  private async resultado(ini: string, fim: string, empresaId: string | null = null) {
+    const e = (c: string) => daEmpresa(empresaId, c);
     const [r] = numeros<N>(
       await this.db.execute(sql`
         with ac as (
-          select a.*, m.representante_id from acertos a join maletas m on m.id = a.maleta_id where a.data between ${ini}::date and ${fim}::date
+          select a.*, m.representante_id from acertos a join maletas m on m.id = a.maleta_id where a.data between ${ini}::date and ${fim}::date${e('m.empresa_id')}
         ), vd as (
           select v.total - v.devolvido as liquido, v.devolvido, l.tipo as local, v.tipo
           from vendas v join locais_estoque l on l.id = v.local_id
-          where v.status = 'concluida' and v.criado_em::date between ${ini}::date and ${fim}::date
+          where v.status = 'concluida' and v.criado_em::date between ${ini}::date and ${fim}::date${e('v.empresa_id')}
         ), iv as (
-          select * from ${ITENS_VENDIDOS} x where x.dia between ${ini}::date and ${fim}::date
+          select * from ${ITENS_VENDIDOS} x where x.dia between ${ini}::date and ${fim}::date${e('x.empresa_id')}
         )
         select
           (select coalesce(sum((resultado->>'totalVendido')::bigint), 0) from ac) as rede,
@@ -65,8 +66,8 @@ export class IndicadoresController {
           (select coalesce(sum(custo), 0) from iv) as cmv,
           (select coalesce(sum(qtd), 0) from iv)::int as pecas_vendidas,
           (select coalesce(sum(valor) filter (where custo = 0), 0) from iv) as vendido_sem_custo,
-          (select coalesce(sum(valor_pago), 0) from titulos where tipo = 'receber' and status = 'pago' and pago_em between ${ini}::date and ${fim}::date) as recebido,
-          (select coalesce(sum(valor_pago), 0) from titulos where tipo = 'pagar' and status = 'pago' and pago_em between ${ini}::date and ${fim}::date) as pago,
+          (select coalesce(sum(valor_pago), 0) from titulos where tipo = 'receber' and status = 'pago' and pago_em between ${ini}::date and ${fim}::date${e('empresa_id')}) as recebido,
+          (select coalesce(sum(valor_pago), 0) from titulos where tipo = 'pagar' and status = 'pago' and pago_em between ${ini}::date and ${fim}::date${e('empresa_id')}) as pago,
           (select count(*) from pessoas where tipo = 'representante' and criado_em::date between ${ini}::date and ${fim}::date and id_jueri is null)::int as novas_revendedoras`),
     );
     const balcao = r.lojas + r.eventos + r.outras;
@@ -105,7 +106,8 @@ export class IndicadoresController {
   }
 
   /** Fotografia de agora: capital na rua, estoque, contas e situação da rede. */
-  private async foto() {
+  private async foto(empresaId: string | null = null) {
+    const e = (c: string) => daEmpresa(empresaId, c);
     const [f] = numeros<N>(
       await this.db.execute(sql`
         with rua as (
@@ -113,11 +115,11 @@ export class IndicadoresController {
             coalesce(sum(mi.preco * (mi.enviada - mi.vendida - mi.devolvida - mi.perdida)), 0) as preco,
             coalesce(sum(mi.custo * (mi.enviada - mi.vendida - mi.devolvida - mi.perdida)), 0) as custo,
             coalesce(sum(mi.enviada - mi.vendida - mi.devolvida - mi.perdida), 0) as pecas
-          from maletas m left join maleta_itens mi on mi.maleta_id = m.id where m.status = 'aberta' group by m.id
+          from maletas m left join maleta_itens mi on mi.maleta_id = m.id where m.status = 'aberta'${e('m.empresa_id')} group by m.id
         ), est as (
           select coalesce(sum(s.quantidade * p.custo), 0) as custo, coalesce(sum(s.quantidade * p.preco), 0) as preco, coalesce(sum(s.quantidade), 0) as pecas,
             count(distinct p.id) filter (where p.custo = 0 and s.quantidade > 0) as sem_custo
-          from saldos s join locais_estoque l on l.id = s.local_id and l.tipo <> 'maleta' join produtos p on p.id = s.produto_id where s.quantidade > 0
+          from saldos s join locais_estoque l on l.id = s.local_id and l.tipo <> 'maleta' join produtos p on p.id = s.produto_id where s.quantidade > 0${e('l.empresa_id')}
         ), rep as (
           select p.id,
             exists (select 1 from maletas m where m.representante_id = p.id and m.status = 'aberta') as com_maleta,
@@ -133,20 +135,20 @@ export class IndicadoresController {
           (select coalesce(sum(preco), 0) from rua where data_limite < current_date) as rua_atrasado,
           (select coalesce(avg(current_date - data_retirada), 0) from rua)::int as idade_media_maletas,
           (select custo from est) as estoque_custo, (select preco from est) as estoque_preco, (select pecas from est)::int as estoque_pecas, (select sem_custo from est)::int as produtos_sem_custo,
-          (select coalesce(sum(valor), 0) from titulos where tipo = 'receber' and status = 'aberto' and ${NAO_E_CARTAO}) as a_receber,
-          (select coalesce(sum(valor), 0) from titulos where tipo = 'receber' and status = 'aberto' and ${NAO_E_CARTAO} and vencimento < current_date) as vencido,
-          (select count(distinct pessoa_id) from titulos where tipo = 'receber' and status = 'aberto' and ${NAO_E_CARTAO} and vencimento < current_date)::int as devedores,
-          (select coalesce(sum(valor), 0) from titulos where tipo = 'receber' and status = 'aberto' and ${E_CARTAO}) as cartao_a_receber,
-          (select coalesce(sum(valor), 0) from titulos where tipo = 'receber' and status = 'aberto' and ${E_CARTAO} and vencimento < current_date) as cartao_a_conciliar,
-          (select coalesce(sum(valor), 0) from titulos where tipo = 'pagar' and status = 'aberto') as a_pagar,
-          (select coalesce(sum(valor), 0) from titulos where tipo = 'pagar' and status = 'aberto' and vencimento < current_date) as a_pagar_vencido,
-          (select coalesce(sum(c.saldo_inicial + coalesce((select sum(case when t.tipo = 'receber' then t.valor_pago else -t.valor_pago end) from titulos t where t.conta_id = c.id and t.status = 'pago'), 0)), 0) from contas c where c.ativo) as saldo_contas,
+          (select coalesce(sum(valor), 0) from titulos where tipo = 'receber' and status = 'aberto' and ${NAO_E_CARTAO}${e('empresa_id')}) as a_receber,
+          (select coalesce(sum(valor), 0) from titulos where tipo = 'receber' and status = 'aberto' and ${NAO_E_CARTAO} and vencimento < current_date${e('empresa_id')}) as vencido,
+          (select count(distinct pessoa_id) from titulos where tipo = 'receber' and status = 'aberto' and ${NAO_E_CARTAO} and vencimento < current_date${e('empresa_id')})::int as devedores,
+          (select coalesce(sum(valor), 0) from titulos where tipo = 'receber' and status = 'aberto' and ${E_CARTAO}${e('empresa_id')}) as cartao_a_receber,
+          (select coalesce(sum(valor), 0) from titulos where tipo = 'receber' and status = 'aberto' and ${E_CARTAO} and vencimento < current_date${e('empresa_id')}) as cartao_a_conciliar,
+          (select coalesce(sum(valor), 0) from titulos where tipo = 'pagar' and status = 'aberto'${e('empresa_id')}) as a_pagar,
+          (select coalesce(sum(valor), 0) from titulos where tipo = 'pagar' and status = 'aberto' and vencimento < current_date${e('empresa_id')}) as a_pagar_vencido,
+          (select coalesce(sum(c.saldo_inicial + coalesce((select sum(case when t.tipo = 'receber' then t.valor_pago else -t.valor_pago end) from titulos t where t.conta_id = c.id and t.status = 'pago'), 0)), 0) from contas c where c.ativo${e('c.empresa_id')}) as saldo_contas,
           (select count(*) from rep)::int as ativas,
           (select count(*) from rep where com_maleta)::int as com_maleta,
           (select count(*) from rep where not com_maleta and (ultimo is null or ultimo < current_date - 60))::int as paradas,
           (select count(*) from pessoas where tipo = 'representante' and status = 'triagem')::int as triagem,
-          (select coalesce(avg(a.data - m.data_retirada), 0) from acertos a join maletas m on m.id = a.maleta_id where not a.parcial and a.data >= current_date - 90)::int as ciclo_medio,
-          (select coalesce(sum(x.custo), 0) from ${ITENS_VENDIDOS} x where x.dia >= current_date - 90) as cmv_90`),
+          (select coalesce(avg(a.data - m.data_retirada), 0) from acertos a join maletas m on m.id = a.maleta_id where not a.parcial and a.data >= current_date - 90${e('m.empresa_id')})::int as ciclo_medio,
+          (select coalesce(sum(x.custo), 0) from ${ITENS_VENDIDOS} x where x.dia >= current_date - 90${e('x.empresa_id')}) as cmv_90`),
     );
     const capital = f.rua_custo + f.estoque_custo;
     return {
@@ -180,22 +182,24 @@ export class IndicadoresController {
 
   @Get('geral')
   @Permissao('relatorios', 'ver')
-  async geral(@Query('de') de?: string, @Query('ate') ate?: string) {
+  async geral(@Query('de') de?: string, @Query('ate') ate?: string, @Query('empresaId') empresa?: string) {
     const p = this.periodo(de, ate);
-    const [atual, anterior, foto, regras] = await Promise.all([this.resultado(p.ini, p.fim), this.resultado(p.antIni, p.antFim), this.foto(), this.config.regras()]);
+    const emp = empresaDaVisao(empresa);
+    const e = (c: string) => daEmpresa(emp, c);
+    const [atual, anterior, foto, regras] = await Promise.all([this.resultado(p.ini, p.fim, emp), this.resultado(p.antIni, p.antFim, emp), this.foto(emp), this.config.regras()]);
     const serie = numeros<N & { mes: string }>(
       await this.db.execute(sql`
         with meses as (select generate_series(date_trunc('month', current_date) - interval '11 months', date_trunc('month', current_date), interval '1 month')::date as mes),
-        ac as (select date_trunc('month', data)::date as mes, sum((resultado->>'totalVendido')::bigint) as rede, sum((resultado->>'comissao')::bigint) as comissao from acertos where data >= date_trunc('month', current_date) - interval '11 months' group by 1),
+        ac as (select date_trunc('month', a.data)::date as mes, sum((a.resultado->>'totalVendido')::bigint) as rede, sum((a.resultado->>'comissao')::bigint) as comissao from acertos a join maletas m on m.id = a.maleta_id where a.data >= date_trunc('month', current_date) - interval '11 months'${e('m.empresa_id')} group by 1),
         vd as (
           select date_trunc('month', v.criado_em)::date as mes,
             sum(v.total - v.devolvido) filter (where l.tipo = 'loja' and v.tipo = 'balcao') as lojas,
             sum(v.total - v.devolvido) filter (where l.tipo = 'evento') as eventos,
             sum(v.total - v.devolvido) filter (where not (l.tipo = 'loja' and v.tipo = 'balcao') and l.tipo <> 'evento') as outras
           from vendas v join locais_estoque l on l.id = v.local_id
-          where v.status = 'concluida' and v.criado_em >= date_trunc('month', current_date) - interval '11 months' group by 1),
-        cm as (select date_trunc('month', x.dia)::date as mes, sum(x.custo) as cmv from ${ITENS_VENDIDOS} x where x.dia >= date_trunc('month', current_date) - interval '11 months' group by 1),
-        rc as (select date_trunc('month', pago_em)::date as mes, sum(valor_pago) as recebido from titulos where tipo = 'receber' and status = 'pago' and pago_em >= date_trunc('month', current_date) - interval '11 months' group by 1)
+          where v.status = 'concluida' and v.criado_em >= date_trunc('month', current_date) - interval '11 months'${e('v.empresa_id')} group by 1),
+        cm as (select date_trunc('month', x.dia)::date as mes, sum(x.custo) as cmv from ${ITENS_VENDIDOS} x where x.dia >= date_trunc('month', current_date) - interval '11 months'${e('x.empresa_id')} group by 1),
+        rc as (select date_trunc('month', pago_em)::date as mes, sum(valor_pago) as recebido from titulos where tipo = 'receber' and status = 'pago' and pago_em >= date_trunc('month', current_date) - interval '11 months'${e('empresa_id')} group by 1)
         select to_char(m.mes, 'YYYY-MM') as mes, coalesce(ac.rede, 0) as rede, coalesce(ac.comissao, 0) as comissao, coalesce(vd.lojas, 0) as lojas, coalesce(vd.eventos, 0) as eventos,
           coalesce(vd.outras, 0) as outras, coalesce(cm.cmv, 0) as cmv, coalesce(rc.recebido, 0) as recebido
         from meses m left join ac on ac.mes = m.mes left join vd on vd.mes = m.mes left join cm on cm.mes = m.mes left join rc on rc.mes = m.mes order by m.mes`),
@@ -443,15 +447,17 @@ export class IndicadoresController {
   /** Financeiro: resultado mês a mês, caixa projetado para as próximas semanas e inadimplência. */
   @Get('financeiro')
   @Permissao('relatorios', 'ver')
-  async financeiro() {
+  async financeiro(@Query('empresaId') empresa?: string) {
+    const emp = empresaDaVisao(empresa);
+    const e = (c: string) => daEmpresa(emp, c);
     const meses = numeros<N & { mes: string }>(
       await this.db.execute(sql`
         with meses as (select generate_series(date_trunc('month', current_date) - interval '5 months', date_trunc('month', current_date), interval '1 month')::date as mes),
-        ac as (select date_trunc('month', data)::date as mes, sum((resultado->>'totalVendido')::bigint) as rede, sum((resultado->>'comissao')::bigint) as comissao from acertos where data >= date_trunc('month', current_date) - interval '5 months' group by 1),
-        vd as (select date_trunc('month', criado_em)::date as mes, sum(total) as vendas, sum(devolvido) as devolucoes from vendas where status = 'concluida' and criado_em >= date_trunc('month', current_date) - interval '5 months' group by 1),
-        cm as (select date_trunc('month', x.dia)::date as mes, sum(x.custo) as cmv from ${ITENS_VENDIDOS} x where x.dia >= date_trunc('month', current_date) - interval '5 months' group by 1),
-        dp as (select date_trunc('month', pago_em)::date as mes, sum(valor_pago) as despesas from titulos where tipo = 'pagar' and status = 'pago' and coalesce(categoria, '') <> 'Devoluções' and not exists (select 1 from plano_contas pc where pc.id = titulos.plano_conta_id and pc.grupo = 'fora') and pago_em >= date_trunc('month', current_date) - interval '5 months' group by 1),
-        rc as (select date_trunc('month', pago_em)::date as mes, sum(valor_pago) as recebido from titulos where tipo = 'receber' and status = 'pago' and coalesce(origem_tipo, '') <> 'transferencia' and pago_em >= date_trunc('month', current_date) - interval '5 months' group by 1)
+        ac as (select date_trunc('month', a.data)::date as mes, sum((a.resultado->>'totalVendido')::bigint) as rede, sum((a.resultado->>'comissao')::bigint) as comissao from acertos a join maletas m on m.id = a.maleta_id where a.data >= date_trunc('month', current_date) - interval '5 months'${e('m.empresa_id')} group by 1),
+        vd as (select date_trunc('month', criado_em)::date as mes, sum(total) as vendas, sum(devolvido) as devolucoes from vendas where status = 'concluida' and criado_em >= date_trunc('month', current_date) - interval '5 months'${e('empresa_id')} group by 1),
+        cm as (select date_trunc('month', x.dia)::date as mes, sum(x.custo) as cmv from ${ITENS_VENDIDOS} x where x.dia >= date_trunc('month', current_date) - interval '5 months'${e('x.empresa_id')} group by 1),
+        dp as (select date_trunc('month', pago_em)::date as mes, sum(valor_pago) as despesas from titulos where true${e('empresa_id')} and tipo = 'pagar' and status = 'pago' and coalesce(categoria, '') <> 'Devoluções' and not exists (select 1 from plano_contas pc where pc.id = titulos.plano_conta_id and pc.grupo = 'fora') and pago_em >= date_trunc('month', current_date) - interval '5 months' group by 1),
+        rc as (select date_trunc('month', pago_em)::date as mes, sum(valor_pago) as recebido from titulos where true${e('empresa_id')} and tipo = 'receber' and status = 'pago' and coalesce(origem_tipo, '') <> 'transferencia' and pago_em >= date_trunc('month', current_date) - interval '5 months' group by 1)
         select to_char(m.mes, 'YYYY-MM') as mes, coalesce(ac.rede, 0) as rede, coalesce(vd.vendas, 0) as vendas, coalesce(vd.devolucoes, 0) as devolucoes, coalesce(ac.comissao, 0) as comissao,
           coalesce(cm.cmv, 0) as cmv, coalesce(dp.despesas, 0) as despesas, coalesce(rc.recebido, 0) as recebido
         from meses m left join ac on ac.mes = m.mes left join vd on vd.mes = m.mes left join cm on cm.mes = m.mes left join dp on dp.mes = m.mes left join rc on rc.mes = m.mes order by m.mes`),
@@ -464,28 +470,28 @@ export class IndicadoresController {
     const despesas = numeros<{ mes: string; categoria: string; valor: number }>(
       await this.db.execute(sql`
         select to_char(date_trunc('month', pago_em), 'YYYY-MM') as mes, coalesce(nullif(categoria, ''), 'Sem categoria') as categoria, sum(valor_pago) as valor
-        from titulos where tipo = 'pagar' and status = 'pago' and coalesce(categoria, '') <> 'Devoluções' and not exists (select 1 from plano_contas pc where pc.id = titulos.plano_conta_id and pc.grupo = 'fora') and pago_em >= date_trunc('month', current_date) - interval '5 months'
+        from titulos where true${e('empresa_id')} and tipo = 'pagar' and status = 'pago' and coalesce(categoria, '') <> 'Devoluções' and not exists (select 1 from plano_contas pc where pc.id = titulos.plano_conta_id and pc.grupo = 'fora') and pago_em >= date_trunc('month', current_date) - interval '5 months'
         group by 1, 2 order by 3 desc`),
     );
     const semanas = numeros<N & { semana: string }>(
       await this.db.execute(sql`
         with s as (select generate_series(date_trunc('week', current_date), date_trunc('week', current_date) + interval '7 weeks', interval '1 week')::date as ini)
         select to_char(s.ini, 'YYYY-MM-DD') as semana,
-          coalesce((select sum(valor) from titulos where tipo = 'receber' and status = 'aberto' and vencimento >= greatest(s.ini, current_date) and vencimento < s.ini + 7), 0) as receber,
-          coalesce((select sum(valor) from titulos where tipo = 'pagar' and status = 'aberto' and vencimento >= greatest(s.ini, current_date) and vencimento < s.ini + 7), 0) as pagar
+          coalesce((select sum(valor) from titulos where true${e('empresa_id')} and tipo = 'receber' and status = 'aberto' and vencimento >= greatest(s.ini, current_date) and vencimento < s.ini + 7), 0) as receber,
+          coalesce((select sum(valor) from titulos where true${e('empresa_id')} and tipo = 'pagar' and status = 'aberto' and vencimento >= greatest(s.ini, current_date) and vencimento < s.ini + 7), 0) as pagar
         from s order by s.ini`),
     );
     const [c] = numeros<N>(
       await this.db.execute(sql`
         select
-          (select coalesce(sum(c.saldo_inicial + coalesce((select sum(case when t.tipo = 'receber' then t.valor_pago else -t.valor_pago end) from titulos t where t.conta_id = c.id and t.status = 'pago'), 0)), 0) from contas c where c.ativo) as saldo,
-          (select coalesce(sum(valor), 0) from titulos where tipo = 'receber' and status = 'aberto' and ${NAO_E_CARTAO} and vencimento < current_date) as receber_atrasado,
-          (select coalesce(sum(valor), 0) from titulos where tipo = 'receber' and status = 'aberto' and ${E_CARTAO} and vencimento < current_date) as cartao_a_conciliar,
-          (select coalesce(sum(valor), 0) from titulos where tipo = 'pagar' and status = 'aberto' and vencimento < current_date) as pagar_atrasado,
-          (select coalesce(sum(valor), 0) from titulos where tipo = 'receber' and status = 'aberto' and ${NAO_E_CARTAO}) as a_receber,
-          (select count(*) from titulos where tipo = 'receber' and status = 'pago' and pessoa_id is not null and ${NAO_E_CARTAO} and pago_em >= current_date - 90)::int as pagos_90,
-          (select count(*) from titulos where tipo = 'receber' and status = 'pago' and pessoa_id is not null and ${NAO_E_CARTAO} and pago_em >= current_date - 90 and pago_em <= vencimento)::int as pagos_em_dia_90,
-          (select coalesce(avg(pago_em - vencimento), 0) from titulos where tipo = 'receber' and status = 'pago' and pessoa_id is not null and ${NAO_E_CARTAO} and pago_em >= current_date - 90 and pago_em > vencimento)::int as atraso_medio_pagos`),
+          (select coalesce(sum(c.saldo_inicial + coalesce((select sum(case when t.tipo = 'receber' then t.valor_pago else -t.valor_pago end) from titulos t where t.conta_id = c.id and t.status = 'pago'), 0)), 0) from contas c where c.ativo${e('c.empresa_id')}) as saldo,
+          (select coalesce(sum(valor), 0) from titulos where true${e('empresa_id')} and tipo = 'receber' and status = 'aberto' and ${NAO_E_CARTAO} and vencimento < current_date) as receber_atrasado,
+          (select coalesce(sum(valor), 0) from titulos where true${e('empresa_id')} and tipo = 'receber' and status = 'aberto' and ${E_CARTAO} and vencimento < current_date) as cartao_a_conciliar,
+          (select coalesce(sum(valor), 0) from titulos where true${e('empresa_id')} and tipo = 'pagar' and status = 'aberto' and vencimento < current_date) as pagar_atrasado,
+          (select coalesce(sum(valor), 0) from titulos where true${e('empresa_id')} and tipo = 'receber' and status = 'aberto' and ${NAO_E_CARTAO}) as a_receber,
+          (select count(*) from titulos where true${e('empresa_id')} and tipo = 'receber' and status = 'pago' and pessoa_id is not null and ${NAO_E_CARTAO} and pago_em >= current_date - 90)::int as pagos_90,
+          (select count(*) from titulos where true${e('empresa_id')} and tipo = 'receber' and status = 'pago' and pessoa_id is not null and ${NAO_E_CARTAO} and pago_em >= current_date - 90 and pago_em <= vencimento)::int as pagos_em_dia_90,
+          (select coalesce(avg(pago_em - vencimento), 0) from titulos where true${e('empresa_id')} and tipo = 'receber' and status = 'pago' and pessoa_id is not null and ${NAO_E_CARTAO} and pago_em >= current_date - 90 and pago_em > vencimento)::int as atraso_medio_pagos`),
     );
     let saldo = c.saldo;
     const fluxo = semanas.map((s) => {
@@ -496,7 +502,7 @@ export class IndicadoresController {
       await this.db.execute(sql`
         select case when current_date - vencimento <= 15 then '1 a 15 dias' when current_date - vencimento <= 30 then '16 a 30 dias' when current_date - vencimento <= 60 then '31 a 60 dias' when current_date - vencimento <= 90 then '61 a 90 dias' else 'Mais de 90 dias' end as faixa,
           count(*)::int as titulos, count(distinct pessoa_id)::int as pessoas, sum(valor) as valor
-        from titulos where tipo = 'receber' and status = 'aberto' and vencimento < current_date and ${NAO_E_CARTAO}
+        from titulos where true${e('empresa_id')} and tipo = 'receber' and status = 'aberto' and vencimento < current_date and ${NAO_E_CARTAO}
         group by 1 order by min(current_date - vencimento)`),
     );
     const devedores = numeros<Record<string, any>>(
@@ -504,7 +510,7 @@ export class IndicadoresController {
         select p.id, p.nome, p.telefone1 as telefone, p.tipo, count(*)::int as titulos, sum(t.valor) as valor, max(current_date - t.vencimento)::int as maior_atraso,
           coalesce((select sum(mi.preco * (mi.enviada - mi.vendida - mi.devolvida - mi.perdida)) from maletas m join maleta_itens mi on mi.maleta_id = m.id where m.representante_id = p.id and m.status = 'aberta'), 0) as em_maleta
         from titulos t join pessoas p on p.id = t.pessoa_id
-        where t.tipo = 'receber' and t.status = 'aberto' and t.vencimento < current_date and coalesce(t.forma_pagamento, '') not in ('debito', 'credito')
+        where true${e('t.empresa_id')} and t.tipo = 'receber' and t.status = 'aberto' and t.vencimento < current_date and coalesce(t.forma_pagamento, '') not in ('debito', 'credito')
         group by p.id order by valor desc limit 50`),
     );
     return {

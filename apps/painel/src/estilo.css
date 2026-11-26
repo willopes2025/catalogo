@@ -39,9 +39,18 @@ p { margin: 0; }
 .lateral { background: var(--marrom); color: #eadfce; display: flex; flex-direction: column; position: sticky; top: 0; height: 100vh; overflow-y: auto; }
 .lateral .marca { padding: 22px 22px 18px; border-bottom: 1px solid #6e5b4c; }
 .lateral .marca img { width: 128px; display: block; }
+.lateral .marca { position: relative; }
+.lateral .recolher-menu { position: absolute; top: 14px; right: 10px; width: 30px; height: 30px; border-radius: 8px; border: 1px solid #6e5b4c; background: var(--marrom-2); color: #faf6ef; font-size: 16px; line-height: 1; cursor: pointer; }
+.lateral .recolher-menu:hover { border-color: var(--areia); }
+.app.menu-recolhido { grid-template-columns: 1fr; }
+.abrir-menu { position: fixed; top: calc(12px + env(safe-area-inset-top, 0px)); left: calc(12px + env(safe-area-inset-left, 0px)); z-index: 50; width: 40px; height: 40px; border-radius: 10px; border: 0; background: var(--marrom); color: #faf6ef; font-size: 18px; cursor: pointer; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18); }
+.app.menu-recolhido .conteudo { padding-left: 68px; max-width: 1680px; }
+.lateral[hidden] { display: none; }
 .lateral nav { padding: 10px 10px 20px; display: flex; flex-direction: column; gap: 2px; }
 .lateral nav a, .lateral nav span.item { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 12px; border-radius: 8px; color: #eadfce; font-size: 14.5px; text-decoration: none; }
 .lateral .busca-menu { margin: 12px 12px 0; width: calc(100% - 24px); box-sizing: border-box; padding: 7px 10px; border-radius: 8px; border: 1px solid #6e5b4c; background: var(--marrom-2); color: #faf6ef; font: inherit; font-size: 13.5px; }
+.lateral .visao-menu { display: flex; flex-direction: column; gap: 3px; margin: 12px 12px 0; font-size: 11px; font-weight: 600; letter-spacing: 1.2px; text-transform: uppercase; color: #b9a892; }
+.lateral .visao-menu select { width: 100%; box-sizing: border-box; padding: 6px 8px; border-radius: 8px; border: 1px solid var(--areia); background: var(--marrom-2); color: #faf6ef; font: inherit; font-size: 13px; letter-spacing: 0; text-transform: none; font-weight: 600; }
 .lateral .busca-menu::placeholder { color: #b9a892; }
 .lateral .busca-menu:focus { outline: 2px solid var(--areia); outline-offset: 1px; }
 .lateral .grupo-menu { display: flex; flex-direction: column; gap: 2px; }
@@ -165,6 +174,8 @@ input.invalido { border-color: var(--erro); }
   .lateral .rodape { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 14px; padding: 8px 16px 10px; font-size: 13px; }
   .lateral .rodape > * { margin: 0 !important; }
   .lateral { position: static; height: auto; }
+  .lateral .recolher-menu { top: 6px; }
+  .app.menu-recolhido .conteudo { padding-left: 16px; padding-top: 60px; }
   .lateral nav { flex-direction: row; flex-wrap: wrap; }
   /* No celular os títulos entram na mesma linha dos itens, para o menu não ocupar a tela toda. */
   .lateral nav { align-items: center; }

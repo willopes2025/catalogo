@@ -73,13 +73,15 @@ export class VendasController {
   // ───── Vendas ─────
 
   @Get('vendas')
-  async listar(@Usuario() u: UsuarioLogado, @Query('tipo') tipo?: string, @Query('aba') aba = 'concluidas', @Query('de') de?: string, @Query('ate') ate?: string, @Query('caixaId') caixaId?: string) {
+  async listar(@Usuario() u: UsuarioLogado, @Query('tipo') tipo?: string, @Query('aba') aba = 'concluidas', @Query('de') de?: string, @Query('ate') ate?: string, @Query('caixaId') caixaId?: string, @Query('localId') localId?: string, @Query('empresaId') empresaId?: string) {
     if (!temPermissao(u.permissoes, 'vendas', 'ver') && !temPermissao(u.permissoes, 'lojas', 'ver')) throw new ForbiddenException('Sem permissão.');
     const f: SQL[] = [eq(vendas.status, aba === 'canceladas' ? 'cancelada' : 'concluida')];
     if (tipo) f.push(eq(vendas.tipo, tipo));
     if (de) f.push(gte(vendas.criadoEm, new Date(`${de}T00:00:00-03:00`)));
     if (ate) f.push(lte(vendas.criadoEm, new Date(`${ate}T23:59:59-03:00`)));
     if (caixaId) f.push(eq(vendas.caixaId, caixaId));
+    if (localId && /^[0-9a-f-]{36}$/i.test(localId)) f.push(eq(vendas.localId, localId));
+    if (empresaId && /^[0-9a-f-]{36}$/i.test(empresaId)) f.push(eq(vendas.empresaId, empresaId));
     const itens = await this.db
       .select({ id: vendas.id, numero: vendas.numero, tipo: vendas.tipo, criadoEm: vendas.criadoEm, cliente: pessoas.nome, local: locaisEstoque.nome, vendedor: usuarios.nome, subtotal: vendas.subtotal, desconto: vendas.desconto, total: vendas.total, status: vendas.status })
       .from(vendas)

@@ -15,6 +15,11 @@ const regraMetal = z.object({
  * Lidas pelos serviços com `lerConfig` e editadas na tela Configurações.
  */
 export const CONFIGS = {
+  /** Dia da virada: a partir dele, as baixas de pagamento são feitas só no sistema novo (o Jueri para). */
+  virada: {
+    padrao: { data: null as string | null },
+    schema: z.object({ data: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Data inválida').nullable() }),
+  },
   impressao: {
     padrao: { etiquetaLarguraMm: 50, etiquetaAlturaMm: 25, etiquetaColunas: 1, etiquetaMostrarPreco: true, etiquetaMostrarRef: true, etiquetaTexto: 'Aritana', rodapePedido: '' },
     schema: z.object({

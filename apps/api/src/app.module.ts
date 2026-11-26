@@ -75,6 +75,7 @@ import { PontosService } from './pontos/pontos.service';
 import { JueriController } from './jueri/jueri.controller';
 import { AtendimentoController } from './crm/atendimento.controller';
 import { EnviosController } from './crm/envios.controller';
+import { EventosController } from './estoque/eventos.controller';
 import { FilaEnvioService } from './crm/fila-envio.service';
 import { CrmService } from './crm/crm.service';
 import { CanaisService } from './crm/canais.service';
@@ -114,6 +115,7 @@ if (!segredo || (process.env.NODE_ENV === 'production' && segredo.length < 32)) 
     JueriController,
     AtendimentoController,
     EnviosController,
+    EventosController,
     ArquivosController,
     AuthController,
     PessoasController,

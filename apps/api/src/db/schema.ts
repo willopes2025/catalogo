@@ -58,6 +58,11 @@ export const locaisEstoque = pgTable('locais_estoque', {
   nome: text('nome').notNull(),
   tipo: tipoLocal('tipo').notNull(),
   ativo: boolean('ativo').notNull().default(true),
+  /** Evento: quando acontece, onde e observações (é também o centro de custo do evento). */
+  inicio: date('inicio'),
+  fim: date('fim'),
+  cidade: text('cidade'),
+  observacao: text('observacao'),
   criadoEm: criadoEm(),
 });
 
@@ -439,6 +444,8 @@ export const titulos = pgTable(
     categoria: text('categoria'),
     /** Conta do plano de contas (a categoria em texto continua, com o nome da conta). */
     planoContaId: uuid('plano_conta_id').references(() => planoContas.id),
+    /** Centro de custo: o evento a que a despesa (ou receita) pertence. */
+    centroCustoId: uuid('centro_custo_id').references(() => locaisEstoque.id),
     valor: integer('valor').notNull(),
     vencimento: date('vencimento').notNull(),
     parcela: integer('parcela').notNull().default(1),
@@ -469,6 +476,7 @@ export const titulos = pgTable(
     porVenc: index('titulos_venc_idx').on(t.tipo, t.status, t.vencimento),
     porPessoa: index('titulos_pessoa_idx').on(t.pessoaId),
     porPlano: index('titulos_plano_idx').on(t.planoContaId),
+    porCentro: index('titulos_centro_idx').on(t.centroCustoId),
   }),
 );
 

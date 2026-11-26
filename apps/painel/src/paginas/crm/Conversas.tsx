@@ -17,6 +17,22 @@ export function Conversas({ inicial }: { inicial?: string | null }) {
   const canais = usarCanais();
   const [aba, setAba] = useState<Aba>('fila');
   const [canalId, setCanalId] = useState('');
+  // Card do lead ao lado da conversa: dá para ocultar (mais espaço para o chat); fica guardado neste navegador.
+  const [semCard, setSemCard] = useState(() => {
+    try {
+      return localStorage.getItem('aritana.crm.semCard') === '1';
+    } catch {
+      return false;
+    }
+  });
+  const mostrarCard = (v: boolean) => {
+    setSemCard(!v);
+    try {
+      localStorage.setItem('aritana.crm.semCard', v ? '0' : '1');
+    } catch {
+      /* sem armazenamento */
+    }
+  };
   const [busca, setBusca] = useState('');
   const [aberta, setAberta] = useState<string | null>(inicial ?? null);
   const [soNaoLidas, setSoNaoLidas] = useState(false);
@@ -70,7 +86,7 @@ export function Conversas({ inicial }: { inicial?: string | null }) {
     );
   }
   return (
-    <div className="inbox">
+    <div className={`inbox${semCard ? ' sem-card' : ''}`}>
       <div className="inbox-lista">
         <div className="inbox-abas">
           {abas.map(([k, nome, n]) => (
@@ -189,7 +205,16 @@ export function Conversas({ inicial }: { inicial?: string | null }) {
       <div style={{ minWidth: 0, minHeight: 0 }}>
         {aberta ? <Chat key={aberta} conversaId={aberta} leadId={atual?.lead?.id} abas aoSair={() => setAberta(null)} /> : <div className="chat"><div className="chat-msgs muted" style={{ justifyContent: 'center', alignItems: 'center' }}>Escolha uma conversa.</div></div>}
       </div>
-      <div className="inbox-lado">{aberta && <Lado conversa={atual} />}</div>
+      {semCard ? (
+        <button type="button" className="inbox-mostrar-card" onClick={() => mostrarCard(true)} title="Mostrar o card do lead" aria-label="Mostrar o card do lead">
+          ‹ <span>Card</span>
+        </button>
+      ) : (
+        <div className="inbox-lado">
+          <button type="button" className="botao claro pequeno inbox-ocultar-card" onClick={() => mostrarCard(false)} title="Ocultar o card do lead">Ocultar card ›</button>
+          {aberta && <Lado conversa={atual} />}
+        </div>
+      )}
     </div>
   );
 }

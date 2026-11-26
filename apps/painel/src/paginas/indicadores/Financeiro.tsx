@@ -4,10 +4,12 @@ import { api } from '../../api';
 import { data, pct, reais } from '../../formato';
 import { Carregando, Erro } from '../../componentes/ui';
 import { BarrasLista, BarrasTempo, Cartao, COR, Kpi, mesCurto, Tabela } from './comum';
+import { comVisao, usarVisao } from '../../visao';
 
 /** Financeiro: resultado mês a mês, o caixa das próximas semanas e quem deve. */
 export function Financeiro() {
-  const q = useQuery({ queryKey: ['indicadores', 'financeiro'], queryFn: () => api<any>('/indicadores/financeiro') });
+  const visao = usarVisao();
+  const q = useQuery({ queryKey: ['indicadores', 'financeiro', visao], queryFn: () => api<any>(comVisao('/indicadores/financeiro', visao)) });
   if (q.isLoading) return <Carregando />;
   if (q.error) return <Erro erro={q.error} />;
   const { meses, despesas, caixa: c, fluxo, faixas, devedores } = q.data;

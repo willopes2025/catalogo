@@ -3,6 +3,7 @@ import { api } from '../../api';
 import { pct, reais } from '../../formato';
 import { Carregando, Erro } from '../../componentes/ui';
 import { Alertas, BarrasLista, BarrasTempo, Cartao, COR, Kpi, mesCurto, type Alerta } from './comum';
+import { comVisao, usarVisao } from '../../visao';
 
 interface Resultado {
   faturamento: number; rede: number; lojas: number; eventos: number; outras: number; devolucoes: number; comissaoRede: number; receitaLiquida: number; cmv: number; lucroBruto: number; margemPb: number;
@@ -23,7 +24,8 @@ interface Geral {
 
 /** Visão do negócio: o resultado do período, a comparação com o anterior e o que pede decisão. */
 export function Geral({ de, ate }: { de: string; ate: string }) {
-  const q = useQuery({ queryKey: ['indicadores', 'geral', de, ate], queryFn: () => api<Geral>(`/indicadores/geral?de=${de}&ate=${ate}`) });
+  const visao = usarVisao();
+  const q = useQuery({ queryKey: ['indicadores', 'geral', de, ate, visao], queryFn: () => api<Geral>(comVisao(`/indicadores/geral?de=${de}&ate=${ate}`, visao)) });
   if (q.isLoading) return <Carregando />;
   if (q.error) return <Erro erro={q.error} />;
   const { atual: a, anterior: ant, variacoes: v, foto: f, serie, alertas } = q.data!;

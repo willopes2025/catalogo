@@ -6,7 +6,7 @@ import { DB, type Db } from '../comum/db.module';
 import { Permissao, Usuario, type UsuarioLogado } from '../comum/auth';
 import { centavos, dataISO, validar } from '../comum/validacao';
 import { AuditoriaService } from '../comum/auditoria.service';
-import { contas, empresas, pessoas, planoContas, titulos } from '../db/schema';
+import { contas, empresas, locaisEstoque, pessoas, planoContas, titulos } from '../db/schema';
 import { hoje } from '../maletas/maletas.service';
 import { AsaasService } from '../integracoes/asaas.service';
 import { PlanoContasService } from './plano.service';
@@ -18,6 +18,8 @@ const tituloSchema = z.object({
   descricao: z.string().min(2).max(200),
   categoria: z.string().max(80).optional().nullable(),
   planoContaId: z.string().uuid().optional().nullable(),
+  /** Centro de custo: o evento a que o lançamento pertence. */
+  centroCustoId: z.string().uuid().optional().nullable(),
   /** Lança já como pago (despesa paga na hora, receita recebida): conta e dia do pagamento. */
   pagoEm: dataISO.optional().nullable(),
   contaId: z.string().uuid().optional().nullable(),
@@ -52,8 +54,13 @@ export class FinanceiroController {
     @Query('semPessoa') semPessoa?: string,
     @Query('semPlano') semPlano?: string,
     @Query('planoContaId') planoContaId?: string,
+    @Query('empresaId') empresaId?: string,
+    @Query('centroCustoId') centroCustoId?: string,
   ) {
     const f: SQL[] = [eq(titulos.tipo, tipo)];
+    if (empresaId && /^[0-9a-f-]{36}$/i.test(empresaId)) f.push(eq(titulos.empresaId, empresaId));
+    if (centroCustoId === 'sem') f.push(isNull(titulos.centroCustoId));
+    else if (centroCustoId && /^[0-9a-f-]{36}$/i.test(centroCustoId)) f.push(eq(titulos.centroCustoId, centroCustoId));
     if (semPessoa === '1') f.push(isNull(titulos.pessoaId));
     if (semPlano === '1') f.push(isNull(titulos.planoContaId));
     if (planoContaId && /^[0-9a-f-]{36}$/i.test(planoContaId)) f.push(eq(titulos.planoContaId, planoContaId));
@@ -76,6 +83,8 @@ export class FinanceiroController {
         planoContaId: titulos.planoContaId,
         planoCodigo: planoContas.codigo,
         planoNome: planoContas.nome,
+        centroCustoId: titulos.centroCustoId,
+        centroCusto: sql<string | null>`(select l.nome from locais_estoque l where l.id = ${titulos.centroCustoId})`,
         origemTipo: titulos.origemTipo,
         valor: titulos.valor,
         vencimento: titulos.vencimento,
@@ -110,7 +119,7 @@ export class FinanceiroController {
 
   @Get('contas')
   @Permissao('financeiro', 'ver')
-  async contas() {
+  async contas(@Query('empresaId') empresaId?: string) {
     return this.db
       .select({
         id: contas.id,
@@ -121,7 +130,7 @@ export class FinanceiroController {
       })
       .from(contas)
       .innerJoin(empresas, eq(empresas.id, contas.empresaId))
-      .where(eq(contas.ativo, true))
+      .where(and(eq(contas.ativo, true), empresaId && /^[0-9a-f-]{36}$/i.test(empresaId) ? eq(contas.empresaId, empresaId) : undefined))
       .orderBy(asc(contas.nome));
   }
 
@@ -130,6 +139,7 @@ export class FinanceiroController {
   async criar(@Usuario() u: UsuarioLogado, @Body() body: unknown) {
     const d = validar(tituloSchema, body);
     const conta = d.planoContaId ? await this.plano.paraLancar(d.planoContaId) : null;
+    if (d.centroCustoId) await this.exigirEvento(d.centroCustoId);
     if (d.pagoEm) {
       if (d.parcelas > 1) throw new BadRequestException('Lançamento já pago é de uma parcela só.');
       if (d.pagoEm > hoje()) throw new BadRequestException('A data do pagamento não pode ser no futuro.');
@@ -151,6 +161,7 @@ export class FinanceiroController {
         descricao: d.parcelas > 1 ? `${d.descricao} (${i + 1}/${d.parcelas})` : d.descricao,
         categoria: conta?.nome ?? d.categoria ?? null,
         planoContaId: conta?.id ?? null,
+        centroCustoId: d.centroCustoId ?? null,
         ...(d.pagoEm ? { status: 'pago' as const, pagoEm: d.pagoEm, valorPago: d.valor, contaId: d.contaId } : {}),
         valor: base + (i === 0 ? resto : 0),
         vencimento: venc,
@@ -162,6 +173,23 @@ export class FinanceiroController {
     const criados = await this.db.insert(titulos).values(linhas).returning();
     await this.auditoria.registrar({ usuarioId: u.id, acao: 'criar', entidade: 'titulo', dados: { ids: criados.map((c) => c.id), valor: d.valor } });
     return criados;
+  }
+
+  /** Centro de custo só pode ser um evento cadastrado. */
+  private async exigirEvento(id: string) {
+    const [l] = await this.db.select({ tipo: locaisEstoque.tipo }).from(locaisEstoque).where(eq(locaisEstoque.id, id));
+    if (l?.tipo !== 'evento') throw new BadRequestException('O centro de custo precisa ser um evento cadastrado.');
+  }
+
+  /** Muda o centro de custo (evento) de um ou mais lançamentos. */
+  @Post('titulos/centro-custo')
+  @Permissao('financeiro', 'editar')
+  async centroCusto(@Usuario() u: UsuarioLogado, @Body() body: unknown) {
+    const d = validar(z.object({ ids: z.array(z.string().uuid()).min(1, 'Marque os lançamentos').max(1000), centroCustoId: z.string().uuid().nullable() }), body);
+    if (d.centroCustoId) await this.exigirEvento(d.centroCustoId);
+    const r = await this.db.update(titulos).set({ centroCustoId: d.centroCustoId }).where(inArray(titulos.id, d.ids)).returning({ id: titulos.id });
+    await this.auditoria.registrar({ usuarioId: u.id, acao: 'centro_custo', entidade: 'titulo', dados: { quantidade: r.length, centroCustoId: d.centroCustoId } });
+    return { alterados: r.length };
   }
 
   @Post('titulos/:id/baixar')

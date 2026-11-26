@@ -55,3 +55,13 @@ export function numeros<T>(rows: unknown): T[] {
   const lista = ((rows as { rows?: unknown[] }).rows ?? rows) as Record<string, unknown>[];
   return lista.map((r) => Object.fromEntries(Object.entries(r).map(([k, v]) => [k, typeof v === 'string' && !TEXTO.test(k) && /^-?\d+(\.\d+)?$/.test(v) ? Number(v) : v]))) as T[];
 }
+
+/** Visão por CNPJ: filtra a coluna pela empresa escolhida (sem empresa = consolidado, todas). */
+export const daEmpresa = (empresaId: string | null | undefined, coluna: string) => (empresaId ? sql` and ${sql.raw(coluna)} = ${empresaId}::uuid` : sql``);
+
+/** Confere o id da empresa vindo da tela (vazio = consolidado). */
+export function empresaDaVisao(empresaId?: string | null) {
+  if (!empresaId) return null;
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(empresaId)) return null;
+  return empresaId;
+}

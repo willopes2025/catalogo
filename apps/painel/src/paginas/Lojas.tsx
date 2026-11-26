@@ -28,9 +28,12 @@ export function Lojas() {
         eb="Lojas e eventos"
         titulo="Frente de caixa"
         acoes={
-          <select value={localId} onChange={(e) => { setLocalId(e.target.value); setUltima(null); }} style={{ minWidth: 220 }}>
-            {pontos.map((p) => <option key={p.id} value={p.id}>{p.nome}</option>)}
-          </select>
+          <div className="flex" style={{ flexWrap: 'wrap' }}>
+            <Link className="botao claro" to="/lojas/eventos">Eventos e resultado</Link>
+            <select value={localId} onChange={(e) => { setLocalId(e.target.value); setUltima(null); }} style={{ minWidth: 220 }}>
+              {pontos.map((p) => <option key={p.id} value={p.id}>{p.tipo === 'evento' ? `Evento: ${p.nome}` : p.nome}</option>)}
+            </select>
+          </div>
         }
         sub={caixa.data?.aberto ? <><span className="etiqueta ok">Caixa aberto</span> &nbsp; desde {dataHora(caixa.data.abertoEm)} · {caixa.data.vendas} vendas · {reais(caixa.data.totalVendas)}</> : caixa.data ? <span className="etiqueta neutra">Caixa fechado</span> : undefined}
       />
