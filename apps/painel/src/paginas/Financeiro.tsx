@@ -40,6 +40,7 @@ function Titulos({ secoes }: { secoes: React.ReactNode }) {
   const [tipo, setTipo] = useState<'receber' | 'pagar'>(params.get('semPlano') === '1' ? 'pagar' : 'receber');
   const [aba, setAba] = useState<Aba>('abertos');
   const [originais, setOriginais] = useState(false);
+  const [situacaoReneg, setSituacaoReneg] = useState('');
   const [contaId, setContaId] = useState('');
   const [busca, setBusca] = useState('');
   const [semPessoa, setSemPessoa] = useState(false);
@@ -55,7 +56,7 @@ function Titulos({ secoes }: { secoes: React.ReactNode }) {
   const eventos = usarEventos();
   const visao = usarVisao();
   const qc = useQueryClient();
-  const filtro = `tipo=${tipo}&aba=${aba}${tipo === 'receber' ? '&separarRenegociados=1' : ''}${aba === 'renegociados' && originais ? '&originais=1' : ''}${evento ? `&centroCustoId=${evento}` : ''}${visao ? `&empresaId=${visao}` : ''}${busca.trim() ? `&busca=${encodeURIComponent(busca.trim())}` : ''}${semPessoa ? '&semPessoa=1' : ''}${semPlano ? '&semPlano=1' : ''}${filtroPlano ? `&planoContaId=${filtroPlano}` : ''}`;
+  const filtro = `tipo=${tipo}&aba=${aba}${tipo === 'receber' ? '&separarRenegociados=1' : ''}${aba === 'renegociados' && originais ? '&originais=1' : ''}${aba === 'renegociados' && situacaoReneg && !originais ? `&situacao=${situacaoReneg}` : ''}${evento ? `&centroCustoId=${evento}` : ''}${visao ? `&empresaId=${visao}` : ''}${busca.trim() ? `&busca=${encodeURIComponent(busca.trim())}` : ''}${semPessoa ? '&semPessoa=1' : ''}${semPlano ? '&semPlano=1' : ''}${filtroPlano ? `&planoContaId=${filtroPlano}` : ''}`;
   const q = useQuery({ queryKey: ['titulos', filtro], queryFn: () => api<{ itens: any[]; total: number; quantidade: number }>(`/financeiro/titulos?${filtro}`) });
   const contas = useQuery({ queryKey: ['contas', visao], queryFn: () => api<any[]>(comVisao('/financeiro/contas', visao)) });
   const [cobranca, setCobranca] = useState<any | null>(null);
@@ -89,6 +90,7 @@ function Titulos({ secoes }: { secoes: React.ReactNode }) {
           {contas.data.slice(0, 4).map((c) => <Indicador key={c.id} rotulo={c.nome} valor={reais(c.saldo)} detalhe={c.empresa} />)}
         </div>
       )}
+      {tipo === 'receber' && aba !== 'cartoes' && <ResumoReceber visao={visao} irPara={(a, sit) => { setAba(a); if (a === 'renegociados') { setOriginais(sit === 'originais'); setSituacaoReneg(sit && sit !== 'originais' ? sit : ''); } }} />}
       <Abas ativa={aba} mudar={setAba} abas={[['abertos', tipo === 'receber' ? 'A receber' : 'Em aberto'], ['vencidos', 'Vencidos'], ...(tipo === 'receber' ? ([['renegociados', 'Renegociado']] as [Aba, string][]) : []), ['pagos', 'Pagos'], ...(tipo === 'receber' ? ([['cartoes', 'Cartões (conciliar)']] as [Aba, string][]) : [])]} />
       {aba === 'cartoes' ? <ConciliarCartao contas={contas.data ?? []} /> : <>
       <div className="busca">
@@ -104,9 +106,11 @@ function Titulos({ secoes }: { secoes: React.ReactNode }) {
         )}
       </div>
       {aba === 'renegociados' && (
-        <div className="aviso" style={{ marginBottom: 12 }}>
-          {originais ? 'Títulos originais que entraram em acordo (não se cobram mais; voltam a valer se o acordo quebrar).' : 'Parcelas dos acordos de renegociação ainda a receber. Ficam fora da aba "A receber" para não misturar.'}{' '}
-          <label className="check" style={{ display: 'inline-flex', marginLeft: 8 }}><input type="checkbox" checked={originais} onChange={(e) => setOriginais(e.target.checked)} /> Ver os títulos originais</label>
+        <div className="flex" style={{ gap: 6, flexWrap: 'wrap', marginBottom: 12 }}>
+          {([['', 'Em aberto'], ['avencer', 'A vencer'], ['vencido', 'Vencidas'], ['protestado', 'Protestadas'], ['recebido', 'Recebidas']] as [string, string][]).map(([v, n]) => (
+            <button key={v} className={`botao pequeno ${!originais && situacaoReneg === v ? '' : 'claro'}`} onClick={() => { setOriginais(false); setSituacaoReneg(v); }}>{n}</button>
+          ))}
+          <button className={`botao pequeno ${originais ? '' : 'claro'}`} onClick={() => setOriginais(true)}>Títulos originais transferidos</button>
         </div>
       )}
       {contaFiltro && (
@@ -306,6 +310,54 @@ function LigarPessoa({ tituloId, sugestao, fechar }: { tituloId: string; sugesta
       {termo.length >= 2 && achadas.data?.length === 0 && <span className="muted">Ninguém com esse nome.</span>}
       {ligar.error && <Erro erro={ligar.error} />}
       <button className="botao claro pequeno" onClick={fechar}>Voltar</button>
+    </div>
+  );
+}
+
+interface ResumoCarteira {
+  normal: { aVencer: number; aVencerN: number; vencido: number; vencidoN: number; protestado: number; protestadoN: number; total: number };
+  renegociado: { transferido: number; transferidoN: number; acordosAtivos: number; valorAcordos: number; recebido: number; aVencer: number; aVencerN: number; vencido: number; vencidoN: number; protestado: number; protestadoN: number; total: number };
+  consolidado: { aVencer: number; vencido: number; protestado: number; total: number };
+}
+
+/** Carteira a receber em três blocos: o normal, o renegociado (chance menor de receber) e o consolidado. */
+function ResumoReceber({ visao, irPara }: { visao: string; irPara: (aba: 'abertos' | 'vencidos' | 'renegociados', situacao?: string) => void }) {
+  const q = useQuery({ queryKey: ['titulos', 'resumo-receber', visao], queryFn: () => api<ResumoCarteira>(`/financeiro/receber/resumo${visao ? `?empresaId=${visao}` : ''}`) });
+  if (!q.data) return null;
+  const { normal: n, renegociado: r, consolidado: c } = q.data;
+  const pct = (v: number, t: number) => (t ? ` · ${Math.round((v / t) * 100)}%` : '');
+  const linha = (rotulo: string, valor: number, qtd: number | null, cor?: string, acao?: () => void) => (
+    <div className="resumo-linha" style={{ cursor: acao ? 'pointer' : undefined }} onClick={acao}>
+      <span>{rotulo}{qtd !== null ? <span className="muted"> ({qtd})</span> : null}</span>
+      <b style={{ color: cor }}>{reais(valor)}</b>
+    </div>
+  );
+  return (
+    <div className="grade" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', marginBottom: 14, alignItems: 'start' }}>
+      <div className="cartao">
+        <div className="muted" style={{ fontSize: 12, textTransform: 'uppercase', letterSpacing: 1 }}>A receber (normal)</div>
+        <div style={{ fontSize: 24, fontWeight: 700, margin: '4px 0 8px' }}>{reais(n.total)}</div>
+        {linha('A vencer', n.aVencer, n.aVencerN, undefined, () => irPara('abertos'))}
+        {linha('Vencido', n.vencido, n.vencidoN, n.vencido ? 'var(--erro)' : undefined, () => irPara('vencidos'))}
+        {linha('Protestado', n.protestado, n.protestadoN)}
+      </div>
+      <div className="cartao" style={{ borderLeft: '4px solid var(--dourado)' }}>
+        <div className="muted" style={{ fontSize: 12, textTransform: 'uppercase', letterSpacing: 1 }}>Renegociado <span style={{ textTransform: 'none' }}>(chance menor de receber)</span></div>
+        <div style={{ fontSize: 24, fontWeight: 700, margin: '4px 0 8px' }}>{reais(r.total)} <span className="muted" style={{ fontSize: 13, fontWeight: 400 }}>a receber dos acordos</span></div>
+        {linha('Transferido para renegociação', r.transferido, r.transferidoN, undefined, () => irPara('renegociados', 'originais'))}
+        <div className="muted" style={{ fontSize: 12, margin: '-2px 0 6px' }}>{r.acordosAtivos} acordo(s) ativo(s) somando {reais(r.valorAcordos)} · já recebido {reais(r.recebido)}</div>
+        {linha('A vencer', r.aVencer, r.aVencerN, undefined, () => irPara('renegociados', 'avencer'))}
+        {linha('Vencido', r.vencido, r.vencidoN, r.vencido ? 'var(--erro)' : undefined, () => irPara('renegociados', 'vencido'))}
+        {linha('Protestado', r.protestado, r.protestadoN, undefined, () => irPara('renegociados', 'protestado'))}
+      </div>
+      <div className="cartao" style={{ background: 'var(--marrom, #5c4a3c)', color: '#faf6ef' }}>
+        <div style={{ fontSize: 12, textTransform: 'uppercase', letterSpacing: 1, opacity: 0.8 }}>Consolidado</div>
+        <div style={{ fontSize: 24, fontWeight: 700, margin: '4px 0 8px' }}>{reais(c.total)}</div>
+        <div className="resumo-linha"><span>A vencer</span><b>{reais(c.aVencer)}{pct(c.aVencer, c.total)}</b></div>
+        <div className="resumo-linha"><span>Vencido</span><b>{reais(c.vencido)}{pct(c.vencido, c.total)}</b></div>
+        <div className="resumo-linha"><span>Protestado</span><b>{reais(c.protestado)}{pct(c.protestado, c.total)}</b></div>
+        <div className="resumo-linha" style={{ opacity: 0.85 }}><span>Sendo renegociado</span><b>{reais(r.total)}{pct(r.total, c.total)}</b></div>
+      </div>
     </div>
   );
 }

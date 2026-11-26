@@ -43,6 +43,7 @@ export class FinanceiroController {
     /** Separa o que é de renegociação (parcelas de acordo) do "a receber" normal. */
     @Query('separarRenegociados') separarRenegociados?: string,
     @Query('originais') originais?: string,
+    @Query('situacao') situacao?: string,
   ) {
     const f: SQL[] = [eq(titulos.tipo, tipo)];
     if (empresaId && /^[0-9a-f-]{36}$/i.test(empresaId)) f.push(eq(titulos.empresaId, empresaId));
@@ -57,7 +58,17 @@ export class FinanceiroController {
     if (aba === 'vencidos') f.push(eq(titulos.status, 'aberto'), lt(titulos.vencimento, hoje()));
     if ((aba === 'abertos' || aba === 'vencidos') && separarRenegociados === '1') f.push(sql`not (${deAcordo})`);
     // Renegociado: parcelas dos acordos ainda a receber; com "originais", os títulos que entraram no acordo.
-    if (aba === 'renegociados') f.push(originais === '1' ? eq(titulos.status, 'renegociado') : and(deAcordo, inArray(titulos.status, ['aberto', 'protestado']))!);
+    if (aba === 'renegociados') {
+      if (originais === '1') f.push(eq(titulos.status, 'renegociado'));
+      else {
+        f.push(deAcordo);
+        if (situacao === 'protestado') f.push(eq(titulos.status, 'protestado'));
+        else if (situacao === 'vencido') f.push(eq(titulos.status, 'aberto'), lt(titulos.vencimento, hoje()));
+        else if (situacao === 'avencer') f.push(eq(titulos.status, 'aberto'), gte(titulos.vencimento, hoje()));
+        else if (situacao === 'recebido') f.push(eq(titulos.status, 'pago'));
+        else f.push(inArray(titulos.status, ['aberto', 'protestado']));
+      }
+    }
     if (aba === 'pagos') f.push(eq(titulos.status, 'pago'));
     if (aba === 'protestados') f.push(eq(titulos.status, 'protestado'));
     if (pessoaId) f.push(eq(titulos.pessoaId, pessoaId));
@@ -106,6 +117,46 @@ export class FinanceiroController {
       .leftJoin(pessoas, eq(pessoas.id, titulos.pessoaId))
       .where(and(...f));
     return { itens, total: Number(soma.total), quantidade: soma.quantidade };
+  }
+
+  /**
+   * Carteira a receber separada: o normal, o renegociado (menor chance de receber) e o consolidado.
+   * Renegociado: o que foi transferido para acordo (títulos originais) e as parcelas dos acordos,
+   * divididas em a vencer, vencido e protestado.
+   */
+  @Get('receber/resumo')
+  @Permissao('financeiro', 'ver')
+  async resumoReceber(@Query('empresaId') empresaId?: string) {
+    const emp = empresaId && /^[0-9a-f-]{36}$/i.test(empresaId) ? sql`and t.empresa_id = ${empresaId}` : sql``;
+    const h = hoje();
+    const r = await this.db.execute<Record<string, string>>(sql`
+      select
+        coalesce(sum(t.valor) filter (where not ac and t.status = 'aberto' and t.vencimento >= ${h}), 0)::bigint as normal_a_vencer,
+        count(*) filter (where not ac and t.status = 'aberto' and t.vencimento >= ${h})::int as normal_a_vencer_n,
+        coalesce(sum(t.valor) filter (where not ac and t.status = 'aberto' and t.vencimento < ${h}), 0)::bigint as normal_vencido,
+        count(*) filter (where not ac and t.status = 'aberto' and t.vencimento < ${h})::int as normal_vencido_n,
+        coalesce(sum(t.valor) filter (where not ac and t.status = 'protestado'), 0)::bigint as normal_protestado,
+        count(*) filter (where not ac and t.status = 'protestado')::int as normal_protestado_n,
+        coalesce(sum(t.valor) filter (where ac and t.status = 'aberto' and t.vencimento >= ${h}), 0)::bigint as reneg_a_vencer,
+        count(*) filter (where ac and t.status = 'aberto' and t.vencimento >= ${h})::int as reneg_a_vencer_n,
+        coalesce(sum(t.valor) filter (where ac and t.status = 'aberto' and t.vencimento < ${h}), 0)::bigint as reneg_vencido,
+        count(*) filter (where ac and t.status = 'aberto' and t.vencimento < ${h})::int as reneg_vencido_n,
+        coalesce(sum(t.valor) filter (where ac and t.status = 'protestado'), 0)::bigint as reneg_protestado,
+        count(*) filter (where ac and t.status = 'protestado')::int as reneg_protestado_n,
+        coalesce(sum(coalesce(t.valor_pago, t.valor)) filter (where ac and t.status = 'pago'), 0)::bigint as reneg_recebido,
+        coalesce(sum(t.valor) filter (where t.status = 'renegociado'), 0)::bigint as transferido,
+        count(*) filter (where t.status = 'renegociado')::int as transferido_n
+      from (select *, coalesce(origem_tipo, '') = 'acordo' as ac from titulos) t
+      where t.tipo = 'receber' ${emp}`);
+    const x = Object.fromEntries(Object.entries(r.rows[0] ?? {}).map(([k, v]) => [k, Number(v)]));
+    const [ac] = await this.db.execute<{ ativos: number; total: string }>(sql`select count(*)::int as ativos, coalesce(sum(total),0)::bigint as total from cobranca_acordos where status = 'ativo'`).then((q) => q.rows);
+    const normal = { aVencer: x.normal_a_vencer, aVencerN: x.normal_a_vencer_n, vencido: x.normal_vencido, vencidoN: x.normal_vencido_n, protestado: x.normal_protestado, protestadoN: x.normal_protestado_n };
+    const renegociado = {
+      transferido: x.transferido, transferidoN: x.transferido_n, acordosAtivos: ac?.ativos ?? 0, valorAcordos: Number(ac?.total ?? 0), recebido: x.reneg_recebido,
+      aVencer: x.reneg_a_vencer, aVencerN: x.reneg_a_vencer_n, vencido: x.reneg_vencido, vencidoN: x.reneg_vencido_n, protestado: x.reneg_protestado, protestadoN: x.reneg_protestado_n,
+    };
+    const soma = (o: { aVencer: number; vencido: number; protestado: number }) => o.aVencer + o.vencido + o.protestado;
+    return { normal: { ...normal, total: soma(normal) }, renegociado: { ...renegociado, total: soma(renegociado) }, consolidado: { aVencer: normal.aVencer + renegociado.aVencer, vencido: normal.vencido + renegociado.vencido, protestado: normal.protestado + renegociado.protestado, total: soma(normal) + soma(renegociado) } };
   }
 
   @Get('contas')

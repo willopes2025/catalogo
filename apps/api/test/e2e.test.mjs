@@ -2963,6 +2963,13 @@ test('cobrança: carteira, terceirizada vê só a dela, contato e promessa, 2ª 
   assert.ok(!aReceber.itens.some((t) => t.origemTipo === 'acordo'), 'fora da aba A receber');
   const orig = await ok('GET', `/financeiro/titulos?tipo=receber&aba=renegociados&originais=1&pessoaId=${a.id}`);
   assert.deepEqual(orig.itens.map((t) => t.id).sort(), [ta1.id, ta2.id].sort(), 'os títulos originais renegociados');
+  const resumo = await ok('GET', '/financeiro/receber/resumo');
+  assert.ok(resumo.renegociado.transferido >= 16000, 'montante transferido para renegociação');
+  assert.ok(resumo.renegociado.acordosAtivos >= 1);
+  assert.equal(resumo.renegociado.total, resumo.renegociado.aVencer + resumo.renegociado.vencido + resumo.renegociado.protestado);
+  assert.equal(resumo.consolidado.total, resumo.normal.total + resumo.renegociado.total);
+  const vencidas = await ok('GET', `/financeiro/titulos?tipo=receber&aba=renegociados&situacao=vencido&pessoaId=${a.id}`);
+  assert.ok(vencidas.itens.every((t) => t.status === 'aberto' && t.diasAtraso > 0));
   // Paga a entrada e cancela o acordo: o que foi pago abate o título mais antigo e o resto volta a ser cobrado.
   await ok('POST', `/financeiro/titulos/${ac.parcelas[0].id}/baixar`, { valorPago: 5000 });
   const enc = await ok('POST', `/cobranca/acordos/${ac.acordo.id}/cancelar`, { motivo: 'Cliente desistiu do acordo' });
