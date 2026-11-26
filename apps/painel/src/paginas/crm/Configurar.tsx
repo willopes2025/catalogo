@@ -83,13 +83,13 @@ function CartaoCanal({ canal: c, editar, destaque }: { canal: Canal; editar: () 
           </div>
           {/* Para conferir se as mensagens estão chegando. */}
           <div className="muted" style={{ fontSize: 12 }}>
-            {c.ultimoWebhookEm ? `Último aviso do WhatsApp para o sistema: ${new Date(c.ultimoWebhookEm).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}` : c.tipo === 'oficial' ? 'O WhatsApp ainda não avisou o sistema de nenhuma mensagem por este número: confira o webhook no app da Meta.' : 'O WhatsApp ainda não avisou o sistema de nenhuma mensagem por este número. Se já mandaram mensagem para ele, clique em "Reapontar webhook".'}
+            {c.ultimoWebhookEm ? `Último aviso do WhatsApp para o sistema: ${new Date(c.ultimoWebhookEm).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}` : c.tipo === 'oficial' ? 'O WhatsApp ainda não avisou o sistema de nenhuma mensagem por este número: confira o webhook no app da Meta.' : 'O WhatsApp ainda não avisou o sistema de nenhuma mensagem por este número. Se já mandaram mensagem para ele, clique em "Mensagens não chegam? Reiniciar".'}
           </div>
         </div>
         {admin && (
           <div className="flex" style={{ gap: 6, flexWrap: 'wrap' }}>
             {c.tipo === 'oficial' && pode('crm', 'excluir') && <button className="botao claro pequeno" disabled={acao.isPending} onClick={() => acao.mutate('templates')}>Sincronizar templates</button>}
-            {c.tipo !== 'oficial' && <button className="botao claro pequeno" title="Use se as mensagens recebidas pararam de chegar: manda o WhatsApp avisar o sistema neste endereço de novo" disabled={acao.isPending} onClick={() => acao.mutate('webhook')}>Reapontar webhook</button>}
+            {c.tipo !== 'oficial' && <button className="botao claro pequeno" title="Use se as mensagens recebidas pararam de chegar: reaponta o aviso para o sistema e reinicia a conexão com o WhatsApp, sem pedir QR" disabled={acao.isPending} onClick={() => acao.mutate('webhook')}>Mensagens não chegam? Reiniciar</button>}
             {c.tipo !== 'oficial' && sit.data?.conectado && <button className="botao claro pequeno" onClick={() => window.confirm('Desconectar este celular do sistema?') && acao.mutate('desconectar')}>Desconectar</button>}
             {c.tipo === 'evolution' && <button className="botao claro pequeno" title="Trazer as conversas antigas deste número, pelo período que você escolher" onClick={() => setHistorico((v) => !v)}>{historico ? 'Fechar histórico' : 'Importar histórico'}</button>}
             <button className="botao claro pequeno" onClick={editar}>Editar</button>

@@ -4319,6 +4319,10 @@ test('importar histórico do WhatsApp: com o número conectado importa direto; "
   for (let i = 0; i < 20 && (r2 = (await ok('GET', `/crm/canais/${c.id}/historico`))[0]).status === 'importando'; i++) await new Promise((r) => setTimeout(r, 100));
   assert.deepEqual([r2.status, r2.mensagens], ['concluida', 1], 'só a de 40 dias era nova');
   assert.equal((await (await fetch(`${SIM}/__evo/ver?i=${encodeURIComponent(inst)}`)).json()).estado, 'open', 'não desconectou de novo');
+  // Mensagens pararam de chegar com o número conectado: reaponta o webhook e reinicia a conexão, sem QR.
+  await ok('POST', `/crm/canais/${c.id}/webhook`);
+  const vr = await (await fetch(`${SIM}/__evo/ver?i=${encodeURIComponent(inst)}`)).json();
+  assert.deepEqual([vr.reiniciada, vr.estado], [1, 'open']);
   // Cancelar uma que espera o QR (outro número).
   const c2 = await ok('POST', '/crm/canais', { nome: 'Número cancela hist', tipo: 'evolution' });
   await fetch(`${SIM}/__evo/conectar?i=${encodeURIComponent(c2.config.instancia)}`);

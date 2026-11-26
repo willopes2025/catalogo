@@ -217,7 +217,13 @@ export class CanaisService implements OnModuleInit {
   }
 
   async apontarWebhookZapi(c: Canal) {
-    if (c.tipo === 'evolution') return (this.conexao(c) as ConexaoEvolution).configurarWebhooks();
+    if (c.tipo === 'evolution') {
+      const con = this.conexao(c) as ConexaoEvolution;
+      await con.configurarWebhooks();
+      // Número que aparece conectado mas parou de receber: reinicia a conexão (sem QR).
+      if ((await con.estado().catch(() => 'close')) === 'open') await con.reiniciar().catch((e) => this.log.warn(`Reiniciar ${c.nome}: ${(e as Error).message}`));
+      return;
+    }
     if (c.tipo !== 'qrcode') return;
     await (this.conexao(c) as ConexaoZapi).configurarWebhooks(this.urlWebhook(c));
   }

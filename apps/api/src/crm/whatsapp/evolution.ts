@@ -313,4 +313,18 @@ export class ConexaoEvolution implements Conexao {
   async desconectar() {
     await this.chamar(`instance/logout/${this.i}`, { method: 'DELETE' });
   }
+
+  /**
+   * Reinicia a conexão com o WhatsApp sem desconectar o celular (não pede QR). Resolve o caso em que o número
+   * aparece conectado mas as mensagens pararam de chegar (ex.: depois de o servidor reiniciar).
+   */
+  async reiniciar() {
+    try {
+      await this.chamar(`instance/restart/${this.i}`, { method: 'PUT' });
+    } catch (e) {
+      const st = (e as { status?: number }).status;
+      if (st !== 404 && st !== 405) throw e;
+      await this.chamar(`instance/restart/${this.i}`, { method: 'POST' });
+    }
+  }
 }
