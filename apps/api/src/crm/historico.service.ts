@@ -1,5 +1,5 @@
 import { BadRequestException, Inject, Injectable, Logger, NotFoundException, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
-import { and, desc, eq, inArray, isNotNull, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, sql } from 'drizzle-orm';
 import { DB, type Db } from '../comum/db.module';
 import { crmImportacoes } from '../db/schema';
 import { CanaisService } from './canais.service';
@@ -50,7 +50,11 @@ export class HistoricoWhatsappService implements OnModuleInit, OnModuleDestroy {
     return { c, con: this.canais.conexao(c) as ConexaoEvolution, proprio: !c.config?.servidor };
   }
 
-  async iniciar(canalId: string, d: { de: string; ate: string; midias: boolean }, usuarioId: string | null) {
+  /**
+   * Número conectado: importa direto o que o servidor guardou no período (sem desconectar).
+   * `reconectar` (servidor próprio): desconecta e pede o histórico de novo ao WhatsApp no próximo QR, para quando faltou conversa.
+   */
+  async iniciar(canalId: string, d: { de: string; ate: string; midias: boolean; reconectar?: boolean }, usuarioId: string | null) {
     const { c, con, proprio } = await this.conexaoEvolution(canalId);
     const hoje = new Date(Date.now() - 3 * 3600_000).toISOString().slice(0, 10);
     if (d.de > d.ate) throw new BadRequestException('A data inicial precisa ser antes da final.');
@@ -58,16 +62,13 @@ export class HistoricoWhatsappService implements OnModuleInit, OnModuleDestroy {
     if ((fimDoDia(d.ate).getTime() - inicioDoDia(d.de).getTime()) / 86400_000 > 366) throw new BadRequestException('Escolha um período de até 1 ano.');
     const [andamento] = await this.db.select({ id: crmImportacoes.id }).from(crmImportacoes).where(and(eq(crmImportacoes.canalId, c.id), inArray(crmImportacoes.status, EM_ANDAMENTO))).limit(1);
     if (andamento) throw new BadRequestException('Já tem uma importação em andamento neste número. Espere terminar ou cancele.');
-    // Servidor próprio: o histórico só vem ao conectar. Já veio uma vez? Então o servidor guardou e dá para buscar direto.
-    const [jaVeio] = proprio
-      ? await this.db.select({ id: crmImportacoes.id }).from(crmImportacoes).where(and(eq(crmImportacoes.canalId, c.id), eq(crmImportacoes.status, 'concluida'), isNotNull(crmImportacoes.conectadoEm))).limit(1)
-      : [{ id: 'fora' }];
-    if (proprio && !jaVeio) {
+    if (proprio && d.reconectar) {
       await con.pedirHistoricoAoConectar();
       await con.desconectar().catch(() => undefined);
       const [imp] = await this.db.insert(crmImportacoes).values({ canalId: c.id, de: d.de, ate: d.ate, midias: d.midias, status: 'aguardando_qr', criadoPor: usuarioId, detalhe: 'Leia o QR code de novo com o celular deste número para o WhatsApp mandar as conversas antigas.' }).returning();
       return imp;
     }
+    if (proprio && (await con.estado().catch(() => 'close')) !== 'open') throw new BadRequestException('Conecte o número (leia o QR code) antes de importar o histórico.');
     const [imp] = await this.db.insert(crmImportacoes).values({ canalId: c.id, de: d.de, ate: d.ate, midias: d.midias, status: 'importando', criadoPor: usuarioId, detalhe: 'Buscando as mensagens do período…' }).returning();
     void this.rodar(imp.id, true);
     return imp;
@@ -139,7 +140,9 @@ export class HistoricoWhatsappService implements OnModuleInit, OnModuleDestroy {
       const qtdPuladas = [...puladas.values()].reduce((a, b) => a + b, 0);
       const avisoPuladas = qtdPuladas ? ` ${qtdPuladas} mensagem(ns) não entraram: ${[...puladas].map(([m, n]) => `${n} por ${m}`).join('; ')}.` : '';
       const vazio = proprio
-        ? 'O WhatsApp não mandou mensagens desse período. Ele costuma mandar só alguns meses para trás; confira o período.'
+        ? imp.conectadoEm
+          ? 'O WhatsApp não mandou mensagens desse período. Ele costuma mandar só alguns meses para trás; confira o período.'
+          : 'Nenhuma mensagem desse período guardada no servidor. Se o número foi conectado antes de o sistema guardar o histórico, use "Faltou conversa? Pedir o histórico de novo ao WhatsApp".'
         : 'O servidor Evolution não tem mensagens guardadas desse período. Ele precisa estar configurado para guardar o histórico (DATABASE_SAVE_DATA_HISTORIC).';
       await this.db
         .update(crmImportacoes)

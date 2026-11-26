@@ -37,6 +37,9 @@ export function validarEnderecoEvolution(bruto: string) {
 }
 
 /** Eventos que o sistema precisa ouvir. */
+/** Instâncias em que já pedimos o histórico antes do QR (nesta execução do sistema). */
+const historicoPedido = new Set<string>();
+
 const EVENTOS = ['MESSAGES_UPSERT', 'MESSAGES_UPDATE', 'MESSAGES_DELETE', 'CONNECTION_UPDATE'];
 
 async function chamar<T>(caminho: string, init: RequestInit = {}, fora?: ServidorEvolution): Promise<T> {
@@ -81,7 +84,8 @@ export async function criarInstancia(instancia: string, webhook: string) {
       alwaysOnline: false,
       readMessages: false,
       readStatus: false,
-      syncFullHistory: false,
+      // O servidor guarda o histórico que o WhatsApp manda ao conectar: depois dá para importar qualquer período sem novo QR.
+      syncFullHistory: true,
       webhook: { url: webhook, byEvents: false, base64: false, events: EVENTOS },
     }),
   });
@@ -234,6 +238,11 @@ export class ConexaoEvolution implements Conexao {
         const [inst] = await this.chamar<{ ownerJid?: string; number?: string; profileName?: string }[]>(`instance/fetchInstances?instanceName=${this.i}`).catch(() => []);
         const numero = numeroDoJid(inst?.ownerJid) || (inst?.number ?? '').replace(/\D/g, '') || null;
         return { conectado: true, detalhe: inst?.profileName ? `Conectado como ${inst.profileName}` : 'Conectado', numero };
+      }
+      // Instância antiga (criada sem pedir o histórico): passa a pedir antes deste QR, uma vez por instância.
+      if (!this.fora && !historicoPedido.has(this.instancia)) {
+        await this.pedirHistoricoAoConectar().catch(() => undefined);
+        historicoPedido.add(this.instancia);
       }
       const qr = await this.chamar<{ base64?: string; pairingCode?: string }>(`instance/connect/${this.i}`);
       return { conectado: false, detalhe: 'Abra o WhatsApp no celular › Aparelhos conectados › Conectar um aparelho, e aponte para o QR code.', qrcode: qr.base64 ?? null };

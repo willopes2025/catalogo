@@ -1282,12 +1282,12 @@ export class AtendimentoController {
     return this.historico.listar(id);
   }
 
-  /** Importa o histórico de conversas do período (no servidor próprio, a primeira vez pede o QR de novo). */
+  /** Importa o histórico de conversas do período: direto com o número conectado; `reconectar` pede o histórico de novo ao WhatsApp (novo QR). */
   @Post('crm/canais/:id/historico')
   @Permissao('configuracoes', 'editar')
   async importarHistorico(@Param('id', ParseUUIDPipe) id: string, @Body() body: unknown, @Usuario() u: UsuarioLogado) {
     const dia = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Data inválida.');
-    const d = validar(z.object({ de: dia, ate: dia, midias: z.boolean().default(false) }), body);
+    const d = validar(z.object({ de: dia, ate: dia, midias: z.boolean().default(false), reconectar: z.boolean().default(false) }), body);
     const r = await this.historico.iniciar(id, d, u.id);
     await this.auditoria.registrar({ usuarioId: u.id, acao: 'importar_historico', entidade: 'crm_canais', entidadeId: id, dados: d });
     return r;

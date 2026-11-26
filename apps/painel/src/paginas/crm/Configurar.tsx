@@ -140,45 +140,57 @@ function ImportarHistorico({ canal: c }: { canal: Canal }) {
   const [de, setDe] = useState(new Date(Date.now() - 3 * 3600_000 - 15 * 86400_000).toISOString().slice(0, 10));
   const [ate, setAte] = useState(hoje);
   const [midias, setMidias] = useState(false);
+  // Mesma consulta do cartão do número (compartilha o cache): só importa com o celular conectado.
+  const sit = useQuery({ queryKey: ['crm', 'canal', c.id, 'situacao'], queryFn: () => api<{ conectado: boolean; detalhe: string; qrcode?: string | null }>(`/crm/canais/${c.id}/situacao`), refetchInterval: (q) => (q.state.data && !q.state.data.conectado ? 3000 : 60_000) });
+  const conectado = !proprio || !!sit.data?.conectado;
   const lista = useQuery({
     queryKey: ['crm', 'canal', c.id, 'historico'],
     queryFn: () => api<Importacao[]>(`/crm/canais/${c.id}/historico`),
     refetchInterval: (q) => (q.state.data?.some((i) => !['concluida', 'erro'].includes(i.status)) ? 5000 : false),
   });
   const andamento = lista.data?.find((i) => !['concluida', 'erro'].includes(i.status));
-  // No servidor próprio, o WhatsApp só manda o histórico ao conectar: a primeira importação pede o QR de novo.
-  const precisaQr = proprio && !lista.data?.some((i) => i.status === 'concluida' && i.conectadoEm);
   const importar = useMutation({
-    mutationFn: () => api<Importacao>(`/crm/canais/${c.id}/historico`, { corpo: { de, ate, midias } }),
+    mutationFn: (reconectar: boolean) => api<Importacao>(`/crm/canais/${c.id}/historico`, { corpo: { de, ate, midias, reconectar } }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['crm', 'canal', c.id] }),
   });
   const conferir = useMutation({ mutationFn: () => api('/crm/importacoes/conferir', { corpo: {} }), onSuccess: () => qc.invalidateQueries({ queryKey: ['crm', 'canal', c.id] }) });
   const cancelar = useMutation({ mutationFn: (id: string) => api(`/crm/importacoes/${id}/cancelar`, { corpo: {} }), onSuccess: () => qc.invalidateQueries({ queryKey: ['crm', 'canal', c.id] }) });
-  const comecar = () => {
-    if (precisaQr && !window.confirm('Para trazer as conversas antigas, o celular deste número vai ser desconectado e você lê o QR code de novo aqui mesmo, logo abaixo.\n\nEnquanto não ler, o número fica sem mandar e receber mensagens pelo sistema. Continuar?')) return;
-    importar.mutate();
+  const pedirDeNovo = () => {
+    if (!window.confirm('O celular deste número vai ser desconectado e você lê o QR code de novo neste cartão. Ao conectar, o WhatsApp manda as conversas antigas e o sistema grava as do período.\n\nEnquanto não ler, o número fica sem mandar e receber mensagens pelo sistema. Continuar?')) return;
+    importar.mutate(true);
   };
   return (
     <div style={{ marginTop: 12, paddingTop: 12, borderTop: '1px solid var(--linha)' }} className="coluna">
       <b>Importar histórico de conversas</b>
-      <div className="muted" style={{ fontSize: 13, lineHeight: 1.55 }}>
-        {proprio
-          ? precisaQr
-            ? 'O WhatsApp só entrega as conversas antigas no momento em que o celular conecta. Na primeira importação o sistema desconecta este número e mostra o QR code para ler de novo; nos 20 minutos seguintes ele grava as mensagens do período. Depois disso, outros períodos se importam sem QR.'
-            : 'O histórico deste número já foi recebido uma vez: a importação busca direto o período escolhido, sem QR code.'
-          : 'Busca as mensagens que o servidor Evolution deste número guardou no período. Se ele não estiver configurado para guardar o histórico, nada vem.'}{' '}
-        As conversas entram como resolvidas (não vão para a fila), sem criar card e sem acionar a IA. Mensagens que já estão no sistema não se repetem.
-      </div>
-      {!andamento && (
-        <div className="flex" style={{ gap: 10, flexWrap: 'wrap', alignItems: 'end' }}>
-          <Campo rotulo="De"><input id={`hist-de-${c.id}`} type="date" value={de} max={ate} onChange={(e) => setDe(e.target.value)} /></Campo>
-          <Campo rotulo="Até"><input id={`hist-ate-${c.id}`} type="date" value={ate} min={de} max={hoje} onChange={(e) => setAte(e.target.value)} /></Campo>
-          <label className="check" title="Mais lento e ocupa espaço no servidor. O WhatsApp costuma apagar as mídias antigas: algumas podem não vir."><input type="checkbox" checked={midias} onChange={(e) => setMidias(e.target.checked)} /> Baixar fotos, áudios e documentos</label>
-          <button className="botao pequeno" disabled={!de || !ate || importar.isPending} onClick={comecar}>{importar.isPending ? 'Começando…' : precisaQr ? 'Importar (vai pedir o QR)' : 'Importar'}</button>
+      {!conectado && !andamento ? (
+        <div className="aviso">Conecte o número primeiro (leia o QR code deste cartão). Assim que a bolinha ficar verde, escolha o período aqui e importe.</div>
+      ) : (
+        <div className="muted" style={{ fontSize: 13, lineHeight: 1.55 }}>
+          Escolha o período e clique em Importar. As conversas entram como resolvidas (não vão para a fila), sem criar card e sem acionar a IA. Mensagens que já estão no sistema não se repetem.
         </div>
       )}
+      {!andamento && conectado && (
+        <>
+          <div className="flex" style={{ gap: 10, flexWrap: 'wrap', alignItems: 'end' }}>
+            <Campo rotulo="De"><input id={`hist-de-${c.id}`} type="date" value={de} max={ate} onChange={(e) => setDe(e.target.value)} /></Campo>
+            <Campo rotulo="Até"><input id={`hist-ate-${c.id}`} type="date" value={ate} min={de} max={hoje} onChange={(e) => setAte(e.target.value)} /></Campo>
+            <label className="check" title="Mais lento e ocupa espaço no servidor. O WhatsApp costuma apagar as mídias antigas: algumas podem não vir."><input type="checkbox" checked={midias} onChange={(e) => setMidias(e.target.checked)} /> Baixar fotos, áudios e documentos</label>
+            <button className="botao pequeno" disabled={!de || !ate || importar.isPending} onClick={() => importar.mutate(false)}>{importar.isPending && !importar.variables ? 'Importando…' : 'Importar'}</button>
+          </div>
+          {proprio && (
+            <div className="muted" style={{ fontSize: 12 }}>
+              Faltou conversa? <button className="link" disabled={importar.isPending} onClick={pedirDeNovo}>Pedir o histórico de novo ao WhatsApp</button> (desconecta e pede para ler o QR outra vez).
+            </div>
+          )}
+        </>
+      )}
       {importar.error && <Erro erro={importar.error} />}
-      {andamento?.status === 'aguardando_qr' && <div className="aviso">Leia o QR code que aparece neste cartão com o celular do número <b>{c.nome}</b> (WhatsApp › Aparelhos conectados › Conectar um aparelho). Se o QR não aparecer em alguns segundos, atualize a página.</div>}
+      {andamento?.status === 'aguardando_qr' && (
+        <div className="aviso">
+          Leia o QR code deste cartão com o celular do número <b>{c.nome}</b> (WhatsApp › Aparelhos conectados › Conectar um aparelho). Ao conectar, a importação continua sozinha.
+          {' '}<button className="link" disabled={cancelar.isPending} onClick={() => cancelar.mutate(andamento.id)}>Desistir desta importação</button>
+        </div>
+      )}
       {!!lista.data?.length && (
         <div style={{ overflowX: 'auto' }}>
           <table className="tabela">
