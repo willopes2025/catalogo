@@ -7,6 +7,7 @@ import { Abas, Campo, Carregando, Erro, Indicador, Topo, camposComErro } from '.
 import './cobranca.css';
 import { usarEquipe } from '../Mesa';
 import { ListaEnvios } from '../crm/Envios';
+import { CancelarBoletosDoDia } from './CancelarBoletos';
 
 export type Eu = { cobradorId: string | null; restrito: boolean; gestor: boolean; cobrador: string | null; protestoLigado: boolean };
 export const useEu = () => useQuery({ queryKey: ['cobranca', 'eu'], queryFn: () => api<Eu>('/cobranca/eu'), staleTime: 60_000 });
@@ -37,7 +38,7 @@ export function Cobranca() {
     <>
       <Topo eb="Cobrança" titulo={e.restrito ? `Carteira de ${e.cobrador}` : 'Cobrança'} sub={e.restrito ? 'Só os devedores que a Aritana passou para vocês' : 'Títulos vencidos, carteiras dos cobradores, acordos, trilha de cobrança e protesto'} />
       <Abas ativa={abas.some((x) => x[0] === aba) ? aba : 'painel'} mudar={mudar} abas={abas} />
-      {aba === 'carteira' ? <Carteira eu={e} /> : aba === 'acordos' ? <Acordos /> : aba === 'comprovantes' ? <Comprovantes /> : aba === 'envios' && !e.restrito ? <ListaEnvios /> : aba === 'protestos' && !e.restrito ? <Protestos eu={e} /> : aba === 'cobradores' && e.gestor ? <Cobradores /> : aba === 'configurar' && e.gestor ? <Configurar /> : <Painel irPara={(f) => setParams({ aba: 'carteira', faixa: f })} />}
+      {aba === 'carteira' ? <Carteira eu={e} /> : aba === 'acordos' ? <Acordos /> : aba === 'comprovantes' ? <Comprovantes /> : aba === 'envios' && !e.restrito ? <>{e.gestor && <CancelarBoletosDoDia />}<ListaEnvios /></> : aba === 'protestos' && !e.restrito ? <Protestos eu={e} /> : aba === 'cobradores' && e.gestor ? <Cobradores /> : aba === 'configurar' && e.gestor ? <Configurar /> : <Painel irPara={(f) => setParams({ aba: 'carteira', faixa: f })} />}
     </>
   );
 }

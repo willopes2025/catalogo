@@ -93,6 +93,19 @@ export class AsaasService {
     return c.id;
   }
 
+  /** Apaga a cobrança no Asaas e diz se conseguiu (já apagada lá conta como apagada). */
+  async apagarCobranca(cobrancaId: string): Promise<{ ok: boolean; erro?: string }> {
+    if (!this.configurado) return { ok: false, erro: 'Asaas não configurado' };
+    try {
+      await this.chamar('DELETE', `/payments/${cobrancaId}`);
+      return { ok: true };
+    } catch (e) {
+      const msg = (e as Error).message;
+      if (/404|not found|não encontrad|removed|removid/i.test(msg)) return { ok: true };
+      return { ok: false, erro: msg.slice(0, 200) };
+    }
+  }
+
   /** Título cancelado: apaga a cobrança no Asaas para a pessoa não pagar algo que não deve. */
   async cancelarCobranca(cobrancaId: string | null) {
     if (!cobrancaId || !this.configurado) return;

@@ -158,6 +158,15 @@ export class CobrancaController {
     return r;
   }
 
+  /** Cancela no Asaas os boletos gerados num dia (conferir antes com simular). */
+  @Post('boletos/cancelar-do-dia')
+  @Permissao('cobranca', 'excluir')
+  async cancelarBoletosDoDia(@Usuario() u: UsuarioLogado, @Body() body: unknown) {
+    this.cobranca.exigirGestor(await this.cobranca.escopo(u));
+    const d = validar(z.object({ dia: dataISO, simular: z.boolean().default(true) }), body);
+    return this.cobranca.cancelarBoletosDoDia(d.dia, d.simular, u.id);
+  }
+
   // ───── Processos judiciais ─────
 
   @Post('devedores/:pessoaId/processos')

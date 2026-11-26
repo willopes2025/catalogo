@@ -4608,6 +4608,18 @@ test('cobrança pelo WhatsApp: fila com intervalo e horário do número, trilha 
   await ok('PUT', '/crm/ia-agente', semExtras);
 });
 
+test('cancelar os boletos gerados num dia: confere, cancela no Asaas e a parcela continua em aberto sem boleto', async () => {
+  const hojeBR = new Date(Date.now() - 3 * 3600_000).toISOString().slice(0, 10);
+  const previa = await ok('POST', '/cobranca/boletos/cancelar-do-dia', { dia: hojeBR, simular: true });
+  assert.ok(previa.boletos >= 1 && previa.cancelados >= 1, 'a conferência mostra os boletos de hoje');
+  const r = await ok('POST', '/cobranca/boletos/cancelar-do-dia', { dia: hojeBR, simular: false });
+  assert.equal(r.falhas.length, 0, JSON.stringify(r.falhas));
+  assert.equal(r.cancelados, previa.cancelados);
+  const abertos = (await ok('GET', '/financeiro/titulos?tipo=receber&aba=abertos&busca=Quinze Silva')).itens;
+  assert.ok(abertos.length && abertos.every((t) => t.status === 'aberto' && !t.cobrancaUrl), 'parcela segue aberta, sem o boleto');
+  assert.equal((await ok('POST', '/cobranca/boletos/cancelar-do-dia', { dia: '2020-01-01', simular: true })).boletos, 0);
+});
+
 test('eventos com centro de custo: vendas do caixa do evento, despesas lançadas no evento e resultado; visão por CNPJ e dia da virada', async () => {
   const empresas = await ok('GET', '/empresas');
   const matriz = empresas.find((e) => e.tipo === 'matriz');

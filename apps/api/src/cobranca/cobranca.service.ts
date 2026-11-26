@@ -4,7 +4,7 @@ import { calcularAcordo, calcularEncargos, formatarReais, preencherTexto, type R
 import { temPermissao, type UsuarioLogado } from '../comum/auth';
 import { DB, type Db } from '../comum/db.module';
 import { AuditoriaService } from '../comum/auditoria.service';
-import { cobradores, cobrancaAcordos, cobrancaCarteira, cobrancaComprovantes, cobrancaContatos, cobrancaEnvios, cobrancaProtestos, crmCanais, empresas, mesaTarefas, pessoas, processosJudiciais, titulos, usuarios } from '../db/schema';
+import { auditoria as auditoriaTb, cobradores, cobrancaAcordos, cobrancaCarteira, cobrancaComprovantes, cobrancaContatos, cobrancaEnvios, cobrancaProtestos, crmCanais, empresas, mesaTarefas, pessoas, processosJudiciais, titulos, usuarios } from '../db/schema';
 import { AsaasService } from '../integracoes/asaas.service';
 import { EmailService } from '../integracoes/email.service';
 import { CanaisService } from '../crm/canais.service';
@@ -640,6 +640,37 @@ export class CobrancaService implements OnModuleInit, OnModuleDestroy {
       else await this.fila.criarLote({ canalId: canal.id, origem: 'trilha', titulo, itens: itensFila });
     }
     return { enviados, falhas, tarefas, naFila: itensFila.length, previa, foraDaTrilha: Object.fromEntries(fora) };
+  }
+
+  /**
+   * Cancela no Asaas os boletos/Pix gerados num dia (ex.: a trilha que emitiu errado).
+   * O título continua em aberto, só sem o boleto; título já pago fica como está.
+   */
+  async cancelarBoletosDoDia(dia: string, simular: boolean, usuarioId: string) {
+    const gerados = await this.db
+      .select({ tituloId: auditoriaTb.entidadeId, dados: auditoriaTb.dados })
+      .from(auditoriaTb)
+      .where(and(eq(auditoriaTb.acao, 'gerar_cobranca'), eq(auditoriaTb.entidade, 'titulo'), sql`(${auditoriaTb.criadoEm} at time zone 'America/Sao_Paulo')::date = ${dia}::date`));
+    const ids = [...new Set(gerados.map((g) => g.tituloId).filter((x): x is string => !!x))];
+    const ts = ids.length ? await this.db.select().from(titulos).where(inArray(titulos.id, ids)) : [];
+    const porId = new Map(ts.map((t) => [t.id, t]));
+    const res = { boletos: gerados.length, cancelados: 0, pagos: 0, jaSemBoleto: 0, falhas: [] as { titulo: string; erro: string }[], valor: 0 };
+    for (const g of gerados) {
+      const asaasId = (g.dados as { asaas?: string } | null)?.asaas;
+      const t = g.tituloId ? porId.get(g.tituloId) : undefined;
+      if (!asaasId || !t) continue;
+      if (t.status === 'pago') { res.pagos++; continue; }
+      if (t.cobrancaExternaId !== asaasId) res.jaSemBoleto++;
+      res.valor += t.valor;
+      if (simular) { res.cancelados++; continue; }
+      const r = await this.asaas.apagarCobranca(asaasId);
+      if (!r.ok) { res.falhas.push({ titulo: t.descricao, erro: r.erro ?? 'erro' }); continue; }
+      res.cancelados++;
+      if (t.cobrancaExternaId === asaasId)
+        await this.db.update(titulos).set({ cobrancaExternaId: null, cobrancaTipo: null, cobrancaUrl: null, pixCopiaCola: null, cobrancaValor: null, cobrancaVencimento: null }).where(eq(titulos.id, t.id));
+    }
+    if (!simular) await this.auditoria.registrar({ usuarioId, acao: 'cancelar_boletos_do_dia', entidade: 'cobranca', dados: { dia, cancelados: res.cancelados, pagos: res.pagos, falhas: res.falhas.length } });
+    return res;
   }
 
   /** Antes de cada mensagem da trilha sair da fila: a pessoa ainda deve e continua na trilha? */
