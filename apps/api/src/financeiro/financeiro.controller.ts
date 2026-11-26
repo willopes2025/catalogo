@@ -10,24 +10,8 @@ import { contas, empresas, locaisEstoque, pessoas, planoContas, titulos } from '
 import { hoje } from '../maletas/maletas.service';
 import { AsaasService } from '../integracoes/asaas.service';
 import { PlanoContasService } from './plano.service';
+import { LancamentosService, tituloSchema } from './lancamentos.service';
 
-const tituloSchema = z.object({
-  empresaId: z.string().uuid(),
-  tipo: z.enum(['receber', 'pagar']),
-  pessoaId: z.string().uuid().optional().nullable(),
-  descricao: z.string().min(2).max(200),
-  categoria: z.string().max(80).optional().nullable(),
-  planoContaId: z.string().uuid().optional().nullable(),
-  /** Centro de custo: o evento a que o lançamento pertence. */
-  centroCustoId: z.string().uuid().optional().nullable(),
-  /** Lança já como pago (despesa paga na hora, receita recebida): conta e dia do pagamento. */
-  pagoEm: dataISO.optional().nullable(),
-  contaId: z.string().uuid().optional().nullable(),
-  valor: centavos.refine((v) => v > 0, 'Informe o valor'),
-  vencimento: dataISO,
-  formaPagamento: z.string().max(30).optional().nullable(),
-  parcelas: z.number().int().min(1).max(48).default(1),
-});
 
 const baixaSchema = z.object({
   pagoEm: dataISO.optional(),
@@ -40,7 +24,7 @@ const baixaSchema = z.object({
 
 @Controller('financeiro')
 export class FinanceiroController {
-  constructor(@Inject(DB) private readonly db: Db, private readonly auditoria: AuditoriaService, private readonly asaas: AsaasService, private readonly plano: PlanoContasService) {}
+  constructor(@Inject(DB) private readonly db: Db, private readonly auditoria: AuditoriaService, private readonly asaas: AsaasService, private readonly plano: PlanoContasService, private readonly lancamentos: LancamentosService) {}
 
   @Get('titulos')
   @Permissao('financeiro', 'ver')
@@ -137,42 +121,7 @@ export class FinanceiroController {
   @Post('titulos')
   @Permissao('financeiro', 'criar')
   async criar(@Usuario() u: UsuarioLogado, @Body() body: unknown) {
-    const d = validar(tituloSchema, body);
-    const conta = d.planoContaId ? await this.plano.paraLancar(d.planoContaId) : null;
-    if (d.centroCustoId) await this.exigirEvento(d.centroCustoId);
-    if (d.pagoEm) {
-      if (d.parcelas > 1) throw new BadRequestException('Lançamento já pago é de uma parcela só.');
-      if (d.pagoEm > hoje()) throw new BadRequestException('A data do pagamento não pode ser no futuro.');
-      if (!d.contaId) throw new BadRequestException('Escolha a conta por onde o dinheiro passou.');
-      const [cb] = await this.db.select({ ativo: contas.ativo }).from(contas).where(eq(contas.id, d.contaId));
-      if (!cb?.ativo) throw new BadRequestException('Conta bancária não encontrada ou desativada.');
-    }
-    const base = Math.floor(d.valor / d.parcelas);
-    const resto = d.valor - base * d.parcelas;
-    const [a, m, dia] = d.vencimento.split('-').map(Number);
-    const linhas = Array.from({ length: d.parcelas }, (_, i) => {
-      // Mesmo dia nos meses seguintes; em mês mais curto, cai no último dia (31/01 → 28/02).
-      const ultimo = new Date(Date.UTC(a, m + i, 0)).getUTCDate();
-      const venc = new Date(Date.UTC(a, m - 1 + i, Math.min(dia, ultimo))).toISOString().slice(0, 10);
-      return {
-        empresaId: d.empresaId,
-        tipo: d.tipo,
-        pessoaId: d.pessoaId ?? null,
-        descricao: d.parcelas > 1 ? `${d.descricao} (${i + 1}/${d.parcelas})` : d.descricao,
-        categoria: conta?.nome ?? d.categoria ?? null,
-        planoContaId: conta?.id ?? null,
-        centroCustoId: d.centroCustoId ?? null,
-        ...(d.pagoEm ? { status: 'pago' as const, pagoEm: d.pagoEm, valorPago: d.valor, contaId: d.contaId } : {}),
-        valor: base + (i === 0 ? resto : 0),
-        vencimento: venc,
-        parcela: i + 1,
-        totalParcelas: d.parcelas,
-        formaPagamento: d.formaPagamento ?? null,
-      };
-    });
-    const criados = await this.db.insert(titulos).values(linhas).returning();
-    await this.auditoria.registrar({ usuarioId: u.id, acao: 'criar', entidade: 'titulo', dados: { ids: criados.map((c) => c.id), valor: d.valor } });
-    return criados;
+    return this.lancamentos.lancar(validar(tituloSchema, body), u.id);
   }
 
   /** Centro de custo só pode ser um evento cadastrado. */

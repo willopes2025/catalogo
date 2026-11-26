@@ -4725,3 +4725,14 @@ test('estornar acerto: peças voltam para a maleta, parcelas canceladas (paga de
   assert.deepEqual([pago.status, pago.formaPagamento], ['pago', 'dinheiro']);
   assert.equal((await chamar('POST', `/maletas/${m.id}/receber`, { tituloId: parc.id, formaPagamento: 'pix' })).status, 400, 'não recebe duas vezes');
 });
+
+test('conta fixa: repetir todo mês lança o valor inteiro em cada mês (31 cai no último dia)', async () => {
+  const emp = (await ok('GET', '/empresas'))[0];
+  const forn = await ok('POST', '/pessoas', { tipo: 'fornecedor', nome: 'Lara Prestadora E2E' });
+  const r = await ok('POST', '/financeiro/titulos', { empresaId: emp.id, tipo: 'pagar', pessoaId: forn.id, descricao: 'Serviço da Lara', valor: 60000, vencimento: '2027-01-31', repetirMeses: 3 });
+  assert.equal(r.length, 3);
+  assert.deepEqual(r.map((t) => [t.valor, t.vencimento]), [[60000, '2027-01-31'], [60000, '2027-02-28'], [60000, '2027-03-31']]);
+  assert.match(r[1].descricao, /Serviço da Lara · fev\/2027/);
+  assert.ok(r.every((t) => t.pessoaId === forn.id));
+  assert.equal((await chamar('POST', '/financeiro/titulos', { empresaId: emp.id, tipo: 'pagar', descricao: 'x y', valor: 100, vencimento: '2027-01-10', repetirMeses: 3, parcelas: 2 })).status, 400, 'repetir e parcelar juntos não');
+});

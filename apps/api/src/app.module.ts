@@ -28,6 +28,7 @@ import { EmpresasController } from './empresas/empresas.controller';
 import { VendasController } from './vendas/vendas.controller';
 import { VendasService } from './vendas/vendas.service';
 import { AsaasService } from './integracoes/asaas.service';
+import { LancamentosService } from './financeiro/lancamentos.service';
 import { WebhooksController } from './integracoes/webhooks.controller';
 import { FiscalController } from './fiscal/fiscal.controller';
 import { FiscalService } from './fiscal/fiscal.service';
@@ -197,6 +198,7 @@ if (!segredo || (process.env.NODE_ENV === 'production' && segredo.length < 32)) 
     DocumentosService,
     VendasService,
     AsaasService,
+    LancamentosService,
     FiscalService,
     ImportacaoService,
     GarantiaService,

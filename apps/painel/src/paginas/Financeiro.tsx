@@ -201,12 +201,14 @@ export function Lancamento({ titulo, tipoInicial, contas, fechar, centroCustoIni
     centroCustoId: titulo?.centroCustoId ?? centroCustoInicial ?? '',
     tipo: tipoInicial, empresaId: visao, descricao: titulo?.descricao ?? '', planoContaId: titulo?.planoContaId ?? '', valor: titulo ? (titulo.valor / 100).toFixed(2).replace('.', ',') : '',
     vencimento: titulo?.vencimento ?? hojeISO(), parcelas: '1', formaPagamento: '', pago: false, pagoEm: hojeISO(), contaId: '',
+    repetir: false, meses: '12', pessoaId: '',
   });
+  const fornecedores = useQuery({ queryKey: ['pessoas', 'fornecedor'], queryFn: () => api<{ itens: { id: string; nome: string }[] }>('/pessoas?tipo=fornecedor&limite=500').then((r) => r.itens).catch(() => []), enabled: !titulo && f.tipo === 'pagar', staleTime: 60_000 });
   const travado = !!titulo && (titulo.status !== 'aberto' || !!titulo.cobrancaUrl);
   const salvar = useMutation({
     mutationFn: () => titulo
       ? api(`/financeiro/titulos/${titulo.id}`, { metodo: 'PATCH', corpo: { descricao: f.descricao, planoContaId: f.planoContaId || null, centroCustoId: f.centroCustoId || null, ...(travado ? {} : { vencimento: f.vencimento, ...(titulo.origemTipo ? {} : { valor: paraCentavos(f.valor) }) }) } })
-      : api('/financeiro/titulos', { corpo: { empresaId: f.empresaId || empresas.data?.[0]?.id, tipo: f.tipo, descricao: f.descricao, planoContaId: f.planoContaId || null, centroCustoId: f.centroCustoId || null, valor: paraCentavos(f.valor), vencimento: f.pago ? f.pagoEm : f.vencimento, parcelas: f.pago ? 1 : Number(f.parcelas) || 1, formaPagamento: f.formaPagamento || null, ...(f.pago ? { pagoEm: f.pagoEm, contaId: f.contaId || null } : {}) } }),
+      : api('/financeiro/titulos', { corpo: { empresaId: f.empresaId || empresas.data?.[0]?.id, tipo: f.tipo, descricao: f.descricao, planoContaId: f.planoContaId || null, centroCustoId: f.centroCustoId || null, valor: paraCentavos(f.valor), vencimento: f.pago ? f.pagoEm : f.vencimento, parcelas: f.pago || f.repetir ? 1 : Number(f.parcelas) || 1, repetirMeses: !f.pago && f.repetir ? Number(f.meses) || 12 : null, pessoaId: f.pessoaId || null, formaPagamento: f.formaPagamento || null, ...(f.pago ? { pagoEm: f.pagoEm, contaId: f.contaId || null } : {}) } }),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['titulos'] }); qc.invalidateQueries({ queryKey: ['contas'] }); qc.invalidateQueries({ queryKey: ['dre'] }); qc.invalidateQueries({ queryKey: ['plano-contas'] }); qc.invalidateQueries({ queryKey: ['eventos-resultado'] }); fechar(); },
   });
   const erros = camposComErro(salvar.error);
@@ -238,7 +240,14 @@ export function Lancamento({ titulo, tipoInicial, contas, fechar, centroCustoIni
           )}
           <Campo rotulo="Valor (R$)" erro={erros.valor} ajuda={titulo?.origemTipo ? 'Veio de uma venda, acerto ou acordo: não muda aqui.' : undefined}><input inputMode="decimal" disabled={travado || !!titulo?.origemTipo} value={f.valor} onChange={(e) => setF({ ...f, valor: e.target.value })} placeholder="0,00" /></Campo>
           {!f.pago && <Campo rotulo="Vencimento" erro={erros.vencimento}><input type="date" disabled={travado} value={f.vencimento} onChange={(e) => setF({ ...f, vencimento: e.target.value })} /></Campo>}
-          {!titulo && !f.pago && <Campo rotulo="Parcelas" erro={erros.parcelas} ajuda="Uma por mês, a partir do vencimento."><input type="number" min={1} max={48} value={f.parcelas} onChange={(e) => setF({ ...f, parcelas: e.target.value })} /></Campo>}
+          {!titulo && !f.pago && !f.repetir && <Campo rotulo="Parcelas" erro={erros.parcelas} ajuda="Divide o valor, uma por mês, a partir do vencimento."><input type="number" min={1} max={48} value={f.parcelas} onChange={(e) => setF({ ...f, parcelas: e.target.value })} /></Campo>}
+          {!titulo && !f.pago && f.repetir && <Campo rotulo="Por quantos meses" erro={erros.repetirMeses} ajuda="O mesmo valor todo mês, no mesmo dia."><input type="number" min={2} max={36} value={f.meses} onChange={(e) => setF({ ...f, meses: e.target.value })} /></Campo>}
+          {!titulo && !f.pago && <label className="check l2"><input type="checkbox" checked={f.repetir} onChange={(e) => setF({ ...f, repetir: e.target.checked, parcelas: '1' })} /> Repetir todo mês (conta fixa: aluguel, prestador, mensalidade)</label>}
+          {!titulo && f.tipo === 'pagar' && (
+            <Campo rotulo="Fornecedor / prestador" className="l2" ajuda="Cadastre em Cadastros › Fornecedores se ainda não existir.">
+              <select value={f.pessoaId} onChange={(e) => setF({ ...f, pessoaId: e.target.value })}><option value="">Nenhum</option>{fornecedores.data?.map((p) => <option key={p.id} value={p.id}>{p.nome}</option>)}</select>
+            </Campo>
+          )}
           {!titulo && <label className="check l2"><input type="checkbox" checked={f.pago} onChange={(e) => setF({ ...f, pago: e.target.checked })} /> {f.tipo === 'pagar' ? 'Já foi paga' : 'Já foi recebida'}</label>}
           {!titulo && f.pago && <>
             <Campo rotulo={f.tipo === 'pagar' ? 'Paga em' : 'Recebida em'} erro={erros.pagoEm}><input type="date" max={hojeISO()} value={f.pagoEm} onChange={(e) => setF({ ...f, pagoEm: e.target.value })} /></Campo>

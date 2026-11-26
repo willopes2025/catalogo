@@ -5,7 +5,7 @@ import { calcularEncargos, formatarReais, preencherTexto } from '@aritana/regras
 import { DB, type Db } from '../comum/db.module';
 import { temPermissao, type UsuarioLogado } from '../comum/auth';
 import { AuditoriaService } from '../comum/auditoria.service';
-import { assistenteAnexos, assistentePedidos, assistenteRotinas, cobrancaCarteira, crmContatos, crmConversas, crmEtapas, crmLeads, crmMensagens, crmTarefas, usuarios, chamadoMensagens, iaAgentes, chamados, crmCanais, crmTemplates, empresas, maletas, pessoas, titulos, vendas } from '../db/schema';
+import { planoContas, assistenteAnexos, assistentePedidos, assistenteRotinas, cobrancaCarteira, crmContatos, crmConversas, crmEtapas, crmLeads, crmMensagens, crmTarefas, usuarios, chamadoMensagens, iaAgentes, chamados, crmCanais, crmTemplates, empresas, maletas, pessoas, titulos, vendas } from '../db/schema';
 import { CanaisService } from '../crm/canais.service';
 import { CobrancaService } from '../cobranca/cobranca.service';
 import { CobrancaConfigService } from '../cobranca/cobranca-config.service';
@@ -26,6 +26,7 @@ import { CONJUNTOS, catalogoConjuntos, montarConsulta } from './dados';
 import { AgendaService, TIPOS_COMPROMISSO } from '../agenda/agenda.service';
 import { CrmService } from '../crm/crm.service';
 import { FilaEnvioService, previsaoTermino } from '../crm/fila-envio.service';
+import { LancamentosService } from '../financeiro/lancamentos.service';
 
 /**
  * leitura: consulta, executa na hora.
@@ -112,6 +113,7 @@ export class FerramentasAssistente {
     private readonly agenda: AgendaService,
     private readonly crm: CrmService,
     private readonly fila: FilaEnvioService,
+    private readonly lancamentos: LancamentosService,
   ) {
     this.lista = [
       this.consultarInadimplentes(),
@@ -130,6 +132,8 @@ export class FerramentasAssistente {
       this.enviarWhatsappEmLote(),
       this.emitirSegundaVia(),
       this.registrarPromessa(),
+      this.cadastrarPessoa(),
+      this.lancarConta(),
       this.criarCompromisso(),
       this.criarTarefaCrm(),
       this.anotarLead(),
@@ -900,6 +904,98 @@ export class FerramentasAssistente {
       executar: async (e: z.infer<typeof schema>, ctx) => {
         const c = await this.cobranca.registrarContato(await this.cobranca.escopo(ctx.usuario), ctx.usuario, e.pessoaId, { tipo: 'nota', texto: `Promessa de pagamento registrada pelo assistente${e.observacao ? `: ${e.observacao}` : '.'}`, promessaData: e.data, promessaValor: e.valor ? Math.round(e.valor * 100) : null });
         return { registrada: true, id: c.id, data: dataBR(e.data), valor: e.valor ? formatarReais(Math.round(e.valor * 100)) : null };
+      },
+    };
+  }
+
+  // ───────────── Cadastro e contas a pagar/receber ─────────────
+
+  private cadastrarPessoa(): Ferramenta {
+    const schema = z.object({
+      tipo: z.enum(['fornecedor', 'cliente']).describe('fornecedor = fornecedor ou prestador de serviço (quem a empresa paga); cliente = quem compra'),
+      nome: z.string().trim().min(2).max(150),
+      documento: z.string().max(20).optional().describe('CPF ou CNPJ, se tiver'),
+      telefone: z.string().max(30).optional(),
+      email: z.string().email().optional(),
+      observacao: z.string().max(500).optional().describe('Ex.: que serviço presta'),
+    });
+    return {
+      nome: 'cadastrar_pessoa',
+      descricao: 'Cadastra um fornecedor/prestador de serviço (para lançar contas a pagar) ou um cliente. Antes, use buscar_pessoas para não duplicar. Revendedora se cadastra pela tela de Rede, não por aqui.',
+      schema,
+      risco: 'confirmar',
+      permitido: pode('cadastros', 'criar'),
+      preparar: async (e: z.infer<typeof schema>) => {
+        const doc = e.documento?.replace(/\D/g, '') || null;
+        if (doc && doc.length !== 11 && doc.length !== 14) return { resumo: '', impedimento: 'CPF precisa de 11 números e CNPJ de 14.' };
+        const [dup] = await this.db.select({ nome: pessoas.nome }).from(pessoas).where(and(eq(pessoas.tipo, e.tipo), doc ? eq(pessoas.documento, doc) : sql`lower(${pessoas.nome}) = lower(${e.nome})`)).limit(1);
+        if (dup) return { resumo: '', impedimento: `Já existe ${e.tipo === 'fornecedor' ? 'o fornecedor' : 'o cliente'} "${dup.nome}" cadastrado. Use esse cadastro.` };
+        return { resumo: `Cadastrar ${e.tipo === 'fornecedor' ? 'o fornecedor/prestador' : 'o cliente'} "${e.nome}"${doc ? ` (${doc.length === 14 ? 'CNPJ' : 'CPF'} ${doc})` : ''}${e.telefone ? `, telefone ${e.telefone}` : ''}.` };
+      },
+      executar: async (e: z.infer<typeof schema>, ctx) => {
+        const doc = e.documento?.replace(/\D/g, '') || null;
+        const [p] = await this.db.insert(pessoas).values({ tipo: e.tipo, nome: e.nome, documento: doc, telefone1: e.telefone ?? null, email: e.email ?? null, observacao: e.observacao ?? null }).returning({ id: pessoas.id, nome: pessoas.nome });
+        await this.auditoria.registrar({ usuarioId: ctx.usuario.id, acao: 'criar', entidade: 'pessoa', entidadeId: p.id, dados: { tipo: e.tipo, origem: 'assistente' } });
+        return { pessoaId: p.id, nome: p.nome, tipo: e.tipo };
+      },
+    };
+  }
+
+  /** Acha a conta do plano de contas pelo nome (só as que recebem lançamento). */
+  private async contaDoPlano(nome: string | undefined, tipo: 'pagar' | 'receber') {
+    const todas = await this.db.select({ id: planoContas.id, nome: planoContas.nome, grupo: planoContas.grupo, paiId: planoContas.paiId, calculada: planoContas.calculada }).from(planoContas).where(eq(planoContas.ativo, true));
+    const lancaveis = todas.filter((c) => c.paiId && !c.calculada && (tipo === 'receber' ? c.grupo === 'receita' || c.grupo === 'outras' || c.grupo === 'financeiro' : c.grupo !== 'receita'));
+    if (!nome?.trim()) return { conta: null, opcoes: lancaveis.map((c) => c.nome) };
+    const n = (t: string) => t.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
+    const exata = lancaveis.filter((c) => n(c.nome) === n(nome));
+    const parecidas = exata.length ? exata : lancaveis.filter((c) => n(c.nome).includes(n(nome)) || n(nome).includes(n(c.nome)));
+    return { conta: parecidas.length === 1 ? parecidas[0] : null, opcoes: (parecidas.length ? parecidas : lancaveis).map((c) => c.nome) };
+  }
+
+  private lancarConta(): Ferramenta {
+    const schema = z.object({
+      tipo: z.enum(['pagar', 'receber']).describe('pagar = despesa (contas a pagar); receber = receita'),
+      descricao: z.string().trim().min(2).max(150).describe('Ex.: "Serviço da Lara (limpeza)"'),
+      valor: z.number().positive().describe('Valor em reais (de cada mês, se repetir)'),
+      vencimento: dataIso.describe('Primeiro vencimento'),
+      pessoaId: uuid.optional().describe('Fornecedor/prestador (pagar) ou cliente (receber), de buscar_pessoas ou cadastrar_pessoa'),
+      contaPlano: z.string().max(120).optional().describe('Nome da conta do plano de contas (ex.: "Serviços de terceiros", "Aluguel"). Se não souber, deixe vazio que a ferramenta devolve as opções'),
+      repetirMeses: z.number().int().min(2).max(36).optional().describe('Conta fixa: repete o mesmo valor todo mês, por quantos meses (ex.: 12)'),
+      parcelas: z.number().int().min(2).max(48).optional().describe('Divide o valor em parcelas mensais (não use junto com repetirMeses)'),
+      empresa: z.string().max(80).optional().describe('Nome ou CNPJ da empresa, se houver mais de uma (padrão: a matriz)'),
+    });
+    const resolver = async (e: z.infer<typeof schema>) => {
+      if (e.repetirMeses && e.parcelas) return { impedimento: 'Escolha repetir todo mês ou parcelar, não os dois.' } as const;
+      const emps = await this.db.select({ id: empresas.id, nome: empresas.nome, cnpj: empresas.cnpj, tipo: empresas.tipo }).from(empresas);
+      const emp = e.empresa ? emps.find((x) => x.nome.toLowerCase().includes(e.empresa!.toLowerCase()) || (x.cnpj ?? '').replace(/\D/g, '') === e.empresa!.replace(/\D/g, '')) : (emps.find((x) => x.tipo === 'matriz') ?? emps[0]);
+      if (!emp) return { impedimento: `Não achei a empresa "${e.empresa}". Empresas: ${emps.map((x) => x.nome).join(', ')}.` } as const;
+      const { conta, opcoes } = await this.contaDoPlano(e.contaPlano, e.tipo);
+      if (e.contaPlano && !conta) return { impedimento: `Não achei uma única conta do plano com "${e.contaPlano}". Opções: ${opcoes.slice(0, 40).join('; ')}. Pergunte qual usar.` } as const;
+      let pessoa: { nome: string } | undefined;
+      if (e.pessoaId) {
+        [pessoa] = await this.db.select({ nome: pessoas.nome }).from(pessoas).where(eq(pessoas.id, e.pessoaId));
+        if (!pessoa) return { impedimento: 'Cadastro (pessoaId) não encontrado.' } as const;
+      }
+      return { emp, conta, pessoa } as const;
+    };
+    return {
+      nome: 'lancar_conta',
+      descricao: 'Lança conta a pagar (despesa) ou a receber no Financeiro: avulsa, parcelada ou fixa todo mês (repetirMeses). Para pagar a alguém, ligue ao fornecedor/prestador (buscar_pessoas; se não existir, cadastrar_pessoa antes). Informe a conta do plano de contas para a DRE.',
+      schema,
+      risco: 'confirmar',
+      permitido: pode('financeiro', 'criar'),
+      preparar: async (e: z.infer<typeof schema>) => {
+        const r = await resolver(e);
+        if ('impedimento' in r) return { resumo: '', impedimento: r.impedimento };
+        const v = Math.round(e.valor * 100);
+        const quando = e.repetirMeses ? `${formatarReais(v)} por mês, todo dia ${Number(e.vencimento.slice(8))}, por ${e.repetirMeses} meses a partir de ${dataBR(e.vencimento)}` : e.parcelas ? `${formatarReais(v)} em ${e.parcelas} parcelas mensais a partir de ${dataBR(e.vencimento)}` : `${formatarReais(v)}, vencimento ${dataBR(e.vencimento)}`;
+        return { resumo: `Lançar conta a ${e.tipo === 'pagar' ? 'pagar' : 'receber'} "${e.descricao}"${r.pessoa ? ` de ${r.pessoa.nome}` : ''}: ${quando}. Empresa ${r.emp.nome}${r.conta ? `, conta do plano "${r.conta.nome}"` : ', sem conta do plano (fica para classificar)'}.` };
+      },
+      executar: async (e: z.infer<typeof schema>, ctx) => {
+        const r = await resolver(e);
+        if ('impedimento' in r) throw new BadRequestException(r.impedimento);
+        const criados = await this.lancamentos.lancar({ empresaId: r.emp.id, tipo: e.tipo, pessoaId: e.pessoaId ?? null, descricao: e.descricao, planoContaId: r.conta?.id ?? null, valor: Math.round(e.valor * 100), vencimento: e.vencimento, parcelas: e.parcelas ?? 1, repetirMeses: e.repetirMeses ?? null }, ctx.usuario.id);
+        return { lancados: criados.length, primeiroVencimento: dataBR(criados[0].vencimento), ultimoVencimento: dataBR(criados.at(-1)!.vencimento), valorCada: formatarReais(criados[0].valor) };
       },
     };
   }
