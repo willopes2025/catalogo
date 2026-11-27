@@ -35,8 +35,39 @@ export function AvisosERegras() {
     <div className="coluna">
       <Avisos />
       <MensagensAgenda />
+      <MensagemApp />
       <Impressao />
       <OutrasRegras />
+    </div>
+  );
+}
+
+interface CfgMsgApp { ativo: boolean; canalId: string | null; texto: string }
+
+/** WhatsApp para a consultora quando ela assina o contrato: como instalar o app. */
+function MensagemApp() {
+  const { v, setV, salvar, carregando } = useConfig<CfgMsgApp>('mensagem_app');
+  const padrao = useQuery({ queryKey: ['config-padrao', 'mensagem_app'], queryFn: () => api<CfgMsgApp>('/configuracoes/padrao/mensagem_app'), staleTime: Infinity });
+  const canais = useQuery({ queryKey: ['crm', 'canais'], queryFn: () => api<{ id: string; nome: string; tipo: string; ativo: boolean }[]>('/crm/canais') });
+  if (carregando || !v) return <Carregando />;
+  return (
+    <div className="cartao form">
+      <div className="secao">Mensagem do app ao assinar o contrato (WhatsApp)</div>
+      <label className="check l2"><input type="checkbox" checked={v.ativo} onChange={(e) => setV({ ...v, ativo: e.target.checked })} /> Mandar quando a consultora assinar o contrato (uma vez por consultora)</label>
+      <Campo rotulo="Número que manda" className="l2" ajuda="Em branco: o primeiro número por QR code ligado ao CRM.">
+        <select value={v.canalId ?? ''} onChange={(e) => setV({ ...v, canalId: e.target.value || null })}>
+          <option value="">Automático (primeiro número por QR code)</option>
+          {canais.data?.filter((c) => c.ativo).map((c) => <option key={c.id} value={c.id}>{c.nome}{c.tipo === 'oficial' ? ' (oficial: só chega se a pessoa escreveu nas últimas 24 h)' : ''}</option>)}
+        </select>
+      </Campo>
+      <div className="campo" style={{ gridColumn: 'span 4' }}>
+        <div className="flex entre" style={{ gap: 8, flexWrap: 'wrap' }}>
+          <label htmlFor="msg-app"><b>Texto</b> <span className="muted" style={{ fontSize: 12 }}>· variáveis: {'{{primeiro_nome}}'} {'{{nome}}'} {'{{link_android}}'} (baixar o app) {'{{link_portal}}'} (portal, para o iPhone)</span></label>
+          {padrao.data && v.texto !== padrao.data.texto && <button type="button" className="botao claro pequeno" onClick={() => setV({ ...v, texto: padrao.data!.texto })}>Voltar ao padrão</button>}
+        </div>
+        <textarea id="msg-app" rows={9} maxLength={2000} value={v.texto} onChange={(e) => setV({ ...v, texto: e.target.value })} style={{ resize: 'vertical', fontFamily: 'inherit' }} />
+      </div>
+      <Salvar s={salvar} valor={v} />
     </div>
   );
 }

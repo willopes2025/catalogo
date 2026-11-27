@@ -10,6 +10,7 @@ import { validar } from '../comum/validacao';
 import { AuditoriaService } from '../comum/auditoria.service';
 import { documentos, modelosDocumento } from '../db/schema';
 import { DocumentosService, VARIAVEIS } from './documentos.service';
+import { BoasVindasAppService } from './boas-vindas-app.service';
 
 const TIPOS = ['contrato', 'promissoria', 'aditivo'] as const;
 const conhecidas = new Set<string>(VARIAVEIS.map(([k]) => k));
@@ -95,7 +96,7 @@ const pedidosCodigo = new Limitador(10, 60 * 60_000, 'Muitos pedidos de código.
 /** Páginas que a representante abre pelo link, sem login. */
 @Controller('publico/documentos')
 export class DocumentoPublicoController {
-  constructor(private readonly svc: DocumentosService) {}
+  constructor(private readonly svc: DocumentosService, private readonly boasVindas: BoasVindasAppService) {}
 
   @Publico()
   @Get(':token')
@@ -112,10 +113,13 @@ export class DocumentoPublicoController {
 
   @Publico()
   @Post(':token/assinar')
-  assinar(@Param('token') token: string, @Body() body: unknown, @Req() req: Request) {
+  async assinar(@Param('token') token: string, @Body() body: unknown, @Req() req: Request) {
     const d = validar(z.object({ codigo: z.string().regex(/^\d{6}$/, 'O código tem 6 números'), nome: z.string().min(3), cpf: z.string().optional(), aceite: z.boolean() }), body);
     // req.ip já considera o proxy confiável (Caddy); o cabeçalho cru poderia ser forjado.
     const ip = req.ip ?? null;
-    return this.svc.assinar(token, d, ip, String(req.headers['user-agent'] ?? '') || null);
+    const r = await this.svc.assinar(token, d, ip, String(req.headers['user-agent'] ?? '') || null);
+    // Contrato assinado: a consultora recebe no WhatsApp como instalar o app (em segundo plano, não segura a resposta).
+    if (r.tipo === 'contrato') void this.boasVindas.enviar(r.pessoaId).catch(() => undefined);
+    return { ok: r.ok, assinadoEm: r.assinadoEm, hash: r.hash };
   }
 }

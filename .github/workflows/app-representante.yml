@@ -18,7 +18,8 @@ on:
       - '.github/workflows/app-representante.yml'
 
 permissions:
-  contents: read
+  # write: publica o APK de teste num link fixo (Releases), que vai na mensagem de boas-vindas da consultora.
+  contents: write
 
 jobs:
   android:
@@ -51,6 +52,13 @@ jobs:
       - name: APK de teste
         working-directory: app-representante/android
         run: ./gradlew --no-daemon assembleDebug
+      - name: Publicar o APK para download (link fixo, sem login)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp android/app/build/outputs/apk/debug/app-debug.apk android/app/build/outputs/apk/debug/aritana.apk
+          gh release view app-representante >/dev/null 2>&1 || gh release create app-representante --title "Aritana (app da consultora, Android)" --notes "APK do app da consultora. Baixe o arquivo aritana.apk no celular Android e instale (permitir instalar apps desconhecidos)." --latest=false
+          gh release upload app-representante android/app/build/outputs/apk/debug/aritana.apk --clobber
       - uses: actions/upload-artifact@v4
         with:
           name: aritana-teste-apk

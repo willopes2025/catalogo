@@ -220,7 +220,7 @@ export class DocumentosService {
         .enviar(email, `Documento assinado: ${d.titulo}`, `Olá, ${nome.split(' ')[0]}!\n\nVocê assinou "${d.titulo}" em ${assinadoEm.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })}.\nCódigo de verificação do documento (SHA-256): ${d.hash}\n\nAritana Semijoias`)
         .catch(() => undefined);
     }
-    return { ok: true, assinadoEm, hash: d.hash };
+    return { ok: true, assinadoEm, hash: d.hash, tipo: d.tipo, pessoaId: d.pessoaId };
   }
 
   async obter(id: string) {

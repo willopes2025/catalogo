@@ -150,7 +150,8 @@ export class IndicacoesService implements OnModuleInit, OnModuleDestroy {
     let expiradas = 0;
     for (const a of abertas) {
       if (!a.i.indicadaPessoaId || !a.i.aprovadaEm) continue;
-      const desde = a.i.aprovadaEm.toISOString().slice(0, 10);
+      // Dia da aprovação no horário de Brasília (em UTC, depois das 21 h já seria o dia seguinte e o pagamento do dia não contava).
+      const desde = new Date(a.i.aprovadaEm.getTime() - 3 * 3600_000).toISOString().slice(0, 10);
       const pago = (
         await this.db.execute<{ motivo: string }>(sql`
           select 'Primeiro pagamento: ' || descricao as motivo from titulos

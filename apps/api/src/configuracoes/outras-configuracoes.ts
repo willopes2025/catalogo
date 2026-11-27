@@ -65,6 +65,23 @@ export const CONFIGS = {
       lembrete_hora: z.string().trim().min(5, 'Escreva o lembrete de pouco antes.').max(1500),
     }),
   },
+  /**
+   * WhatsApp que sai para a consultora quando ela assina o contrato: explica o app e manda o link.
+   * Variáveis: {{primeiro_nome}} {{nome}} {{link_android}} {{link_portal}}.
+   */
+  mensagem_app: {
+    padrao: {
+      ativo: true,
+      canalId: null as string | null,
+      texto:
+        'Oi, {{primeiro_nome}}! Seja bem-vinda à Aritana Semijoias! 💛\nSeu contrato foi assinado. Agora você acompanha tudo pelo *app da consultora*: sua maleta, pedidos, clientes, acertos e comissões, e recebe os avisos no celular.\n\n📱 *Android:* baixe e instale pelo link\n{{link_android}}\n(se o celular pedir, permita instalar apps desconhecidos)\n\n🍎 *iPhone:* abra {{link_portal}} no Safari, toque em Compartilhar e em "Adicionar à Tela de Início".\n\nQualquer dúvida, é só responder aqui.',
+    },
+    schema: z.object({
+      ativo: z.boolean(),
+      canalId: z.string().uuid().nullable(),
+      texto: z.string().trim().min(10, 'Escreva a mensagem.').max(2000),
+    }),
+  },
   /** Indique e ganhe: prêmio para quem traz uma nova consultora pelo próprio link. */
   indicacao: {
     padrao: { ativo: true, valor: 5000, valorEquipe: null as number | null, validadeDias: 120, lancarNoFinanceiro: true, prazoPagamentoDias: 10, mensagemConvite: 'Quer ganhar uma renda extra vendendo semijoias? Faça seu cadastro para ser consultora Aritana pelo meu link:' },

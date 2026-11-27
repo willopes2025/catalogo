@@ -4785,3 +4785,25 @@ test('tirar o estoque de exemplo da instalação: zera só as peças de exemplo 
   const res = await ok('GET', '/estoque/resumo');
   assert.ok(res.locais.every((l) => l.pecas >= 0));
 });
+
+test('contrato assinado: a consultora recebe no WhatsApp como instalar o app (uma vez só)', async () => {
+  const cpf = (base) => { const d = String(base).padStart(9, '0').slice(0, 9).split('').map(Number); for (const n of [9, 10]) { let s = 0; for (let i = 0; i < n; i++) s += d[i] * (n + 1 - i); const r = (s * 10) % 11; d.push(r === 10 ? 0 : r); } return d.join(''); };
+  const canais = await ok('GET', '/crm/canais');
+  if (!canais.some((c) => c.ativo)) await ok('POST', '/crm/canais', { nome: 'Celular boas-vindas', tipo: 'evolution' });
+  const rep = await ok('POST', '/pessoas', { tipo: 'representante', nome: 'Consultora App E2E', documento: cpf(271828182), telefone1: '27999995151', email: 'app.e2e@exemplo.com', cidade: 'Vitória', uf: 'ES', modeloTrabalho: 'consignado' });
+  const doc = await ok('POST', '/documentos', { pessoaId: rep.id, tipo: 'contrato' });
+  const salvo = token;
+  token = '';
+  const c = await ok('POST', `/publico/documentos/${doc.token}/codigo`);
+  await ok('POST', `/publico/documentos/${doc.token}/assinar`, { codigo: c.codigoDev, nome: 'Consultora App E2E', cpf: rep.documento, aceite: true });
+  token = salvo;
+  let msg = null;
+  for (let i = 0; i < 20 && !msg; i++) {
+    await new Promise((r) => setTimeout(r, 300));
+    const cv = (await ok('GET', '/crm/conversas?aba=todas')).find((x) => x.telefone === '5527999995151');
+    if (cv) msg = (await ok('GET', `/crm/conversas/${cv.id}/mensagens`)).mensagens.find((m) => /app da consultora/.test(m.texto ?? '')) ?? null;
+  }
+  assert.ok(msg, 'mensagem do app enviada');
+  assert.match(msg.texto, /releases\/download\/app-representante\/aritana\.apk/);
+  assert.match(msg.texto, /Consultora|Oi, Consultora!/);
+});

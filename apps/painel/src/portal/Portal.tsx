@@ -13,13 +13,14 @@ const diasAte = (d: string) => Math.round((new Date(d + 'T12:00:00').getTime() -
 /** Liga o manifesto e o service worker só nas páginas do portal (é o que permite "instalar" no celular). */
 function usarApp() {
   useEffect(() => {
+    // O sistema da equipe tem o próprio manifesto (Aritana Gestão); no portal vale o da consultora.
     let link = document.querySelector<HTMLLinkElement>('link[rel=manifest]');
     if (!link) {
       link = document.createElement('link');
       link.rel = 'manifest';
-      link.href = '/portal.webmanifest';
       document.head.appendChild(link);
     }
+    link.href = '/portal.webmanifest';
     const apple = document.createElement('link');
     apple.rel = 'apple-touch-icon';
     apple.href = '/icone-192.png';
