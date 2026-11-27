@@ -69,12 +69,27 @@ export const CONFIGS = {
    * WhatsApp que sai para a consultora quando ela assina o contrato: explica o app e manda o link.
    * Variáveis: {{primeiro_nome}} {{nome}} {{link_android}} {{link_portal}}.
    */
+  portal_consultora: {
+    padrao: {
+      /** WhatsApp da equipe para o botão "Falar com a Aritana" no portal (só números, com DDD). */
+      whatsappMatriz: '',
+      /** Serviço de cobrança: a Aritana fica com esta parte (pontos-base) do que receber da cliente da consultora. */
+      taxaCobrancaPb: 1000,
+      termoCobranca:
+        'Ao acionar a cobrança, você passa para a Aritana Semijoias a cobrança desta venda. A Aritana emite o boleto para a sua cliente, cobra e, quando ela pagar, você recebe a sua parte (o valor menos a taxa do serviço) na sua carteira Asaas ou como crédito no fechamento. A partir daí você não pode mais cobrar nem receber da cliente: se receber, o valor será descontado da sua comissão ou cobrado de você.',
+    },
+    schema: z.object({
+      whatsappMatriz: z.string().trim().max(20),
+      taxaCobrancaPb: z.number().int().min(0).max(10000),
+      termoCobranca: z.string().trim().min(20).max(3000),
+    }),
+  },
   mensagem_app: {
     padrao: {
       ativo: true,
       canalId: null as string | null,
       texto:
-        'Oi, {{primeiro_nome}}! Seja bem-vinda à Aritana Semijoias! 💛\nSeu contrato foi assinado. Agora você acompanha tudo pelo *app da consultora*: sua maleta, pedidos, clientes, acertos e comissões, e recebe os avisos no celular.\n\n📱 *Android:* baixe e instale pelo link\n{{link_android}}\n(se o celular pedir, permita instalar apps desconhecidos)\n\n🍎 *iPhone:* abra {{link_portal}} no Safari, toque em Compartilhar e em "Adicionar à Tela de Início".\n\nQualquer dúvida, é só responder aqui.',
+        'Oi, {{primeiro_nome}}! Seja bem-vinda à Aritana Semijoias! 💛\nSeu contrato foi assinado. Agora você acompanha tudo pelo *app da consultora*: sua maleta, pedidos, clientes, acertos e comissões, e recebe os avisos no celular.\n\n📱 *Android:* baixe e instale pelo link\n{{link_android}}\n(se o celular pedir, permita instalar apps desconhecidos)\n\n🍎 *iPhone:* abra {{link_portal}} no Safari, toque em Compartilhar e em "Adicionar à Tela de Início".\n\n🔑 *Seu acesso:* {{link_acesso}}\n(link direto, vale 7 dias). Depois, para entrar de novo, digite o seu e-mail e o código chega aqui no WhatsApp.\n\nQualquer dúvida, é só responder aqui.',
     },
     schema: z.object({
       ativo: z.boolean(),

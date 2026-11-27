@@ -386,6 +386,13 @@
       "when": 1795813827710,
       "tag": "0054_rosto_evento_ponto",
       "breakpoints": true
+    },
+    {
+      "idx": 55,
+      "version": "7",
+      "when": 1795818305469,
+      "tag": "0055_portal_consultora",
+      "breakpoints": true
     }
   ]
 }

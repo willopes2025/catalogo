@@ -63,10 +63,10 @@ function MensagemApp() {
       </Campo>
       <div className="campo" style={{ gridColumn: 'span 4' }}>
         <div className="flex entre" style={{ gap: 8, flexWrap: 'wrap' }}>
-          <label htmlFor="msg-app"><b>Texto</b> <span className="muted" style={{ fontSize: 12 }}>· variáveis: {'{{primeiro_nome}}'} {'{{nome}}'} {'{{link_android}}'} (baixar o app) {'{{link_portal}}'} (portal, para o iPhone)</span></label>
+          <label htmlFor="msg-app"><b>Texto</b> <span className="muted" style={{ fontSize: 12 }}>· variáveis: {'{{primeiro_nome}}'} {'{{nome}}'} {'{{link_android}}'} (baixar o app) {'{{link_portal}}'} (portal, para o iPhone) {'{{link_acesso}}'} (link de acesso direto; se faltar no texto, vai no fim)</span></label>
           {padrao.data && v.texto !== padrao.data.texto && <button type="button" className="botao claro pequeno" onClick={() => setV({ ...v, texto: padrao.data!.texto })}>Voltar ao padrão</button>}
         </div>
-        <TextoComVariaveis id="msg-app" linhas={9} maxLength={2000} value={v.texto} onChange={(t) => setV({ ...v, texto: t })} variaveis={[{ nome: 'primeiro_nome', rotulo: 'Primeiro nome' }, { nome: 'nome', rotulo: 'Nome completo' }, { nome: 'link_android', rotulo: 'Link para baixar o app (Android)' }, { nome: 'link_portal', rotulo: 'Endereço do portal (iPhone)' }]} style={{ resize: 'vertical', fontFamily: 'inherit' }} />
+        <TextoComVariaveis id="msg-app" linhas={9} maxLength={2000} value={v.texto} onChange={(t) => setV({ ...v, texto: t })} variaveis={[{ nome: 'primeiro_nome', rotulo: 'Primeiro nome' }, { nome: 'nome', rotulo: 'Nome completo' }, { nome: 'link_android', rotulo: 'Link para baixar o app (Android)' }, { nome: 'link_portal', rotulo: 'Endereço do portal (iPhone)' }, { nome: 'link_acesso', rotulo: 'Link de acesso direto (7 dias)' }]} style={{ resize: 'vertical', fontFamily: 'inherit' }} />
       </div>
       <Salvar s={salvar} valor={v} />
     </div>

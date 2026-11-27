@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { api, pode } from '../api';
+import { api, lerSessao, pode } from '../api';
 import { data, dataHora, paraCentavos, reais, telefone } from '../formato';
 import { Abas, Campo, Carregando, Erro, Indicador, Topo } from '../componentes/ui';
 
@@ -63,7 +63,7 @@ function Lista({ filtro, abrir }: { filtro: 'abertas' | 'todas'; abrir: (id: str
                 <td>{o.tipo === 'garantia' ? 'Garantia' : 'Conserto'}</td>
                 <td>{o.produto ? <>{o.produto}<div className="muted">ref. {o.referencia}</div></> : '—'}</td>
                 <td>{o.cliente ?? o.representante ?? '—'}</td>
-                <td className="muted">{o.defeito}</td>
+                <td className="muted">{o.defeito}{o.origem === 'portal' && <> <span className="etiqueta neutra">pelo app</span></>}{o.fotos?.map((f: string, k: number) => <button key={f} className="botao claro pequeno" style={{ marginLeft: 4 }} onClick={(e) => { e.stopPropagation(); void abrirFotoGarantia(f); }}>📷 {k + 1}</button>)}</td>
                 <td>{data(o.garantiaAte)}</td>
                 <td>{data(o.previsao)}{o.prestador && <div className="muted">{o.prestador}</div>}</td>
                 <td><span className={`etiqueta ${STATUS[o.status]?.[0]}`}>{STATUS[o.status]?.[1] ?? o.status}</span>{o.decisao && <div className="muted">{DECISAO[o.decisao]}</div>}</td>
@@ -285,4 +285,11 @@ function BuscaCliente({ valor, mudar }: { valor: string; mudar: (id: string) => 
       </div>
     </Campo>
   );
+}
+
+/** Abre a foto da garantia (precisa do login: busca com o token e abre numa aba). */
+async function abrirFotoGarantia(nome: string) {
+  const r = await fetch(`/api/consultoras/garantia-foto/${nome}`, { headers: { authorization: `Bearer ${lerSessao()?.token ?? ''}` } });
+  if (!r.ok) return;
+  window.open(URL.createObjectURL(await r.blob()), '_blank');
 }

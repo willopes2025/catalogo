@@ -3,6 +3,7 @@ import { useMutation, useQuery } from '@tanstack/react-query';
 import { api, pode } from '../api';
 import { centavosParaTexto, paraCentavos } from '../formato';
 import { Abas, Campo, Carregando, Erro, Topo } from '../componentes/ui';
+import { AppConsultora } from './AppConsultora';
 import { Usuarios, Grupos, Modelos, Integracoes, Empresas } from './ConfiguracoesOutras';
 import { Importacao } from './Importacao';
 import { AvisosERegras } from './ConfiguracoesAvisos';
@@ -31,7 +32,7 @@ const CAMPOS: [string, string, string][] = [
   ['maletasSimultaneas', 'Maletas abertas ao mesmo tempo', 'Por representante'],
 ];
 
-type Aba = 'implantacao' | 'regras' | 'avisos' | 'empresas' | 'usuarios' | 'grupos' | 'modelos' | 'integracoes' | 'importacao';
+type Aba = 'implantacao' | 'regras' | 'avisos' | 'empresas' | 'usuarios' | 'grupos' | 'modelos' | 'consultora' | 'integracoes' | 'importacao';
 
 export function Configuracoes() {
   const [params, setParams] = useSearchParams();
@@ -39,8 +40,8 @@ export function Configuracoes() {
   const setAba = (a: Aba) => setParams(a === 'regras' ? {} : { aba: a }, { replace: true });
   return (
     <>
-      <Topo eb="Configurações" titulo={{ implantacao: 'Implantação', regras: 'Regras do consignado', avisos: 'Avisos, etiquetas e outras regras', empresas: 'Empresas', usuarios: 'Usuários', grupos: 'Grupos e permissões', modelos: 'Modelos de documento', integracoes: 'Integrações', importacao: 'Importar planilhas' }[aba]} acoes={<Link to="/auditoria" className="botao claro">Auditoria</Link>} />
-      <Abas ativa={aba} mudar={setAba} abas={[['implantacao', 'Implantação'], ['regras', 'Regras do consignado'], ['avisos', 'Avisos e regras'], ['empresas', 'Empresas'], ['usuarios', 'Usuários'], ['grupos', 'Grupos e permissões'], ['modelos', 'Modelos de documento'], ['integracoes', 'Integrações'], ['importacao', 'Importar planilhas']]} />
+      <Topo eb="Configurações" titulo={{ implantacao: 'Implantação', regras: 'Regras do consignado', avisos: 'Avisos, etiquetas e outras regras', empresas: 'Empresas', usuarios: 'Usuários', grupos: 'Grupos e permissões', modelos: 'Modelos de documento', consultora: 'App da consultora', integracoes: 'Integrações', importacao: 'Importar planilhas' }[aba]} acoes={<Link to="/auditoria" className="botao claro">Auditoria</Link>} />
+      <Abas ativa={aba} mudar={setAba} abas={[['implantacao', 'Implantação'], ['regras', 'Regras do consignado'], ['avisos', 'Avisos e regras'], ['empresas', 'Empresas'], ['usuarios', 'Usuários'], ['grupos', 'Grupos e permissões'], ['modelos', 'Modelos de documento'], ['consultora', 'App da consultora'], ['integracoes', 'Integrações'], ['importacao', 'Importar planilhas']]} />
       {aba === 'implantacao' && <Implantacao />}
       {aba === 'regras' && <Regras />}
       {aba === 'avisos' && <AvisosERegras />}
@@ -48,6 +49,7 @@ export function Configuracoes() {
       {aba === 'usuarios' && <Usuarios />}
       {aba === 'grupos' && <Grupos />}
       {aba === 'modelos' && <Modelos />}
+      {aba === 'consultora' && <AppConsultora />}
       {aba === 'integracoes' && <Integracoes />}
       {aba === 'importacao' && <Importacao />}
     </>

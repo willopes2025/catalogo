@@ -33,6 +33,8 @@ import { BoasVindasAppService } from './documentos/boas-vindas-app.service';
 import { EnvioDocumentoService } from './documentos/envio-documento.service';
 import { PixRecebidosService } from './financeiro/pix-recebidos.service';
 import { PixController } from './financeiro/pix.controller';
+import { ConsultoraService } from './portal/consultora.service';
+import { ConsultoraAdminController, PortalConsultoraController } from './portal/consultora.controller';
 import { AvisarMaletaService } from './maletas/avisar-maleta.service';
 import { WebhooksController } from './integracoes/webhooks.controller';
 import { FiscalController } from './fiscal/fiscal.controller';
@@ -144,6 +146,8 @@ if (!segredo || (process.env.NODE_ENV === 'production' && segredo.length < 32)) 
     DocumentosController,
     DocumentoPublicoController,
     PixController,
+    PortalConsultoraController,
+    ConsultoraAdminController,
     CatalogoController,
     PrivacidadeController,
     ConsultasController,
@@ -208,6 +212,7 @@ if (!segredo || (process.env.NODE_ENV === 'production' && segredo.length < 32)) 
     BoasVindasAppService,
     EnvioDocumentoService,
     PixRecebidosService,
+    ConsultoraService,
     AvisarMaletaService,
     FiscalService,
     ImportacaoService,

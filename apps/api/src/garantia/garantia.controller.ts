@@ -59,6 +59,8 @@ export class GarantiaController {
         garantiaAte: ordensServico.garantiaAte,
         previsao: ordensServico.previsao,
         valor: ordensServico.valor,
+        fotos: ordensServico.fotos,
+        origem: ordensServico.origem,
         criadoEm: ordensServico.criadoEm,
       })
       .from(ordensServico)

@@ -162,7 +162,7 @@ export class AsaasService implements OnApplicationBootstrap {
    * `nova`: emite outra (segunda via, novo vencimento, valor com encargos) e apaga a anterior no Asaas.
    * O título passa a apontar só para a cobrança nova: é ela que aparece na ficha, no portal e nas mensagens.
    */
-  async cobrar(tituloId: string, tipo: 'BOLETO' | 'PIX', usuarioId: string | null, nova?: { valor: number; vencimento: string }, opcoes?: { vencimento?: string }) {
+  async cobrar(tituloId: string, tipo: 'BOLETO' | 'PIX', usuarioId: string | null, nova?: { valor: number; vencimento: string }, opcoes?: { vencimento?: string; split?: { walletId: string; percentualValue: number }[] }) {
     const [t] = await this.db.select().from(titulos).where(eq(titulos.id, tituloId));
     if (!t) throw new BadRequestException('Título não encontrado.');
     if (t.tipo !== 'receber' || (t.status !== 'aberto' && t.status !== 'protestado')) throw new BadRequestException('Só títulos a receber em aberto podem ser cobrados.');
@@ -194,6 +194,7 @@ export class AsaasService implements OnApplicationBootstrap {
       dueDate: venc,
       description: t.descricao.slice(0, 500),
       externalReference: t.id,
+      ...(opcoes?.split?.length ? { split: opcoes.split } : {}),
       ...(encargos
         ? {
             fine: { value: encargos.multaPb / 100 },

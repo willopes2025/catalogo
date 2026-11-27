@@ -4,10 +4,11 @@ import { Permissao, Publico, Usuario, type UsuarioLogado } from '../comum/auth';
 import { validar } from '../comum/validacao';
 import { AsaasService } from './asaas.service';
 import { PixRecebidosService } from '../financeiro/pix-recebidos.service';
+import { ConsultoraService } from '../portal/consultora.service';
 
 @Controller()
 export class WebhooksController {
-  constructor(private readonly asaas: AsaasService, private readonly pix: PixRecebidosService) {}
+  constructor(private readonly asaas: AsaasService, private readonly pix: PixRecebidosService, private readonly consultora: ConsultoraService) {}
 
   /** Endereço cadastrado no Asaas para avisar pagamentos. */
   @Publico()
@@ -19,6 +20,9 @@ export class WebhooksController {
     const ev = String(body.event ?? '');
     if (r.resultado === 'título não encontrado' && (ev === 'PAYMENT_RECEIVED' || ev === 'PAYMENT_CONFIRMED') && body.payment)
       await this.pix.doWebhook(body.payment as Record<string, unknown>).catch(() => undefined);
+    // Boleto de cobrança passada pela consultora: marca a parcela e, sem split, credita a parte dela.
+    const ref = String((body.payment as Record<string, unknown> | undefined)?.externalReference ?? '');
+    if (r.resultado === 'baixado' && /^[0-9a-f-]{36}$/i.test(ref)) await this.consultora.aoPagarTitulo(ref).catch(() => undefined);
     return r;
   }
 

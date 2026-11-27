@@ -18,6 +18,7 @@ import { DistribuicaoService } from '../crm/distribuicao.service';
 import { AgendaService } from '../agenda/agenda.service';
 import { PedidosLinkService } from '../catalogo/pedidos.service';
 import { PushService } from './push.service';
+import { EnvioDocumentoService } from '../documentos/envio-documento.service';
 import { acertos, categorias, crmContatos, crmFunis, crmLeads, documentos, locaisEstoque, maletas, niveis, pedidosPecas, pessoas, portalAcessos, premios, produtos, resgates, saldos, titulos } from '../db/schema';
 
 const sha256 = (t: string) => createHash('sha256').update(t).digest('hex');
@@ -44,6 +45,7 @@ export class PortalController {
     private readonly agenda: AgendaService,
     private readonly pedidosLink: PedidosLinkService,
     private readonly push: PushService,
+    private readonly envio: EnvioDocumentoService,
   ) {}
 
   private sessao(p: { id: string; nome: string }) {
@@ -55,33 +57,54 @@ export class PortalController {
   @Publico()
   @Post('entrar')
   async entrar(@Body() body: unknown, @Req() req: Request) {
-    const cpf = soDigitos(validar(z.object({ cpf: z.string() }), body).cpf);
-    if (!cpfValido(cpf)) throw new BadRequestException('CPF inválido.');
+    const d = validar(z.object({ login: z.string().trim().min(3).max(120).optional(), cpf: z.string().optional() }), body);
+    const login = (d.login ?? d.cpf ?? '').trim();
     tentativasPorIp.usar(req.ip ?? '?');
-    pedidosDeCodigo.usar(cpf);
-    const [p] = await this.db.select().from(pessoas).where(and(eq(pessoas.documento, cpf), eq(pessoas.tipo, 'representante')));
-    // Resposta sempre igual (exista ou não o CPF, tenha ou não e-mail, funcione ou não o envio),
-    // para ninguém descobrir pelo formulário quem é representante da Aritana.
-    const generica = { enviado: true, mensagem: 'Se o CPF estiver cadastrado com e-mail, enviamos um código. Confira também a caixa de spam. Sem e-mail no cadastro? Peça à Aritana o link de acesso pelo WhatsApp.' };
-    if (!p || ['inativo', 'recusado'].includes(p.status) || !p.email) return generica;
+    pedidosDeCodigo.usar(login.toLowerCase());
+    const p = await this.consultoraPorLogin(login);
+    // Resposta sempre igual (exista ou não o cadastro, funcione ou não o envio),
+    // para ninguém descobrir pelo formulário quem é consultora da Aritana.
+    const generica = { enviado: true, mensagem: 'Se o e-mail estiver cadastrado, mandamos um código de 6 números no seu WhatsApp (ou no e-mail, se não houver WhatsApp no cadastro).' };
+    if (!p || ['inativo', 'recusado'].includes(p.status) || (!p.telefone1 && !p.email)) return generica;
     const codigo = String(randomInt(0, 1_000_000)).padStart(6, '0');
     await this.db.insert(portalAcessos).values({ pessoaId: p.id, tipo: 'codigo', hash: sha256(`${p.id}:${codigo}`), expiraEm: new Date(Date.now() + 15 * 60_000) });
     try {
-      const r = await this.email.enviar(p.email, 'Seu código de acesso · Aritana', `Olá, ${p.nome.split(' ')[0]}!\n\nSeu código para entrar no portal da Aritana é: ${codigo}\nEle vale por 15 minutos.\n\nSe não foi você, ignore esta mensagem.\nAritana Semijoias`);
+      if (p.telefone1) {
+        // WhatsApp primeiro; se não sair (sem número ligado no CRM, celular desconectado), vai por e-mail.
+        const foi = await this.envio
+          .whatsapp(p.id, p.telefone1, p.nome, `Seu código de acesso ao app da Aritana é: *${codigo}*\n\nEle vale por 15 minutos. Não passe este código para ninguém.`)
+          .then(() => true)
+          .catch((e) => (this.log.warn(`Código do portal pelo WhatsApp não saiu (${p.id}): ${(e as Error).message}`), false));
+        if (foi || !p.email) return generica;
+      }
+      const r = await this.email.enviar(p.email!, 'Seu código de acesso · Aritana', `Olá, ${p.nome.split(' ')[0]}!\n\nSeu código para entrar no portal da Aritana é: ${codigo}\nEle vale por 15 minutos.`);
       if (r.simulado && process.env.NODE_ENV !== 'production') return { ...generica, codigoDev: codigo };
     } catch (e) {
-      this.log.warn(`Código do portal não enviado para a representante ${p.id}: ${(e as Error).message}`);
+      this.log.warn(`Código do portal não enviado para a consultora ${p.id}: ${(e as Error).message}`);
     }
     return generica;
+  }
+
+  /** Consultora pelo e-mail (sem diferença de maiúsculas) ou pelo CPF. */
+  private async consultoraPorLogin(login: string) {
+    const cpf = soDigitos(login);
+    const porEmail = login.includes('@');
+    if (!porEmail && !cpfValido(cpf)) return null;
+    const lista = await this.db
+      .select()
+      .from(pessoas)
+      .where(and(eq(pessoas.tipo, 'representante'), porEmail ? sql`lower(${pessoas.email}) = ${login.toLowerCase()}` : eq(pessoas.documento, cpf)))
+      .orderBy(sql`${pessoas.status} = 'ativo' desc`)
+      .limit(1);
+    return lista[0] ?? null;
   }
 
   @Publico()
   @Post('confirmar')
   async confirmar(@Body() body: unknown, @Req() req: Request) {
-    const d = validar(z.object({ cpf: z.string(), codigo: z.string().regex(/^\d{6}$/, 'O código tem 6 números') }), body);
+    const d = validar(z.object({ login: z.string().optional(), cpf: z.string().optional(), codigo: z.string().regex(/^\d{6}$/, 'O código tem 6 números') }), body);
     tentativasPorIp.usar(req.ip ?? '?');
-    const cpf = soDigitos(d.cpf);
-    const [p] = await this.db.select().from(pessoas).where(and(eq(pessoas.documento, cpf), eq(pessoas.tipo, 'representante')));
+    const p = await this.consultoraPorLogin((d.login ?? d.cpf ?? '').trim());
     if (!p) throw new BadRequestException('Código incorreto ou vencido.');
     const [a] = await this.db
       .select()
@@ -326,6 +349,7 @@ export class PortalController {
       recebidaEm: m.recebidaEm,
       prebaixaEm: m.prebaixaEm,
       codigoRastreio: m.codigoRastreio,
+      etapa: m.etapa,
       totais: m.totais,
       // sem custo: a representante vê só o preço de etiqueta
       itens: m.itens.map((i) => ({ produtoId: i.produtoId, referencia: i.referencia, descricao: i.descricao, foto: i.foto, preco: i.preco, enviada: i.enviada, vendida: i.vendida, devolvida: i.devolvida, naMaleta: i.naMaleta, prebaixaVendida: i.prebaixaVendida })),
@@ -458,7 +482,7 @@ export class PortalController {
   @Permissao('maletas', 'ver')
   listarPedidos(@Query('status') status = 'novo') {
     return this.db
-      .select({ id: pedidosPecas.id, numero: pedidosPecas.numero, pessoaId: pedidosPecas.pessoaId, representante: pessoas.nome, telefone: pessoas.telefone1, itens: pedidosPecas.itens, observacao: pedidosPecas.observacao, status: pedidosPecas.status, resposta: pedidosPecas.resposta, criadoEm: pedidosPecas.criadoEm, atendidoEm: pedidosPecas.atendidoEm })
+      .select({ id: pedidosPecas.id, numero: pedidosPecas.numero, pessoaId: pedidosPecas.pessoaId, representante: pessoas.nome, telefone: pessoas.telefone1, itens: pedidosPecas.itens, observacao: pedidosPecas.observacao, status: pedidosPecas.status, resposta: pedidosPecas.resposta, criadoEm: pedidosPecas.criadoEm, atendidoEm: pedidosPecas.atendidoEm, tipo: pedidosPecas.tipo, entrega: pedidosPecas.entrega, enderecoEntrega: pedidosPecas.enderecoEntrega })
       .from(pedidosPecas)
       .innerJoin(pessoas, eq(pessoas.id, pedidosPecas.pessoaId))
       .where(status === 'todos' ? undefined : eq(pedidosPecas.status, status))

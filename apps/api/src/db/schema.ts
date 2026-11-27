@@ -170,6 +170,10 @@ export const pessoas = pgTable(
     motivoBloqueio: text('motivo_bloqueio'),
     // Cliente final
     representanteId: uuid('representante_id').references((): AnyPgColumn => pessoas.id),
+    /** Consultora: carteira Asaas (Wallet ID) para receber o split da cobrança; chave Pix; aceite do serviço de cobrança. */
+    asaasWalletId: text('asaas_wallet_id'),
+    chavePix: text('chave_pix'),
+    aceiteCobrancaEm: timestamp('aceite_cobranca_em', { withTimezone: true }),
     consentimentoLgpd: boolean('consentimento_lgpd').notNull().default(false),
     status: statusPessoa('status').notNull().default('ativo'),
     observacao: text('observacao'),
@@ -732,6 +736,10 @@ export const ordensServico = pgTable(
     produtoTrocaId: uuid('produto_troca_id').references(() => produtos.id),
     observacao: text('observacao'),
     observacaoInterna: text('observacao_interna'),
+    /** Fotos enviadas pela consultora no portal (mídia). */
+    fotos: jsonb('fotos').$type<string[]>().notNull().default([]),
+    /** sistema | portal */
+    origem: text('origem').notNull().default('sistema'),
     usuarioId: uuid('usuario_id').references(() => usuarios.id),
     criadoEm: criadoEm(),
     concluidaEm: timestamp('concluida_em', { withTimezone: true }),
@@ -776,7 +784,7 @@ export const avisosEnviados = pgTable('avisos_enviados', {
 
 // ───────────────────────── Contratos e assinatura ─────────────────────────
 
-export const tipoDocumento = pgEnum('tipo_documento', ['contrato', 'promissoria', 'aditivo']);
+export const tipoDocumento = pgEnum('tipo_documento', ['contrato', 'promissoria', 'aditivo', 'promissoria_venda']);
 export const statusDocumento = pgEnum('status_documento', ['pendente', 'assinado', 'cancelado', 'expirado']);
 
 /** Modelo de texto com variáveis {{nome}}, {{comissao_avista}} etc. */
@@ -1016,6 +1024,12 @@ export const pedidosPecas = pgTable('pedidos_pecas', {
   itens: jsonb('itens').$type<{ produtoId: string; referencia: string; descricao: string; quantidade: number }[]>().notNull(),
   observacao: text('observacao'),
   status: text('status').notNull().default('novo'), // novo | atendido | recusado
+  /** reposicao (peças para a maleta) | venda (peça do catálogo vendida pela consultora, sai da matriz) */
+  tipo: text('tipo').notNull().default('reposicao'),
+  vendaId: uuid('venda_id'),
+  /** Venda: frete para a cliente (endereço) ou a consultora retira. */
+  entrega: text('entrega'),
+  enderecoEntrega: text('endereco_entrega'),
   resposta: text('resposta'),
   atendidoPor: uuid('atendido_por').references(() => usuarios.id),
   atendidoEm: timestamp('atendido_em', { withTimezone: true }),
@@ -2640,4 +2654,64 @@ export const maletaConferencias = pgTable(
     criadoEm: criadoEm(),
   },
   (t) => ({ porMaleta: index('maleta_conferencias_idx').on(t.maletaId, t.criadoEm) }),
+);
+
+// ───────────────────────── Portal da consultora ─────────────────────────
+
+/** Venda da consultora para a cliente final (peças da maleta ou do catálogo da matriz). A dívida é da consultora. */
+export const consultoraVendas = pgTable(
+  'consultora_vendas',
+  {
+    id: id(),
+    numero: serial('numero').notNull(),
+    consultoraId: uuid('consultora_id').notNull().references(() => pessoas.id),
+    clienteId: uuid('cliente_id').notNull().references(() => pessoas.id),
+    itens: jsonb('itens').$type<{ produtoId: string; referencia: string; descricao: string; quantidade: number; preco: number; origem: 'maleta' | 'matriz' }[]>().notNull(),
+    total: integer('total').notNull(),
+    desconto: integer('desconto').notNull().default(0),
+    /** avista | prazo */
+    forma: text('forma').notNull(),
+    formaPagamento: text('forma_pagamento'),
+    parcelas: jsonb('parcelas').$type<{ numero: number; valor: number; vencimento: string; pagoEm: string | null; tituloId?: string | null; split?: boolean }[]>().notNull().default([]),
+    /** aberta | quitada | em_cobranca | cancelada */
+    status: text('status').notNull().default('aberta'),
+    maletaId: uuid('maleta_id').references(() => maletas.id),
+    pedidoMatrizId: uuid('pedido_matriz_id'),
+    promissoriaId: uuid('promissoria_id'),
+    cobrancaEm: timestamp('cobranca_em', { withTimezone: true }),
+    observacao: text('observacao'),
+    criadoEm: criadoEm(),
+  },
+  (t) => ({ porConsultora: index('consultora_vendas_consultora_idx').on(t.consultoraId, t.criadoEm) }),
+);
+
+/** Treinamentos (vídeos, PDFs) e material de divulgação (fotos e posts) para as consultoras. */
+export const conteudos = pgTable('conteudos', {
+  id: id(),
+  /** treinamento | divulgacao */
+  secao: text('secao').notNull(),
+  /** boas_vindas | vendas | negociacao | produto | sistema | outro (treinamento); livre na divulgação */
+  categoria: text('categoria').notNull(),
+  titulo: text('titulo').notNull(),
+  descricao: text('descricao'),
+  arquivo: text('arquivo').notNull(),
+  mime: text('mime').notNull(),
+  tamanho: integer('tamanho').notNull().default(0),
+  /** Legenda pronta para copiar (divulgação). */
+  legenda: text('legenda'),
+  ordem: integer('ordem').notNull().default(0),
+  ativo: boolean('ativo').notNull().default(true),
+  usuarioId: uuid('usuario_id').references(() => usuarios.id, { onDelete: 'set null' }),
+  criadoEm: criadoEm(),
+});
+
+export const conteudoVistos = pgTable(
+  'conteudo_vistos',
+  {
+    id: id(),
+    conteudoId: uuid('conteudo_id').notNull().references(() => conteudos.id, { onDelete: 'cascade' }),
+    pessoaId: uuid('pessoa_id').notNull().references(() => pessoas.id, { onDelete: 'cascade' }),
+    criadoEm: criadoEm(),
+  },
+  (t) => ({ unico: uniqueIndex('conteudo_vistos_uq').on(t.conteudoId, t.pessoaId) }),
 );

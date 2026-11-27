@@ -62,22 +62,28 @@ function PedidosRepresentantes() {
     mutationFn: (d: { id: string; status: 'atendido' | 'recusado'; resposta: string | null }) => api(`/portal/admin/pedidos/${d.id}`, { corpo: { status: d.status, resposta: d.resposta } }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['pedidos-pecas'] }),
   });
+  const atenderVenda = useMutation({
+    mutationFn: (d: { id: string; resposta: string | null }) => api<{ como: string }>(`/consultoras/pedidos-venda/${d.id}/atender`, { corpo: { resposta: d.resposta } }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['pedidos-pecas'] }),
+  });
   return (
     <div className="coluna">
       <div className="busca">
         <select value={status} onChange={(e) => setStatus(e.target.value)}><option value="novo">Aguardando</option><option value="atendido">Atendidos</option><option value="recusado">Recusados</option><option value="todos">Todos</option></select>
         <span className="muted" style={{ alignSelf: 'center' }}>A representante pede pelo portal; a resposta aparece para ela no celular.</span>
       </div>
-      {responder.error && <Erro erro={responder.error} />}
+      {(responder.error || atenderVenda.error) && <Erro erro={responder.error ?? atenderVenda.error} />}
+      {atenderVenda.data && <div className="aviso ok">Atendido: {atenderVenda.data.como}.</div>}
       {q.isLoading ? <Carregando /> : !q.data?.length ? <div className="cartao vazio">Nenhum pedido.</div> : q.data.map((p) => (
         <div key={p.id} className="cartao coluna" style={{ gap: 8 }}>
-          <div className="flex entre"><b>Pedido nº {p.numero} · <Link to={`/rede/${p.pessoaId}`}>{p.representante}</Link></b><span className="muted">{dataHora(p.criadoEm)}</span></div>
+          <div className="flex entre"><b>Pedido nº {p.numero} · <Link to={`/rede/${p.pessoaId}`}>{p.representante}</Link>{p.tipo === 'venda' && <> <span className="etiqueta alerta">Venda do catálogo</span></>}</b><span className="muted">{dataHora(p.criadoEm)}</span></div>
+          {p.tipo === 'venda' && <div className="aviso" style={{ margin: 0 }}>{p.entrega === 'frete' ? <>Enviar para a cliente (frete por conta dela): <b>{p.enderecoEntrega}</b></> : 'A consultora retira na Aritana.'} Ao atender, as peças entram na maleta aberta dela já como vendidas (cobradas no acerto).</div>}
           <table className="tabela"><tbody>{p.itens.map((i: any) => <tr key={i.produtoId}><td>{i.referencia}</td><td>{i.descricao}</td><td className="num">{i.quantidade}</td></tr>)}</tbody></table>
           {p.observacao && <div className="muted">Obs.: {p.observacao}</div>}
           {p.resposta && <div className="muted">Resposta: {p.resposta}</div>}
           {p.status === 'novo' && pode('maletas', 'editar') && (
             <div className="flex" style={{ flexWrap: 'wrap' }}>
-              <Link className="botao" to={`/maletas/nova?representante=${p.pessoaId}`}>Montar maleta</Link>
+              {p.tipo === 'venda' ? <button className="botao" disabled={atenderVenda.isPending} onClick={() => { const r = window.prompt('Mensagem para a consultora (opcional):', p.entrega === 'frete' ? 'Enviamos para a sua cliente.' : 'Separado para você retirar.'); if (r !== null) atenderVenda.mutate({ id: p.id, resposta: r || null }); }}>Atender (lançar na maleta)</button> : <Link className="botao" to={`/maletas/nova?representante=${p.pessoaId}`}>Montar maleta</Link>}
               <button className="botao claro" onClick={() => { const r = window.prompt('Mensagem para a representante (opcional):', 'Separamos para a sua próxima maleta.'); if (r !== null) responder.mutate({ id: p.id, status: 'atendido', resposta: r || null }); }}>Marcar atendido</button>
               <button className="botao claro" onClick={() => { const r = window.prompt('Motivo (aparece para a representante):'); if (r) responder.mutate({ id: p.id, status: 'recusado', resposta: r }); }}>Recusar</button>
               {p.telefone && <a className="botao claro" href={`https://wa.me/55${p.telefone.replace(/\D/g, '')}`} target="_blank" rel="noreferrer">WhatsApp</a>}

@@ -5,6 +5,7 @@ import { data, reais } from '../formato';
 import { apiPortal, salvarSessaoPortal, sessaoPortal } from './api';
 import { desligarNotificacoes, ligarNotificacoes, noApp } from './app';
 import './portal.css';
+import { AgendarAcerto, Clientes, Conteudos, DetalheVenda, Extrato, Garantia, Mais, NovaVenda, OndeEstaMaleta, Perfil, Vendas } from './Consultora';
 
 const msgErro = (e: unknown) => (e instanceof Error ? e.message : 'Algo deu errado. Tente de novo.');
 const Aviso = ({ erro }: { erro: unknown }) => (erro ? <div className="p-aviso erro">{msgErro(erro)}</div> : null);
@@ -48,24 +49,25 @@ export function Portal() {
 
 function Entrar() {
   const navegar = useNavigate();
-  const [cpf, setCpf] = useState('');
+  const [login, setLogin] = useState('');
   const [codigo, setCodigo] = useState('');
   const [enviado, setEnviado] = useState<{ mensagem: string; codigoDev?: string } | null>(null);
-  const pedir = useMutation({ mutationFn: () => apiPortal('/entrar', { corpo: { cpf } }), onSuccess: (r) => setEnviado(r) });
+  const pedir = useMutation({ mutationFn: () => apiPortal('/entrar', { corpo: { login: login.trim() } }), onSuccess: (r) => setEnviado(r) });
+  const valido = login.includes('@') ? /.+@.+\..+/.test(login.trim()) : login.replace(/\D/g, '').length === 11;
   const confirmar = useMutation({
-    mutationFn: () => apiPortal<{ token: string; nome: string }>('/confirmar', { corpo: { cpf, codigo } }),
+    mutationFn: () => apiPortal<{ token: string; nome: string }>('/confirmar', { corpo: { login: login.trim(), codigo } }),
     onSuccess: (s) => { salvarSessaoPortal(s); window.location.replace('/portal'); },
   });
   if (sessaoPortal()) return <Navigate to="/portal" replace />;
   return (
     <div className="p-entrar">
       <img src="/logo-marrom.png" alt="Aritana Semijoias" />
-      <h1>Portal da Representante</h1>
-      <p className="p-suave">Sua maleta, suas parcelas e o pedido de peças, no celular.</p>
+      <h1>App da Consultora</h1>
+      <p className="p-suave">Sua maleta, vendas, clientes e comissões, no celular ou no computador.</p>
       {!enviado ? (
         <form className="p-cartao p-col" onSubmit={(e: FormEvent) => { e.preventDefault(); pedir.mutate(); }}>
-          <label>CPF<input inputMode="numeric" autoComplete="username" value={cpf} onChange={(e) => setCpf(e.target.value)} placeholder="000.000.000-00" /></label>
-          <button className="p-botao" disabled={cpf.replace(/\D/g, '').length !== 11 || pedir.isPending}>{pedir.isPending ? 'Enviando…' : 'Receber código por e-mail'}</button>
+          <label>Seu e-mail<input type="email" inputMode="email" autoComplete="username" value={login} onChange={(e) => setLogin(e.target.value)} placeholder="voce@exemplo.com" /></label>
+          <button className="p-botao" disabled={!valido || pedir.isPending}>{pedir.isPending ? 'Enviando…' : 'Receber código no WhatsApp'}</button>
           <Aviso erro={pedir.error} />
         </form>
       ) : (
@@ -75,10 +77,10 @@ function Entrar() {
           <label>Código de 6 números<input inputMode="numeric" autoComplete="one-time-code" maxLength={6} value={codigo} onChange={(e) => setCodigo(e.target.value.replace(/\D/g, ''))} autoFocus /></label>
           <button className="p-botao" disabled={codigo.length !== 6 || confirmar.isPending}>Entrar</button>
           <Aviso erro={confirmar.error} />
-          <button type="button" className="p-link" onClick={() => { setEnviado(null); setCodigo(''); }}>Usar outro CPF ou pedir de novo</button>
+          <button type="button" className="p-link" onClick={() => { setEnviado(null); setCodigo(''); }}>Usar outro e-mail ou pedir de novo</button>
         </form>
       )}
-      <p className="p-suave p-centro">Sem e-mail no cadastro? Peça à Aritana o link de acesso pelo WhatsApp.</p>
+      <p className="p-suave p-centro">Também dá para entrar com o CPF. Sem e-mail no cadastro? Peça à Aritana o link de acesso.</p>
     </div>
   );
 }
@@ -97,7 +99,7 @@ function EntrarPorLink() {
   return (
     <div className="p-entrar">
       <img src="/logo-marrom.png" alt="Aritana Semijoias" />
-      {m.error ? <><Aviso erro={m.error} /><Link className="p-botao" to="/portal/entrar">Entrar com o CPF</Link></> : <p>Entrando…</p>}
+      {m.error ? <><Aviso erro={m.error} /><Link className="p-botao" to="/portal/entrar">Entrar com o e-mail</Link></> : <p>Entrando…</p>}
     </div>
   );
 }
@@ -123,16 +125,25 @@ function Area() {
           <Route path="financeiro" element={<Financeiro />} />
           <Route path="pontos" element={<PontosRep />} />
           <Route path="leads" element={<Leads />} />
+          <Route path="clientes" element={<Clientes />} />
+          <Route path="vendas" element={<Vendas />} />
+          <Route path="vendas/nova" element={<NovaVenda />} />
+          <Route path="vendas/:id" element={<DetalheVenda />} />
+          <Route path="garantia" element={<Garantia />} />
+          <Route path="extrato" element={<Extrato />} />
+          <Route path="treinamentos" element={<Conteudos secao="treinamento" />} />
+          <Route path="divulgacao" element={<Conteudos secao="divulgacao" />} />
+          <Route path="perfil" element={<Perfil />} />
+          <Route path="mais" element={<Mais />} />
           <Route path="*" element={<Navigate to="/portal" replace />} />
         </Routes>
       </main>
       <nav className="p-menu" aria-label="Menu">
         <NavLink end to="/portal">Início</NavLink>
         <NavLink to="/portal/maletas">Maleta</NavLink>
-        <NavLink to="/portal/leads">Clientes{esperando > 0 && <span className="p-bolha">{esperando}</span>}</NavLink>
-        <NavLink to="/portal/pedir">Pedir peças</NavLink>
-        <NavLink to="/portal/financeiro">Parcelas</NavLink>
-        <NavLink to="/portal/pontos">Pontos</NavLink>
+        <NavLink to="/portal/vendas">Vendas</NavLink>
+        <NavLink to="/portal/clientes">Clientes{esperando > 0 && <span className="p-bolha">{esperando}</span>}</NavLink>
+        <NavLink to="/portal/mais">Mais</NavLink>
       </nav>
     </>
   );
@@ -272,6 +283,8 @@ function Maleta() {
   return (
     <>
       <Topo voltar="/portal/maletas" titulo={`Maleta nº ${m.numero}`} sub={aberta ? `Acerto até ${data(m.dataLimite)} · ${m.totais.pecas} peças · ${reais(m.totais.valor)}` : 'Baixada'} />
+      {aberta && <OndeEstaMaleta etapa={m.etapa} />}
+      {aberta && <AgendarAcerto maletaId={m.id} />}
       {aberta && !m.recebidaEm && <button className="p-botao claro p-bloco" disabled={recebi.isPending} onClick={() => recebi.mutate()}>Confirmar que recebi a maleta</button>}
       {m.codigoRastreio && <div className="p-cartao">Rastreio dos Correios: <b>{m.codigoRastreio}</b></div>}
       {aberta && (

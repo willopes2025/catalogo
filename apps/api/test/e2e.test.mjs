@@ -5020,3 +5020,84 @@ test('nota fiscal: revenda não sai em NFC-e, NF-e exige cadastro na venda, pend
   assert.equal(typeof p.produtosSemNcm, 'number');
   assert.equal((await chamar('POST', '/fiscal/ncm-em-lote', { ncm: '123' })).status, 400);
 });
+
+test('app da consultora: clientes, venda (maleta e catálogo), promissória, cobrança pela Aritana com crédito, garantia, treinamentos e perfil', async () => {
+  const gestor = token;
+  const hojeBR = () => new Date(Date.now() - 3 * 3600_000).toISOString().slice(0, 10);
+  const mais = (n) => new Date(Date.now() - 3 * 3600_000 + n * 86400_000).toISOString().slice(0, 10);
+  // Treinamento: a matriz sobe o vídeo (corpo cru) e cadastra.
+  const up = await (await fetch(API + '/conteudos/arquivo', { method: 'POST', headers: { authorization: `Bearer ${gestor}`, 'content-type': 'video/mp4' }, body: Buffer.alloc(2048, 7) })).json();
+  assert.match(up.arquivo, /^[0-9a-f]{32}\.mp4$/);
+  assert.equal(up.tamanho, 2048);
+  const ct = await ok('POST', '/conteudos', { secao: 'treinamento', categoria: 'boas_vindas', titulo: 'Bem-vinda à Aritana', arquivo: up.arquivo, mime: up.mime, tamanho: up.tamanho });
+  assert.equal((await fetch(API + `/publico/conteudos/${up.arquivo}`)).status, 200, 'vídeo abre no player sem login');
+  await ok('PUT', '/configuracoes/chave/portal_consultora', { whatsappMatriz: '27999990000', taxaCobrancaPb: 1000, termoCobranca: 'Termo de teste do serviço de cobrança da Aritana.' });
+
+  // Consultora nova (os dados de teste foram apagados antes) e uma peça no depósito para vender pelo catálogo.
+  const cpfC = (base) => { const d = String(base).padStart(9, '0').slice(0, 9).split('').map(Number); for (const n of [9, 10]) { let s2 = 0; for (let i = 0; i < n; i++) s2 += d[i] * (n + 1 - i); const r = (s2 * 10) % 11; d.push(r === 10 ? 0 : r); } return d.join(''); };
+  const rep = await ok('POST', '/pessoas', { tipo: 'representante', nome: 'Consultora App Vendas', documento: cpfC(161803398), telefone1: '27999993131', cidade: 'Serra', uf: 'ES', modeloTrabalho: 'consignado', limiteCredito: 500000 });
+  const deposito = (await ok('GET', '/estoque/locais')).find((l) => l.tipo === 'deposito');
+  const prod = await ok('POST', '/produtos', { descricao: 'Anel Vendas App E2E', referencia: 'APPV1', preco: 9990, custo: 3000, exibeCatalogo: true });
+  await ok('POST', '/estoque/entradas', { destinoId: deposito.id, motivo: 'Teste do app', itens: [{ codigoBarras: prod.codigoBarras, quantidade: 5 }] });
+  // Consultora entra pelo link e usa o app.
+  const link = await ok('POST', `/portal/gerar-link/${rep.id}`);
+  token = '';
+  token = (await ok('POST', `/portal/link/${link.token}`)).token;
+  const treinos = await ok('GET', '/portal/conteudos?secao=treinamento');
+  assert.ok(treinos.some((c) => c.id === ct.id && !c.visto));
+  await ok('POST', `/portal/conteudos/${ct.id}/visto`);
+  assert.ok((await ok('GET', '/portal/conteudos?secao=treinamento')).find((c) => c.id === ct.id).visto);
+  assert.equal((await chamar('PATCH', '/portal/perfil', { asaasWalletId: 'errado' })).status, 400);
+  const perfil = await ok('PATCH', '/portal/perfil', { chavePix: 'rep@pix.com' });
+  assert.equal(perfil.chavePix, 'rep@pix.com');
+  assert.equal(perfil.whatsappMatriz, '27999990000');
+
+  const cli = await ok('POST', '/portal/clientes', { nome: 'Cliente da Consultora', telefone: '27988887777', documento: '529.982.247-25', cep: '29100000', logradouro: 'Rua A', numero: '10', bairro: 'Centro', cidade: 'Vila Velha', uf: 'ES', nascimento: '1990-05-10' });
+  const pecas = await ok('GET', '/portal/pecas-venda?busca=Vendas App');
+  const item = pecas.maleta[0] ? { produtoId: pecas.maleta[0].produtoId, quantidade: 1, origem: 'maleta', preco: pecas.maleta[0].preco } : { produtoId: pecas.matriz[0].produtoId, quantidade: 1, origem: 'matriz', preco: pecas.matriz[0].preco };
+  assert.ok(item.produtoId, 'tem peça para vender');
+  const total = item.preco;
+  const p1 = Math.floor(total / 2);
+  assert.equal((await chamar('POST', '/portal/vendas', { clienteId: cli.id, itens: [{ produtoId: item.produtoId, quantidade: 1, origem: item.origem }], forma: 'prazo', parcelas: [{ valor: 1, vencimento: mais(30) }], entrega: 'retirar' })).status, 400, 'parcelas precisam somar o total');
+  const v = await ok('POST', '/portal/vendas', { clienteId: cli.id, itens: [{ produtoId: item.produtoId, quantidade: 1, origem: item.origem }], forma: 'prazo', parcelas: [{ valor: p1, vencimento: mais(30) }, { valor: total - p1, vencimento: mais(60) }], entrega: 'retirar' });
+  assert.equal(v.status, 'aberta');
+  const cs = await ok('GET', '/portal/clientes');
+  assert.equal(cs.find((c) => c.id === cli.id).aberto, total, 'a cliente deve a venda');
+  const prom = await ok('POST', `/portal/vendas/${v.id}/promissoria`);
+  const pubDoc = await (await fetch(API + `/publico/documentos/${prom.token}`)).json();
+  assert.match(pubDoc.conteudo, /NOTA PROMISSÓRIA/);
+  assert.match(pubDoc.conteudo, /Cliente da Consultora/);
+  // Cobrança pela Aritana: precisa do aceite; depois vira título da Aritana e a consultora não marca mais pago.
+  const semAceite = await chamar('POST', `/portal/vendas/${v.id}/cobranca`);
+  assert.equal(semAceite.status, 400);
+  await ok('POST', '/portal/cobranca/aceite');
+  const cob = await ok('POST', `/portal/vendas/${v.id}/cobranca`);
+  assert.equal(cob.parcelas, 2);
+  assert.equal(cob.split, false, 'sem Wallet ID: vai como crédito');
+  assert.equal((await chamar('POST', `/portal/vendas/${v.id}/parcelas/1`, { pago: true })).status, 403, 'depois de passar a cobrança, ela não recebe mais');
+  const venda = (await ok('GET', '/portal/vendas')).find((x) => x.id === v.id);
+  assert.equal(venda.status, 'em_cobranca');
+  const garantia = await ok('POST', '/portal/garantias', { referencia: 'peça-sem-cadastro-123', defeito: 'A pedra soltou com uma semana de uso', clienteId: cli.id, fotos: [Buffer.from('ffd8ffe000104a46494600010100000100010000ffd9', 'hex').toString('base64')] });
+  assert.ok(garantia.numero);
+  token = gestor;
+
+  // A cliente paga a 1ª parcela: a consultora ganha o crédito (menos 10% da taxa).
+  const t1 = venda.parcelas.find((p) => p.numero === 1);
+  await ok('PUT', '/integracoes/asaas', { valores: { ASAAS_WEBHOOK_TOKEN: 'token-consultora' } });
+  const wh = await fetch(API + '/webhooks/asaas', { method: 'POST', headers: { 'content-type': 'application/json', 'asaas-access-token': 'token-consultora' }, body: JSON.stringify({ id: 'evt_cons_1', event: 'PAYMENT_RECEIVED', payment: { id: 'pay_x_cons', value: p1 / 100, paymentDate: hojeBR(), externalReference: t1.tituloId } }) });
+  assert.equal(wh.status, 200);
+  await ok('PUT', '/integracoes/asaas', { valores: { ASAAS_WEBHOOK_TOKEN: '' } });
+  const emCob = (await ok('GET', '/consultoras/vendas?status=em_cobranca')).find((x) => x.id === v.id);
+  assert.ok(emCob.parcelas.find((p) => p.numero === 1).pagoEm, '1ª parcela paga');
+  // A consultora recebeu a 2ª por fora: boleto cancelado e desconto dela.
+  const t2 = emCob.parcelas.find((p) => p.numero === 2);
+  await ok('POST', `/consultoras/cobranca/${t2.tituloId}/recebido-por-fora`);
+  token = (await (async () => { const l = await ok('POST', `/portal/gerar-link/${rep.id}`); token = ''; return (await ok('POST', `/portal/link/${l.token}`)).token; })());
+  const ext = await ok('GET', '/portal/extrato');
+  assert.ok(ext.creditos.some((c) => c.valor === Math.round(p1 * 0.9)), 'crédito da 1ª parcela (90%)');
+  assert.ok(ext.creditos.some((c) => c.valor === -(total - p1)), 'desconto da 2ª recebida por fora');
+  token = gestor;
+  const os = (await ok('GET', '/garantia/ordens?status=abertas')).find((o) => o.numero === garantia.numero);
+  assert.equal(os.origem, 'portal');
+  assert.equal(os.fotos.length, 1);
+});

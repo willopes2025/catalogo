@@ -6,7 +6,8 @@ import { ConfiguracoesService } from '../configuracoes/configuracoes.service';
 import { CanaisService } from '../crm/canais.service';
 import { CrmService } from '../crm/crm.service';
 import { montarMensagemAgenda } from '../agenda/agenda.service';
-import { avisosEnviados, crmCanais, pessoas } from '../db/schema';
+import { avisosEnviados, crmCanais, pessoas, portalAcessos } from '../db/schema';
+import { createHash, randomBytes } from 'node:crypto';
 
 /** Link fixo do APK do app da consultora (publicado pelo workflow app-representante.yml). */
 export const LINK_APK_CONSULTORA = 'https://github.com/willopes2025/catalogo/releases/download/app-representante/aritana.apk';
@@ -36,7 +37,12 @@ export class BoasVindasAppService {
       const cs = await this.db.select({ id: crmCanais.id, tipo: crmCanais.tipo }).from(crmCanais).where(and(eq(crmCanais.ativo, true), isNull(crmCanais.excluidoEm))).orderBy(asc(crmCanais.criadoEm));
       const canalId = cfg.canalId && cs.some((c) => c.id === cfg.canalId) ? cfg.canalId : (cs.find((c) => c.tipo !== 'oficial' && c.tipo !== 'instagram') ?? cs.find((c) => c.tipo !== 'instagram'))?.id;
       if (!canalId) throw new Error('nenhum número de WhatsApp ativo no CRM');
-      const texto = montarMensagemAgenda(cfg.texto, { primeiro_nome: p.nome.split(' ')[0], nome: p.nome, link_android: LINK_APK_CONSULTORA, link_portal: `${urlPublica()}/portal` });
+      // Link de acesso direto (uso único, 7 dias): ela entra sem digitar nada.
+      const tokenAcesso = randomBytes(30).toString('base64url');
+      await this.db.insert(portalAcessos).values({ pessoaId, tipo: 'link', hash: createHash('sha256').update(tokenAcesso).digest('hex'), expiraEm: new Date(Date.now() + 7 * 86_400_000) });
+      const linkAcesso = `${urlPublica()}/portal/entrar/${tokenAcesso}`;
+      const base = cfg.texto.includes('{{link_acesso}}') ? cfg.texto : `${cfg.texto}\n\n🔑 *Seu acesso:* {{link_acesso}}\n(link direto, vale 7 dias). Depois, para entrar de novo, digite o seu e-mail e o código chega aqui no WhatsApp.`;
+      const texto = montarMensagemAgenda(base, { primeiro_nome: p.nome.split(' ')[0], nome: p.nome, link_android: LINK_APK_CONSULTORA, link_portal: `${urlPublica()}/portal`, link_acesso: linkAcesso });
       const contato = await this.crm.garantirContato({ telefone: p.telefone, nome: p.nome, pessoaId });
       const cv = await this.canais.garantirConversa(contato.id, canalId, 'resolvida');
       await this.canais.enviar({ conversaId: cv.id, tipo: 'texto', texto });
