@@ -12,6 +12,7 @@ import { hoje } from '../maletas/maletas.service';
 import { CobrancaConfigService, type ConfigCobranca } from './cobranca-config.service';
 import { PlanoContasService } from '../financeiro/plano.service';
 import { FilaEnvioService, type NovoItem } from '../crm/fila-envio.service';
+import { buscaNome } from '../comum/busca-nome';
 
 /** O que este usuário pode ver na cobrança. */
 export interface Escopo {
@@ -114,9 +115,8 @@ export class CobrancaService implements OnModuleInit, OnModuleDestroy {
     else if (f.cobradorId) filtros.push(eq(cobrancaCarteira.cobradorId, f.cobradorId));
     if (f.tipo === 'representante' || f.tipo === 'cliente') filtros.push(eq(pessoas.tipo, f.tipo));
     if (f.busca?.trim()) {
-      const b = `%${f.busca.trim()}%`;
       const dig = f.busca.replace(/\D/g, '');
-      filtros.push(or(sql`${pessoas.nome} ilike ${b}`, ...(dig.length >= 4 ? [sql`${pessoas.documento} like ${'%' + dig + '%'}`, sql`regexp_replace(coalesce(${pessoas.telefone1}, ''), '\\D', '', 'g') like ${'%' + dig + '%'}`] : []))!);
+      filtros.push(or(buscaNome([pessoas.nome, pessoas.nomeFantasia], f.busca), ...(dig.length >= 4 ? [sql`${pessoas.documento} like ${'%' + dig + '%'}`, sql`regexp_replace(coalesce(${pessoas.telefone1}, ''), '\\D', '', 'g') like ${'%' + dig + '%'}`] : []))!);
     }
     const maiorAtraso = sql<number>`max(${h}::date - ${titulos.vencimento})::int`;
     const faixas: Record<string, [number, number]> = { '1_30': [1, 30], '31_60': [31, 60], '61_90': [61, 90], '91_180': [91, 180], mais_180: [181, 1_000_000] };

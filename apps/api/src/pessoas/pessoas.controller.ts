@@ -9,6 +9,7 @@ import { cnpjValido, cpfValido, soDigitos } from '../comum/documentos';
 import { AuditoriaService } from '../comum/auditoria.service';
 import { creditos, documentos, maletas, niveis, pessoas, referencias, titulos } from '../db/schema';
 import { gerarSlug } from '@aritana/regras';
+import { buscaNome, ordemBuscaNome } from '../comum/busca-nome';
 
 const TIPOS = ['representante', 'cliente', 'fornecedor', 'transportadora', 'assistencia'] as const;
 type TipoPessoa = (typeof TIPOS)[number];
@@ -94,9 +95,8 @@ export class PessoasController {
     if (status) filtros.push(eq(pessoas.status, status as 'ativo'));
     if (liderId) filtros.push(eq(pessoas.liderId, liderId));
     if (busca?.trim()) {
-      const b = `%${busca.trim()}%`;
       const dig = soDigitos(busca);
-      const ors = [ilike(pessoas.nome, b), ilike(pessoas.cidade, b), ilike(pessoas.nomeFantasia, b)];
+      const ors: SQL[] = [buscaNome([pessoas.nome, pessoas.nomeFantasia, pessoas.cidade], busca)!];
       if (dig.length >= 3) ors.push(ilike(pessoas.documento, `%${dig}%`), ilike(pessoas.telefone1, `%${dig}%`));
       filtros.push(or(...ors)!);
     }
@@ -125,7 +125,7 @@ export class PessoasController {
       .leftJoin(niveis, eq(niveis.id, pessoas.nivelId))
       .leftJoin(lider, eq(lider.id, pessoas.liderId))
       .where(where)
-      .orderBy(asc(pessoas.nome))
+      .orderBy(...(busca?.trim() ? [ordemBuscaNome([pessoas.nome, pessoas.nomeFantasia, pessoas.cidade], busca)] : []), asc(pessoas.nome))
       .limit(porPagina)
       .offset((pagina - 1) * porPagina);
 

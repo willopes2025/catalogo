@@ -11,6 +11,7 @@ import { hoje } from '../maletas/maletas.service';
 import { AsaasService } from '../integracoes/asaas.service';
 import { PlanoContasService } from './plano.service';
 import { LancamentosService, tituloSchema } from './lancamentos.service';
+import { buscaNome } from '../comum/busca-nome';
 
 
 const baixaSchema = z.object({
@@ -52,7 +53,7 @@ export class FinanceiroController {
     if (semPessoa === '1') f.push(isNull(titulos.pessoaId));
     if (semPlano === '1') f.push(isNull(titulos.planoContaId));
     if (planoContaId && /^[0-9a-f-]{36}$/i.test(planoContaId)) f.push(eq(titulos.planoContaId, planoContaId));
-    if (busca?.trim()) f.push(or(ilike(titulos.descricao, `%${busca.trim()}%`), ilike(pessoas.nome, `%${busca.trim()}%`))!);
+    if (busca?.trim()) f.push(or(ilike(titulos.descricao, `%${busca.trim()}%`), buscaNome([pessoas.nome], busca))!);
     const deAcordo = sql`coalesce(${titulos.origemTipo}, '') = 'acordo'`;
     if (aba === 'abertos') f.push(eq(titulos.status, 'aberto'));
     if (aba === 'vencidos') f.push(eq(titulos.status, 'aberto'), lt(titulos.vencimento, hoje()));

@@ -27,6 +27,7 @@ import { AgendaService, TIPOS_COMPROMISSO } from '../agenda/agenda.service';
 import { CrmService } from '../crm/crm.service';
 import { FilaEnvioService, previsaoTermino } from '../crm/fila-envio.service';
 import { LancamentosService } from '../financeiro/lancamentos.service';
+import { buscaNome, ordemBuscaNome } from '../comum/busca-nome';
 
 /**
  * leitura: consulta, executa na hora.
@@ -328,15 +329,14 @@ export class FerramentasAssistente {
       risco: 'leitura',
       permitido: algum(pode('rede', 'ver'), pode('cadastros', 'ver'), pode('cobranca', 'ver')),
       executar: async (e: z.infer<typeof schema>) => {
-        const b = `%${e.busca}%`;
         const dig = e.busca.replace(/\D/g, '');
-        const filtros = [or(sql`${pessoas.nome} ilike ${b}`, sql`${pessoas.nomeFantasia} ilike ${b}`, ...(dig.length >= 4 ? [sql`${pessoas.documento} like ${'%' + dig + '%'}`, sql`regexp_replace(coalesce(${pessoas.telefone1}, ''), '\\D', '', 'g') like ${'%' + dig + '%'}`] : []))!];
+        const filtros = [or(buscaNome([pessoas.nome, pessoas.nomeFantasia], e.busca), ...(dig.length >= 4 ? [sql`${pessoas.documento} like ${'%' + dig + '%'}`, sql`regexp_replace(coalesce(${pessoas.telefone1}, ''), '\\D', '', 'g') like ${'%' + dig + '%'}`] : []))!];
         if (e.tipo) filtros.push(eq(pessoas.tipo, e.tipo));
         const r = await this.db
           .select({ pessoaId: pessoas.id, nome: pessoas.nome, tipo: pessoas.tipo, documento: pessoas.documento, telefone: pessoas.telefone1, email: pessoas.email, cidade: pessoas.cidade, uf: pessoas.uf, status: pessoas.status, bloqueado: pessoas.bloqueado })
           .from(pessoas)
           .where(and(...filtros))
-          .orderBy(asc(pessoas.nome))
+          .orderBy(ordemBuscaNome([pessoas.nome, pessoas.nomeFantasia], e.busca), asc(pessoas.nome))
           .limit(e.limite ?? 10);
         return { quantidade: r.length, pessoas: r };
       },
@@ -586,7 +586,7 @@ export class FerramentasAssistente {
         if (e.busca) {
           const b = `%${e.busca}%`;
           const dig = e.busca.replace(/\D/g, '');
-          filtros.push(or(sql`${crmContatos.nome} ilike ${b}`, sql`${crmConversas.ultimaMensagem} ilike ${b}`, ...(dig.length >= 4 ? [sql`${crmContatos.telefone} like ${'%' + dig + '%'}`] : []))!);
+          filtros.push(or(buscaNome([crmContatos.nome], e.busca), sql`${crmConversas.ultimaMensagem} ilike ${b}`, ...(dig.length >= 4 ? [sql`${crmContatos.telefone} like ${'%' + dig + '%'}`] : []))!);
         }
         const r = await this.db
           .select({ conversaId: crmConversas.id, contato: crmContatos.nome, telefone: crmContatos.telefone, canalId: crmConversas.canalId, status: crmConversas.status, ultimaMensagem: crmConversas.ultimaMensagem, ultimaMensagemEm: crmConversas.ultimaMensagemEm, naoLidas: crmConversas.naoLidas, atendente: usuarios.nome, iaAtiva: crmConversas.iaAtiva, especialista: iaAgentes.nome })

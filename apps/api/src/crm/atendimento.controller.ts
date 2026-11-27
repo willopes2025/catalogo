@@ -45,6 +45,7 @@ import { AgenteService } from './agente.service';
 import { ErroIa, IaService } from '../ia/ia.service';
 import { VOZES_ELEVENLABS, VOZES_OPENAI } from '../ia/vozes';
 import { AutomacaoService } from './automacao.service';
+import { buscaNome } from '../comum/busca-nome';
 
 /** Lista como array do Postgres (o sql`` do Drizzle expande arrays em vários parâmetros). */
 const arr = (xs: string[], tipo = 'uuid') => sql`array[${sql.join(xs.map((x) => sql`${x}`), sql`, `)}]::${sql.raw(tipo)}[]`;
@@ -197,7 +198,7 @@ export class AtendimentoController {
     if (busca?.trim()) {
       const b = `%${busca.trim()}%`;
       const dig = busca.replace(/\D/g, '');
-      f.push(sql`(${crmLeads.titulo} ilike ${b} or ${crmContatos.nome} ilike ${b} or ${crmLeads.camposExtras}::text ilike ${b} or ${crmContatos.camposExtras}::text ilike ${b}${dig.length >= 4 ? sql` or ${crmContatos.telefone} like ${'%' + dig + '%'}` : sql``})`);
+      f.push(sql`(${crmLeads.titulo} ilike ${b} or ${buscaNome([crmContatos.nome, crmLeads.titulo], busca)} or ${crmLeads.camposExtras}::text ilike ${b} or ${crmContatos.camposExtras}::text ilike ${b}${dig.length >= 4 ? sql` or ${crmContatos.telefone} like ${'%' + dig + '%'}` : sql``})`);
     }
     return this.db
       .select({
@@ -492,7 +493,7 @@ export class AtendimentoController {
     if (ate && /^\d{4}-\d{2}-\d{2}$/.test(ate)) f.push(sql`${crmConversas.ultimaMensagemEm} <= ${new Date(`${ate}T23:59:59.999-03:00`)}`);
     if (busca?.trim()) {
       const dig = busca.replace(/\D/g, '');
-      f.push(sql`(${crmContatos.nome} ilike ${'%' + busca.trim() + '%'}${dig.length >= 4 ? sql` or ${crmContatos.telefone} like ${'%' + dig + '%'}` : sql``})`);
+      f.push(sql`(${buscaNome([crmContatos.nome], busca)}${dig.length >= 4 ? sql` or ${crmContatos.telefone} like ${'%' + dig + '%'}` : sql``})`);
     }
     return this.db
       .select({

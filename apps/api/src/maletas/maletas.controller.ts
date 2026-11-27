@@ -1,5 +1,5 @@
 import { Body, Controller, Get, Inject, NotFoundException, Param, ParseUUIDPipe, Post, Query } from '@nestjs/common';
-import { and, asc, desc, eq, gte, lte, lt, sql, type SQL, ilike, or } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, lte, lt, sql, type SQL, or } from 'drizzle-orm';
 import { z } from 'zod';
 import { DB, type Db } from '../comum/db.module';
 import { Permissao, Publico, Usuario, temPermissao, type UsuarioLogado } from '../comum/auth';
@@ -13,6 +13,7 @@ import { Limitador } from '../comum/limitador';
 
 const acessosLink = new Limitador(120, 10 * 60_000, 'Muitos acessos a este link.');
 import { somarDias } from '@aritana/regras';
+import { buscaNome } from '../comum/busca-nome';
 
 const itensSchema = z.array(z.object({ codigoBarras: z.string().trim().min(1), quantidade: z.number().int().positive().default(1) })).min(1, 'Inclua ao menos uma peça');
 
@@ -60,7 +61,7 @@ export class MaletasController {
     if (representanteId) f.push(eq(maletas.representanteId, representanteId));
     if (busca?.trim()) {
       const n = Number(busca);
-      f.push(or(ilike(pessoas.nome, `%${busca.trim()}%`), ...(Number.isInteger(n) && n > 0 ? [eq(maletas.numero, n)] : []))!);
+      f.push(or(buscaNome([pessoas.nome], busca), ...(Number.isInteger(n) && n > 0 ? [eq(maletas.numero, n)] : []))!);
     }
     return this.db
       .select({

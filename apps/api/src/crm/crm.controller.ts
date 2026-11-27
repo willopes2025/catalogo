@@ -15,6 +15,7 @@ import { EmailService } from '../integracoes/email.service';
 import { SegredosService } from '../segredos/segredos.service';
 import { candidaturaNotas, candidaturas, crmLeads, pessoas, usuarios } from '../db/schema';
 import { CrmService } from './crm.service';
+import { buscaNome } from '../comum/busca-nome';
 
 export const ETAPAS = ['nova', 'contato', 'entrevista', 'documentos', 'aprovada', 'recusada'] as const;
 const MODELOS = ['consignado', 'revenda', 'afiliado', 'nao_sei'] as const;
@@ -121,7 +122,7 @@ export class CrmController {
     if (busca?.trim()) {
       const b = `%${busca.trim()}%`;
       const dig = soDigitos(busca);
-      f.push(sql`(${candidaturas.nome} ilike ${b} or ${candidaturas.cidade} ilike ${b}${dig.length >= 3 ? sql` or ${candidaturas.telefone} like ${'%' + dig + '%'}` : sql``})`);
+      f.push(sql`(${buscaNome([candidaturas.nome, candidaturas.cidade], busca)} or ${candidaturas.cidade} ilike ${b}${dig.length >= 3 ? sql` or ${candidaturas.telefone} like ${'%' + dig + '%'}` : sql``})`);
     }
     return this.db
       .select({

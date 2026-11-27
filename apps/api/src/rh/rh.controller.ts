@@ -17,6 +17,7 @@ import { CONFIGS } from '../configuracoes/outras-configuracoes';
 import { grupos, rhDocumentos, rhEnvios, rhEscalas, rhFechamentos, rhFeriados, rhFuncionarios, rhLocais, rhOcorrencias, rhRegistros, rhTratamentos, usuarios } from '../db/schema';
 import { RhService, TIPOS_DOCUMENTO, TIPOS_OCORRENCIA, diasDaCompetencia } from './rh.service';
 import { ContabilidadeService, ITENS_CONTABILIDADE, type ItemContabilidade } from './contabilidade.service';
+import { buscaNome } from '../comum/busca-nome';
 
 const data = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Data no formato AAAA-MM-DD');
 const comp = z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/, 'Mês no formato AAAA-MM');
@@ -91,7 +92,7 @@ export class RhController {
   listar(@Query('status') status?: string, @Query('busca') busca?: string) {
     const f: SQL[] = [];
     if (status && status !== 'todos') f.push(eq(rhFuncionarios.status, status));
-    if (busca?.trim()) f.push(or(ilike(rhFuncionarios.nome, `%${busca.trim()}%`), ilike(rhFuncionarios.cargo, `%${busca.trim()}%`), sql`${rhFuncionarios.cpf} like ${'%' + so(busca) + '%'}`)!);
+    if (busca?.trim()) f.push(or(buscaNome([rhFuncionarios.nome], busca), ilike(rhFuncionarios.cargo, `%${busca.trim()}%`), ...(so(busca).length >= 3 ? [sql`${rhFuncionarios.cpf} like ${'%' + so(busca) + '%'}`] : []))!);
     return this.db
       .select({ id: rhFuncionarios.id, nome: rhFuncionarios.nome, cpf: rhFuncionarios.cpf, cargo: rhFuncionarios.cargo, departamento: rhFuncionarios.departamento, status: rhFuncionarios.status, dataAdmissao: rhFuncionarios.dataAdmissao, dataDemissao: rhFuncionarios.dataDemissao, telefone: rhFuncionarios.telefone, batePonto: rhFuncionarios.batePonto, escala: rhEscalas.nome, usuarioId: rhFuncionarios.usuarioId, grupo: grupos.nome })
       .from(rhFuncionarios)

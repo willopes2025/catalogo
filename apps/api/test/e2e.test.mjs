@@ -598,6 +598,14 @@ test('importação do Jueri: simula sem gravar, importa, e reimportar só atuali
   const rede = lista.itens.find((x) => x.nome === 'Rede Importada');
   assert.equal(rede.lider, 'Líder Importada');
   assert.equal(rede.nivel, 'Nível Novo');
+  // Busca que perdoa: sem acento, palavras fora de ordem, grafia parecida e um erro de digitação.
+  const acha = async (b) => (await ok('GET', `/pessoas?tipo=representante&busca=${encodeURIComponent(b)}`)).itens.map((x) => x.nome);
+  assert.ok((await acha('lider importada')).includes('Líder Importada'), 'sem acento');
+  assert.ok((await acha('importada lider')).includes('Líder Importada'), 'palavras fora de ordem');
+  assert.ok((await acha('Lidêr Inportada')).includes('Líder Importada'), 'um erro de digitação');
+  assert.ok((await acha('rede importada serra')).includes('Rede Importada'), 'nome e cidade juntos');
+  assert.ok(!(await acha('Lider Exportada Fulana')).includes('Líder Importada'), 'nome diferente não aparece');
+  assert.equal((await acha('Rede Importada'))[0], 'Rede Importada', 'o nome exato vem primeiro');
 });
 
 test('inventário: ajuste pela contagem registra só as diferenças', async () => {
