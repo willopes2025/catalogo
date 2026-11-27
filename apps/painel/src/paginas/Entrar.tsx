@@ -2,6 +2,7 @@ import { useState, type FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api, salvarSessao, type Sessao } from '../api';
 import { Erro } from '../componentes/ui';
+import { BaixarApp } from '../componentes/BaixarApp';
 
 export function Entrar() {
   const [email, setEmail] = useState('');
@@ -33,6 +34,7 @@ export function Entrar() {
         <p style={{ color: '#d9cfc1', fontSize: 13 }}>Plataforma Aritana · Wide Inteligência Comercial</p>
       </div>
       <form onSubmit={enviar}>
+        <BaixarApp compacto />
         <h2>Entrar</h2>
         <div className="campo">
           <label htmlFor="email">E-mail ou CPF</label>

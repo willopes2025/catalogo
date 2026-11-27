@@ -1,6 +1,7 @@
 import { mudarVisao, usarVisao } from '../visao';
 import { useState } from 'react';
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
+import { BaixarApp } from './BaixarApp';
 import { MODULOS } from '@aritana/regras';
 import { useQuery } from '@tanstack/react-query';
 import { api, atualizarUsuario, lerSessao, pode, salvarSessao } from '../api';
@@ -153,6 +154,7 @@ export function Layout() {
         </div>
       </aside>
       <main className="conteudo">
+        <BaixarApp />
         <Outlet />
       </main>
       <Softphone />
