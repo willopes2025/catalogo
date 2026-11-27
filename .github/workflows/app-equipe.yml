@@ -15,7 +15,8 @@ on:
       - '.github/workflows/app-equipe.yml'
 
 permissions:
-  contents: read
+  # write: publica o APK numa página de download do GitHub (Releases), aberta sem login.
+  contents: write
 
 jobs:
   android:
@@ -52,6 +53,12 @@ jobs:
         working-directory: app-representante/android
         run: ./gradlew --no-daemon assembleDebug
       - run: cp android/app/build/outputs/apk/debug/app-debug.apk "android/app/build/outputs/apk/debug/aritana-gestao.apk"
+      - name: Publicar o APK para download (link fixo, sem login)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view app-equipe >/dev/null 2>&1 || gh release create app-equipe --title "Aritana Gestão (Android)" --notes "APK do app da equipe. Baixe o arquivo aritana-gestao.apk no celular Android e instale (permitir instalar apps desconhecidos)." --latest=false
+          gh release upload app-equipe android/app/build/outputs/apk/debug/aritana-gestao.apk --clobber
       - uses: actions/upload-artifact@v4
         with:
           name: aritana-gestao-apk
