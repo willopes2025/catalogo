@@ -30,6 +30,7 @@ import { VendasService } from './vendas/vendas.service';
 import { AsaasService } from './integracoes/asaas.service';
 import { LancamentosService } from './financeiro/lancamentos.service';
 import { BoasVindasAppService } from './documentos/boas-vindas-app.service';
+import { AvisarMaletaService } from './maletas/avisar-maleta.service';
 import { WebhooksController } from './integracoes/webhooks.controller';
 import { FiscalController } from './fiscal/fiscal.controller';
 import { FiscalService } from './fiscal/fiscal.service';
@@ -201,6 +202,7 @@ if (!segredo || (process.env.NODE_ENV === 'production' && segredo.length < 32)) 
     AsaasService,
     LancamentosService,
     BoasVindasAppService,
+    AvisarMaletaService,
     FiscalService,
     ImportacaoService,
     GarantiaService,

@@ -16,6 +16,11 @@ export function DetalheMaleta() {
   const [modo, setModo] = useState<'ver' | 'incluir' | 'retirar' | 'consignataria' | 'data' | 'estornar' | 'imprimir'>('ver');
   const [itens, setItens] = useState<ItemLido[]>([]);
   const [copiado, setCopiado] = useState(false);
+  const [qsAviso, setQsAviso] = useSearchParams();
+  // Pergunta "Enviar e-mail?" uma vez no fim: ao montar (vem da nova maleta), ao terminar as alterações e no acerto.
+  const [aviso, setAviso] = useState<'montagem' | 'alteracao' | 'acerto' | null>(() => (['montagem', 'acerto'].includes(qsAviso.get('avisar') ?? '') ? (qsAviso.get('avisar') as 'montagem' | 'acerto') : null));
+  const [alterou, setAlterou] = useState(false);
+  const fecharAviso = () => { setAviso(null); if (qsAviso.get('avisar')) { const n = new URLSearchParams(qsAviso); n.delete('avisar'); setQsAviso(n, { replace: true }); } };
   const q = useQuery({ queryKey: ['maleta', id], queryFn: () => api<any>(`/maletas/${id}`) });
   const notas = useQuery({ queryKey: ['notas-maleta', id, q.data?.acertos?.length], queryFn: async () => {
     const daMaleta = await api<any[]>(`/fiscal/notas?origemId=${id}`);
@@ -28,7 +33,7 @@ export function DetalheMaleta() {
   });
   const troca = useMutation({
     mutationFn: () => api(`/maletas/${id}/${modo}`, { corpo: { itens: itens.map((i) => ({ codigoBarras: i.codigoBarras, quantidade: i.quantidade })) } }),
-    onSuccess: () => { setItens([]); setModo('ver'); qc.invalidateQueries({ queryKey: ['maleta', id] }); },
+    onSuccess: () => { setItens([]); setModo('ver'); setAlterou(true); qc.invalidateQueries({ queryKey: ['maleta', id] }); },
   });
   const cancelar = useMutation({
     mutationFn: (motivo: string) => api(`/maletas/${id}/cancelar`, { corpo: { motivo } }),
@@ -102,6 +107,14 @@ export function DetalheMaleta() {
       <AutorizacoesDaMaleta maletaId={id!} />
       {modo === 'consignataria' && <TrocarConsignataria maletaId={id!} atual={m.representanteId} valor={m.totais.valor} fechar={() => setModo('ver')} />}
       {m.parcelasAcerto?.length > 0 && <ReceberAcerto maletaId={id!} parcelas={m.parcelasAcerto} />}
+      {aviso && <PerguntarEnvio maletaId={id!} momento={aviso} fechar={fecharAviso} />}
+      {!aviso && alterou && modo === 'ver' && (
+        <div className="aviso" style={{ marginBottom: 14, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+          <span style={{ flex: 1 }}>Terminou de alterar a maleta? Finalize para avisar a consultora uma vez só, com tudo atualizado.</span>
+          <button className="botao pequeno" onClick={() => { setAlterou(false); setAviso('alteracao'); }}>Finalizar alterações</button>
+          <button className="botao claro pequeno" onClick={() => setAlterou(false)}>Não avisar</button>
+        </div>
+      )}
       {modo === 'imprimir' && <EscolherImpressao m={m} fechar={() => setModo('ver')} />}
       {modo === 'estornar' && <EstornarAcerto maletaId={id!} acerto={m.acertos.at(-1)} fechar={() => setModo('ver')} />}
       {modo === 'data' && <MudarDataAcerto maletaId={id!} atual={m.dataLimite} retirada={m.dataRetirada} fechar={() => setModo('ver')} />}
@@ -455,6 +468,47 @@ function EscolherImpressao({ m, fechar }: { m: any; fechar: () => void }) {
         <a className="botao claro" href={`/imprimir/maleta/${m.id}?via=separacao`} target="_blank" rel="noreferrer">Lista de separação</a>
         <button className="botao claro" onClick={fechar}>Fechar</button>
       </div>
+    </div>
+  );
+}
+
+/** "Enviar e-mail?" do fim (montagem, alterações, acerto): mostra a mensagem e manda por e-mail e/ou WhatsApp. */
+function PerguntarEnvio({ maletaId, momento, fechar }: { maletaId: string; momento: 'montagem' | 'alteracao' | 'acerto'; fechar: () => void }) {
+  const previa = useQuery({ queryKey: ['maleta-aviso', maletaId, momento], queryFn: () => api<{ assunto: string; texto: string; email: string | null; telefone: string | null }>(`/maletas/${maletaId}/aviso?momento=${momento}`) });
+  const [canais, setCanais] = useState<{ email: boolean; whatsapp: boolean } | null>(null);
+  const [ver, setVer] = useState(false);
+  const enviar = useMutation({ mutationFn: (c: { email: boolean; whatsapp: boolean }) => api<{ email?: string; whatsapp?: string }>(`/maletas/${maletaId}/avisar`, { corpo: { momento, ...c } }) });
+  const p = previa.data;
+  const c = canais ?? { email: !!p?.email, whatsapp: !!p?.telefone };
+  const titulo = momento === 'montagem' ? 'Maleta pronta' : momento === 'alteracao' ? 'Alterações finalizadas' : 'Acerto fechado';
+  if (enviar.data)
+    return (
+      <div className={`aviso ${Object.values(enviar.data).every((v) => v === 'enviado') ? 'ok' : 'alerta'}`} style={{ marginBottom: 14 }}>
+        {enviar.data.email && <div>E-mail: {enviar.data.email}</div>}
+        {enviar.data.whatsapp && <div>WhatsApp: {enviar.data.whatsapp}</div>}
+        <button className="botao claro pequeno" style={{ marginTop: 6 }} onClick={fechar}>Fechar</button>
+      </div>
+    );
+  return (
+    <div className="cartao coluna" style={{ marginBottom: 14, outline: '2px solid var(--dourado)' }}>
+      <h3 style={{ margin: 0 }}>{titulo}: enviar para a consultora?</h3>
+      {previa.isLoading && <Carregando />}
+      {previa.error && <Erro erro={previa.error} />}
+      {p && (
+        <>
+          <div className="flex" style={{ gap: 16, flexWrap: 'wrap' }}>
+            <label className="check"><input type="checkbox" checked={c.email} disabled={!p.email} onChange={(e) => setCanais({ ...c, email: e.target.checked })} /> E-mail{p.email ? ` (${p.email})` : ' (sem e-mail no cadastro)'}</label>
+            <label className="check"><input type="checkbox" checked={c.whatsapp} disabled={!p.telefone} onChange={(e) => setCanais({ ...c, whatsapp: e.target.checked })} /> WhatsApp{p.telefone ? '' : ' (sem telefone no cadastro)'}</label>
+          </div>
+          <button className="link" style={{ alignSelf: 'flex-start' }} onClick={() => setVer(!ver)}>{ver ? 'Esconder a mensagem' : 'Ver a mensagem'}</button>
+          {ver && <pre style={{ whiteSpace: 'pre-wrap', fontFamily: 'inherit', fontSize: 13, background: 'var(--fundo-2, #f4ede3)', padding: 10, borderRadius: 8, margin: 0 }}>{p.texto}</pre>}
+          {enviar.error && <Erro erro={enviar.error} />}
+          <div className="flex">
+            <button className="botao" disabled={(!c.email && !c.whatsapp) || enviar.isPending} onClick={() => enviar.mutate(c)}>{enviar.isPending ? 'Enviando…' : 'Enviar'}</button>
+            <button className="botao claro" onClick={fechar}>Não enviar</button>
+          </div>
+        </>
+      )}
     </div>
   );
 }

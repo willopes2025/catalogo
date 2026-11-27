@@ -104,7 +104,7 @@ export function Acerto() {
       // A simulação não vale mais depois de fechar: remove em vez de recalcular.
       qc.removeQueries({ queryKey: ['simular', id] });
       // Depois de fechar, vai direto receber: baixa (Pix, dinheiro, cartão) ou gerar Pix/boleto.
-      navegar(`/maletas/${id}?receber=1`);
+      navegar(`/maletas/${id}?receber=1&avisar=acerto`);
       qc.invalidateQueries({ predicate: (x) => x.queryKey[0] !== 'simular' });
     },
   });

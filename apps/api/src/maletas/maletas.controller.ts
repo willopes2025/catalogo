@@ -6,6 +6,7 @@ import { Permissao, Publico, Usuario, temPermissao, type UsuarioLogado } from '.
 import { dataISO, validar } from '../comum/validacao';
 import { contas, maletaItens, maletas, pessoas, produtos } from '../db/schema';
 import { MaletasService, hoje, type DadosAcerto } from './maletas.service';
+import { AvisarMaletaService } from './avisar-maleta.service';
 import { AsaasService } from '../integracoes/asaas.service';
 import { AuditoriaService } from '../comum/auditoria.service';
 import { Limitador } from '../comum/limitador';
@@ -44,7 +45,7 @@ const prebaixaSchema = z.object({ itens: z.array(z.object({ produtoId: z.string(
 
 @Controller('maletas')
 export class MaletasController {
-  constructor(@Inject(DB) private readonly db: Db, private readonly svc: MaletasService, private readonly auditoria: AuditoriaService, private readonly asaas: AsaasService) {}
+  constructor(@Inject(DB) private readonly db: Db, private readonly svc: MaletasService, private readonly auditoria: AuditoriaService, private readonly asaas: AsaasService, private readonly avisar: AvisarMaletaService) {}
 
   @Get()
   @Permissao('maletas', 'ver')
@@ -186,6 +187,23 @@ export class MaletasController {
   mudarDataAcerto(@Usuario() u: UsuarioLogado, @Param('id', ParseUUIDPipe) id: string, @Body() body: unknown) {
     const d = validar(z.object({ dataLimite: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Data inválida'), motivo: z.string().trim().min(3, 'Informe o motivo').max(300) }), body);
     return this.svc.mudarDataAcerto(id, d, u.id, temPermissao(u.permissoes, 'maletas', 'excluir'));
+  }
+
+  /** Prévia da mensagem do fim (montagem, alterações, acerto) e para onde dá para mandar. */
+  @Get(':id/aviso')
+  @Permissao('maletas', 'ver')
+  async previaAviso(@Param('id', ParseUUIDPipe) id: string, @Query('momento') momento: string) {
+    const mo = validar(z.enum(['montagem', 'alteracao', 'acerto']), momento);
+    const m = await this.avisar.montar(id, mo);
+    return { assunto: m.assunto, texto: m.texto, email: m.email, telefone: m.telefone };
+  }
+
+  /** "Enviar e-mail?": manda a mensagem do fim por e-mail e/ou WhatsApp, uma vez, quando a equipe confirma. */
+  @Post(':id/avisar')
+  @Permissao('maletas', 'editar')
+  enviarAviso(@Usuario() u: UsuarioLogado, @Param('id', ParseUUIDPipe) id: string, @Body() body: unknown) {
+    const d = validar(z.object({ momento: z.enum(['montagem', 'alteracao', 'acerto']), email: z.boolean(), whatsapp: z.boolean() }), body);
+    return this.avisar.enviar(id, d, u.id);
   }
 
   /** Boleto de garantia no lugar da promissória: valor atual da maleta, vence no acerto. */

@@ -208,7 +208,7 @@ export class MaletasService {
 
   async obter(id: string) {
     const [m] = await this.db
-      .select({ maleta: maletas, representante: pessoas.nome, telefone: pessoas.telefone1, cidade: pessoas.cidade, origem: locaisEstoque.nome })
+      .select({ maleta: maletas, representante: pessoas.nome, telefone: pessoas.telefone1, email: pessoas.email, cidade: pessoas.cidade, origem: locaisEstoque.nome })
       .from(maletas)
       .innerJoin(pessoas, eq(pessoas.id, maletas.representanteId))
       .innerJoin(locaisEstoque, eq(locaisEstoque.id, maletas.origemId))
@@ -271,7 +271,7 @@ export class MaletasService {
       valorEnviado: comSaldo.reduce((a, i) => a + i.enviada * i.preco, 0),
     };
     const diasAtraso = m.maleta.status === 'aberta' ? Math.max(0, diasEntre(m.maleta.dataLimite, hoje())) : 0;
-    return { ...m.maleta, representante: m.representante, telefone: m.telefone, cidade: m.cidade, origem: m.origem, itens: comSaldo, acertos: historico, parcelasAcerto, conferencias, documentos: docs, totais, diasAtraso };
+    return { ...m.maleta, representante: m.representante, telefone: m.telefone, email: m.email, cidade: m.cidade, origem: m.origem, itens: comSaldo, acertos: historico, parcelasAcerto, conferencias, documentos: docs, totais, diasAtraso };
   }
 
   /**

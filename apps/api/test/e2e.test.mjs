@@ -4726,9 +4726,20 @@ test('estornar acerto: peças voltam para a maleta, parcelas canceladas (paga de
   const comBoleto = await ok('GET', `/maletas/${m.id}`);
   assert.equal(comBoleto.garantiaCobrancaId, bg.id);
   assert.ok(comBoleto.documentos.some((d) => d.tipo === 'promissoria'), 'a promissória continua disponível para imprimir');
+  // "Enviar e-mail?" no fim da montagem: prévia com o pedido com fotos, a promissória e o boleto.
+  const prev = await ok('GET', `/maletas/${m.id}/aviso?momento=montagem`);
+  assert.match(prev.texto, /\/pedido\//);
+  assert.match(prev.texto, /promissória/i);
+  assert.match(prev.texto, /Boleto de garantia/);
+  assert.equal(prev.email, null);
+  const env = await ok('POST', `/maletas/${m.id}/avisar`, { momento: 'montagem', email: true, whatsapp: false });
+  assert.equal(env.email, 'sem e-mail no cadastro');
   const ac = await ok('POST', `/maletas/${m.id}/acerto`, { forma: 'prazo', modalidade: 'presencial', dataAcerto, parcelas: 2, formaPagamento: 'boleto', itens: [{ produtoId: ia.produtoId, vendida: 2, devolvida: 1, perdida: 0 }, { produtoId: ib.produtoId, vendida: 0, devolvida: 0, perdida: 1 }] });
   assert.equal(ac.fechou, true);
   assert.equal((await ok('GET', `/maletas/${m.id}`)).garantiaCobrancaId, null, 'o boleto de garantia é cancelado no acerto');
+  const resumo = await ok('GET', `/maletas/${m.id}/aviso?momento=acerto`);
+  assert.match(resumo.texto, /Vendidas: 2/);
+  assert.match(resumo.texto, /Total a pagar/);
   const tit = await ok('GET', `/financeiro/titulos?pessoaId=${rep.id}`);
   assert.equal(tit.itens.length, 2);
   await ok('POST', `/financeiro/titulos/${tit.itens[0].id}/baixar`, { pagoEm: dataAcerto, valorPago: tit.itens[0].valor, formaPagamento: 'pix' }).catch(async () => ok('POST', `/financeiro/titulos/${tit.itens[0].id}/baixar`, { pagoEm: dataAcerto }));

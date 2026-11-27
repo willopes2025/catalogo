@@ -54,7 +54,7 @@ export function NovaMaleta() {
 
   const criar = useMutation({
     mutationFn: () => api<{ id: string }>('/maletas', { corpo: { representanteId: repId, origemId, entrega, observacao: obs || null, itens: itens.map((i) => ({ codigoBarras: i.codigoBarras, quantidade: i.quantidade })), liberarExcecao: excecao } }),
-    onSuccess: (m) => navegar(`/maletas/${m.id}`),
+    onSuccess: (m) => navegar(`/maletas/${m.id}?avisar=montagem`),
   });
 
   return (
