@@ -7,7 +7,7 @@ import { Campo, Carregando, Erro, Indicador, Topo, camposComErro } from '../comp
 import { Lancamento } from './Financeiro';
 import { usarVisao } from '../visao';
 
-interface Evento { id: string; nome: string; empresaId: string; empresa: string; inicio: string | null; fim: string | null; cidade: string | null; observacao: string | null; ativo: boolean }
+interface Evento { id: string; nome: string; empresaId: string; empresa: string; inicio: string | null; fim: string | null; cidade: string | null; observacao: string | null; ativo: boolean; latitude?: number | null; longitude?: number | null; raioM?: number | null }
 interface Resultado { id: string; nome: string; vendas: number; qtdVendas: number; descontos: number; devolvido: number; cmv: number; despesas: number; despesasAbertas: number; outrasReceitas: number; resultado: number; margemPb: number | null; primeiraVenda: string | null; ultimaVenda: string | null }
 
 const pct = (pb: number | null) => (pb === null ? '—' : `${(pb / 100).toLocaleString('pt-BR', { maximumFractionDigits: 1 })}%`);
@@ -110,10 +110,11 @@ export function Eventos() {
 function FormEvento({ ev, fechar }: { ev: Partial<Evento>; fechar: () => void }) {
   const qc = useQueryClient();
   const empresas = useQuery({ queryKey: ['empresas'], queryFn: () => api<{ id: string; nome: string; tipo: string }[]>('/empresas') });
-  const [f, setF] = useState({ nome: ev.nome ?? '', empresaId: ev.empresaId ?? '', inicio: ev.inicio ?? '', fim: ev.fim ?? '', cidade: ev.cidade ?? '', observacao: ev.observacao ?? '', ativo: ev.ativo ?? true });
+  const [f, setF] = useState({ nome: ev.nome ?? '', empresaId: ev.empresaId ?? '', inicio: ev.inicio ?? '', fim: ev.fim ?? '', cidade: ev.cidade ?? '', observacao: ev.observacao ?? '', ativo: ev.ativo ?? true, latitude: ev.latitude != null ? String(ev.latitude) : '', longitude: ev.longitude != null ? String(ev.longitude) : '', raioM: String(ev.raioM ?? 300) });
+  const [gps, setGps] = useState('');
   const salvar = useMutation({
     mutationFn: () => {
-      const corpo = { nome: f.nome, ...(f.empresaId ? { empresaId: f.empresaId } : {}), inicio: f.inicio || null, fim: f.fim || null, cidade: f.cidade || null, observacao: f.observacao || null, ativo: f.ativo };
+      const corpo = { nome: f.nome, ...(f.empresaId ? { empresaId: f.empresaId } : {}), inicio: f.inicio || null, fim: f.fim || null, cidade: f.cidade || null, observacao: f.observacao || null, ativo: f.ativo, latitude: f.latitude.trim() ? Number(f.latitude.replace(',', '.')) : null, longitude: f.longitude.trim() ? Number(f.longitude.replace(',', '.')) : null, raioM: f.latitude.trim() ? Math.max(30, Number(f.raioM) || 300) : null };
       return ev.id ? api(`/eventos/${ev.id}`, { metodo: 'PATCH', corpo }) : api('/eventos', { corpo });
     },
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['eventos'] }); qc.invalidateQueries({ queryKey: ['eventos-resultado'] }); qc.invalidateQueries({ queryKey: ['locais'] }); fechar(); },
@@ -131,6 +132,12 @@ function FormEvento({ ev, fechar }: { ev: Partial<Evento>; fechar: () => void })
       <Campo rotulo="Início" erro={erros.inicio}><input type="date" value={f.inicio} onChange={(e) => setF({ ...f, inicio: e.target.value })} /></Campo>
       <Campo rotulo="Fim" erro={erros.fim}><input type="date" value={f.fim} onChange={(e) => setF({ ...f, fim: e.target.value })} /></Campo>
       <Campo rotulo="Cidade / local" className="l2"><input maxLength={80} value={f.cidade} onChange={(e) => setF({ ...f, cidade: e.target.value })} placeholder="Ex.: Shopping Vila Velha" /></Campo>
+      <div className="secao l4">Ponto eletrônico no evento</div>
+      <Campo rotulo="Latitude" erro={erros.latitude}><input inputMode="decimal" value={f.latitude} onChange={(e) => setF({ ...f, latitude: e.target.value })} placeholder="-20.3297" /></Campo>
+      <Campo rotulo="Longitude" erro={erros.longitude}><input inputMode="decimal" value={f.longitude} onChange={(e) => setF({ ...f, longitude: e.target.value })} placeholder="-40.2925" /></Campo>
+      <Campo rotulo="Raio (metros)" erro={erros.raioM}><input type="number" min={30} max={5000} value={f.raioM} onChange={(e) => setF({ ...f, raioM: e.target.value })} /></Campo>
+      <div className="campo"><label>&nbsp;</label><button type="button" className="botao claro" onClick={() => { setGps('Buscando…'); navigator.geolocation?.getCurrentPosition((p) => { setF((x) => ({ ...x, latitude: p.coords.latitude.toFixed(6), longitude: p.coords.longitude.toFixed(6) })); setGps(`Precisão de ${Math.round(p.coords.accuracy)} m`); }, () => setGps('Não deu para pegar a localização. Permita no navegador ou digite.'), { enableHighAccuracy: true, timeout: 15000 }); }}>Usar minha localização</button></div>
+      <p className="muted l4" style={{ margin: 0, fontSize: 13 }}>{gps ? `${gps}. ` : ''}Com o ponto no mapa, quem bater o ponto dentro do raio fica "no local" enquanto o evento estiver ativo (entre o início e o fim). Abra esta tela no local do evento e use "Usar minha localização", ou copie do Google Maps (clique com o botão direito no lugar).</p>
       <Campo rotulo="Observação" className="l4"><input maxLength={500} value={f.observacao} onChange={(e) => setF({ ...f, observacao: e.target.value })} /></Campo>
       {ev.id && <label className="check l4"><input type="checkbox" checked={!f.ativo} onChange={(e) => setF({ ...f, ativo: !e.target.checked })} /> Evento encerrado (sai da frente de caixa; precisa estar sem peças e com o caixa fechado)</label>}
       {salvar.error && <div className="l4"><Erro erro={salvar.error} /></div>}

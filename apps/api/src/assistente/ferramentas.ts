@@ -697,7 +697,7 @@ export class FerramentasAssistente {
       if (!c) throw new BadRequestException('Este número de WhatsApp não existe, está desativado ou você não envia por ele.');
       return c;
     }
-    const c = lista.find((x) => x.tipo !== 'oficial') ?? lista[0];
+    const c = lista.find((x) => x.tipo !== 'oficial' && x.tipo !== 'instagram') ?? lista.find((x) => x.tipo !== 'instagram');
     if (!c) throw new BadRequestException('Nenhum número de WhatsApp ativo para você enviar. Conecte um em CRM › Números.');
     return c;
   }

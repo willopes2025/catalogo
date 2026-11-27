@@ -154,7 +154,7 @@ export class DistribuicaoService implements OnModuleInit, OnModuleDestroy {
   /** Número para os avisos: um de QR code (não depende da janela de 24 h do oficial); senão o primeiro ativo. */
   private async canalPadrao() {
     const cs = await this.db.select({ id: crmCanais.id, tipo: crmCanais.tipo }).from(crmCanais).where(eq(crmCanais.ativo, true)).orderBy(asc(crmCanais.criadoEm));
-    return (cs.find((c) => c.tipo !== 'oficial') ?? cs[0])?.id ?? null;
+    return (cs.find((c) => c.tipo !== 'oficial' && c.tipo !== 'instagram') ?? cs.find((c) => c.tipo !== 'instagram'))?.id ?? null;
   }
 
   /** Prazo vencido sem aceite: passa para a próxima; sem mais tentativas, volta para a equipe. */

@@ -4950,3 +4950,57 @@ test('itens 14–21: contrato no cadastro com código no WhatsApp, etapa da male
   const sug = await ok('GET', '/cobranca/protestos/sugestoes');
   assert.ok(Array.isArray(sug.itens));
 });
+
+test('itens 29–37: Instagram no CRM, Fechamento na agenda, 1º acesso sem senha atual, ponto no raio do evento e conferência do rosto', async () => {
+  const gestor = token;
+  // 29. Instagram (Direct): canal, mensagem chegando vira conversa com o nome/@ da Meta; resposta sai pela API.
+  const ig = await ok('POST', '/crm/canais', { nome: 'Instagram Aritana', tipo: 'instagram', config: { igId: 'IG1', token: 'token-meta-ig' } });
+  const canais = await ok('GET', '/crm/canais');
+  const canalIg = canais.find((c) => c.id === ig.id);
+  const [, , tok] = canalIg.webhook.match(/webhooks\/whatsapp\/([^/]+)\/(.+)$/) ?? [];
+  const desafio = await fetch(`${API}/webhooks/whatsapp/${ig.id}/${tok}?hub.mode=subscribe&hub.verify_token=${tok}&hub.challenge=123abc`);
+  assert.equal(await desafio.text(), '123abc', 'verificação do webhook pela Meta');
+  const evento = { object: 'instagram', entry: [{ id: 'IG1', time: Date.now(), messaging: [{ sender: { id: '17840000000000001' }, recipient: { id: 'IG1' }, timestamp: Date.now(), message: { mid: 'mid.entrada.1', text: 'Oi, quero ser revendedora!' } }] }] };
+  const wh = await fetch(`${API}/webhooks/whatsapp/${ig.id}/${tok}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(evento) });
+  assert.equal(wh.status, 200);
+  const cv = (await ok('GET', '/crm/conversas?aba=todas')).find((x) => x.telefone === 'ig:17840000000000001');
+  assert.ok(cv, 'conversa do Instagram criada');
+  assert.equal(cv.nome ?? cv.contato, 'Bruna Insta');
+  const msgs = (await ok('GET', `/crm/conversas/${cv.id}/mensagens`)).mensagens;
+  assert.ok(msgs.some((m) => m.texto === 'Oi, quero ser revendedora!'));
+  await ok('POST', `/crm/conversas/${cv.id}/mensagens`, { tipo: 'texto', texto: 'Oi, Bruna! Que bom 😊' });
+  const enviado = (await recebidos()).filter((r) => r.caminho.startsWith('/meta-ig/IG1/messages')).pop();
+  assert.equal(enviado.corpo.recipient.id, '17840000000000001');
+  assert.equal(enviado.corpo.message.text, 'Oi, Bruna! Que bom 😊');
+  await ok('PATCH', `/crm/canais/${ig.id}`, { ativo: false });
+
+  // 31. Tipo "Fechamento" na agenda.
+  assert.ok((await ok('GET', '/agenda/tipos')).tipos.fechamento, 'tipo Fechamento existe');
+
+  // 37. Evento com ponto no mapa: quem bate dentro do raio fica no local (cerca em "bloquear" desde o teste do RH).
+  const hoje = new Date(Date.now() - 3 * 3600e3).toISOString().slice(0, 10);
+  const ev = await ok('POST', '/eventos', { nome: 'Feira Ponto E2E', inicio: hoje, fim: hoje, latitude: -20.6611, longitude: -40.4977, raioM: 200 });
+  assert.equal((await ok('GET', '/eventos')).find((e) => e.id === ev.id).raioM, 200);
+  const empresas = await ok('GET', '/empresas');
+  const emp = empresas.find((e) => e.cnpj) ?? empresas[0];
+  const soPonto = (await ok('GET', '/rh/grupos')).find((g) => g.nome === 'Somente ponto');
+  const f = await ok('POST', '/rh/funcionarios', { empresaId: emp.id, nome: 'Vendedora de Feira E2E', cpf: '390.533.447-05', cargo: 'Vendedora', dataAdmissao: hoje, salario: 150000, acesso: { grupoId: soPonto.id } });
+  token = '';
+  const login = await ok('POST', '/auth/login', { email: '390.533.447-05', senha: f.acessoCriado.senha });
+  token = login.token;
+  // 36. Primeiro acesso: troca sem digitar a senha provisória de novo.
+  await ok('POST', '/auth/trocar-senha', { nova: 'Feira2026' });
+  assert.equal((await chamar('POST', '/auth/trocar-senha', { nova: 'OutraSenha1' })).status, 400, 'depois do 1º acesso, pede a senha atual');
+  const jpeg = Buffer.from('ffd8ffe000104a46494600010100000100010000ffd9', 'hex').toString('base64');
+  const c = await ok('POST', '/ponto/marcar', { latitude: -20.6612, longitude: -40.4978, precisao: 10, foto: jpeg });
+  assert.equal(c.foraDoLocal, false, 'dentro do raio do evento');
+  token = gestor;
+  let conf = null;
+  for (let i = 0; i < 20 && !conf; i++) {
+    await new Promise((r) => setTimeout(r, 200));
+    conf = (await ok('GET', '/rh/rosto')).find((x) => x.funcionarioId === f.id) ?? null;
+  }
+  assert.equal(conf?.resultado, 'referencia', 'a 1ª selfie virou a foto de referência');
+  await ok('POST', `/rh/rosto/${conf.id}/revisar`, { revisao: 'ok' });
+  assert.ok(!(await ok('GET', '/rh/rosto')).some((x) => x.id === conf.id), 'revisada sai da lista');
+});

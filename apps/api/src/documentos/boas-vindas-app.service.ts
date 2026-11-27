@@ -34,7 +34,7 @@ export class BoasVindasAppService {
     if (!trava) return { enviado: false, motivo: 'já enviado' };
     try {
       const cs = await this.db.select({ id: crmCanais.id, tipo: crmCanais.tipo }).from(crmCanais).where(and(eq(crmCanais.ativo, true), isNull(crmCanais.excluidoEm))).orderBy(asc(crmCanais.criadoEm));
-      const canalId = cfg.canalId && cs.some((c) => c.id === cfg.canalId) ? cfg.canalId : (cs.find((c) => c.tipo !== 'oficial') ?? cs[0])?.id;
+      const canalId = cfg.canalId && cs.some((c) => c.id === cfg.canalId) ? cfg.canalId : (cs.find((c) => c.tipo !== 'oficial' && c.tipo !== 'instagram') ?? cs.find((c) => c.tipo !== 'instagram'))?.id;
       if (!canalId) throw new Error('nenhum número de WhatsApp ativo no CRM');
       const texto = montarMensagemAgenda(cfg.texto, { primeiro_nome: p.nome.split(' ')[0], nome: p.nome, link_android: LINK_APK_CONSULTORA, link_portal: `${urlPublica()}/portal` });
       const contato = await this.crm.garantirContato({ telefone: p.telefone, nome: p.nome, pessoaId });

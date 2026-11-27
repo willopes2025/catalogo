@@ -63,6 +63,10 @@ export const locaisEstoque = pgTable('locais_estoque', {
   fim: date('fim'),
   cidade: text('cidade'),
   observacao: text('observacao'),
+  /** Evento: ponto no mapa e raio, para o ponto eletrônico valer lá enquanto o evento estiver ativo. */
+  latitude: doublePrecision('latitude'),
+  longitude: doublePrecision('longitude'),
+  raioM: integer('raio_m'),
   criadoEm: criadoEm(),
 });
 
@@ -1564,6 +1568,8 @@ export const rhFuncionarios = pgTable(
     status: text('status').notNull().default('ativo'),
     /** Quem não bate ponto (sócio, cargo de confiança do art. 62, PJ). */
     batePonto: boolean('bate_ponto').notNull().default(true),
+    /** Foto de referência do rosto (arquivo privado do RH) para conferir a selfie do ponto. */
+    fotoRosto: text('foto_rosto'),
     camposExtras: jsonb('campos_extras').$type<Record<string, string>>().notNull().default({}),
     observacao: text('observacao'),
     criadoEm: criadoEm(),
@@ -1615,6 +1621,21 @@ export const rhRegistros = pgTable(
 );
 
 /** Ajustes do ponto feitos pela empresa: incluir uma batida esquecida ou desconsiderar uma batida, sempre com motivo. */
+/** Conferência da selfie do ponto com a foto de referência (feita pelo Claude; não bloqueia, o RH revisa). */
+export const rhConferenciasRosto = pgTable('rh_conferencias_rosto', {
+  id: id(),
+  registroId: uuid('registro_id').notNull().unique().references(() => rhRegistros.id),
+  funcionarioId: uuid('funcionario_id').notNull().references(() => rhFuncionarios.id),
+  /** confere | nao_confere | incerto | referencia (a 1ª selfie virou a referência) | erro */
+  resultado: text('resultado').notNull(),
+  motivo: text('motivo'),
+  revisadoPor: uuid('revisado_por').references(() => usuarios.id, { onDelete: 'set null' }),
+  revisadoEm: timestamp('revisado_em', { withTimezone: true }),
+  /** ok (era a pessoa) | fraude */
+  revisao: text('revisao'),
+  criadoEm: criadoEm(),
+});
+
 export const rhTratamentos = pgTable('rh_tratamentos', {
   id: id(),
   funcionarioId: uuid('funcionario_id').notNull().references(() => rhFuncionarios.id),
@@ -1828,7 +1849,7 @@ export const agendaCompromissos = pgTable(
   'agenda_compromissos',
   {
     id: id(),
-    /** entrevista | acerto_video | retirada | reuniao | outro */
+    /** entrevista | fechamento | acerto_video | retirada | reuniao | outro */
     tipo: text('tipo').notNull(),
     titulo: text('titulo').notNull(),
     inicio: timestamp('inicio', { withTimezone: true }).notNull(),

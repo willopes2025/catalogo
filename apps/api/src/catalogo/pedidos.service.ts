@@ -198,7 +198,7 @@ export class PedidosLinkService implements OnModuleInit {
 
   private async canalPadrao() {
     const cs = await this.db.select({ id: crmCanais.id, tipo: crmCanais.tipo }).from(crmCanais).where(and(eq(crmCanais.ativo, true), isNull(crmCanais.excluidoEm))).orderBy(asc(crmCanais.criadoEm));
-    return (cs.find((c) => c.tipo !== 'oficial') ?? cs[0])?.id ?? null;
+    return (cs.find((c) => c.tipo !== 'oficial' && c.tipo !== 'instagram') ?? cs.find((c) => c.tipo !== 'instagram'))?.id ?? null;
   }
 
   private async whatsapp(telefone: string, nome: string, texto: string, pessoaId?: string | null) {

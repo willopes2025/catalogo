@@ -14,7 +14,7 @@ import { AuditoriaService } from '../comum/auditoria.service';
 import { ArquivosService } from '../arquivos/arquivos.service';
 import { ConfiguracoesService } from '../configuracoes/configuracoes.service';
 import { CONFIGS } from '../configuracoes/outras-configuracoes';
-import { grupos, rhDocumentos, rhEnvios, rhEscalas, rhFechamentos, rhFeriados, rhFuncionarios, rhLocais, rhOcorrencias, rhRegistros, rhTratamentos, usuarios } from '../db/schema';
+import { grupos, rhConferenciasRosto, rhDocumentos, rhEnvios, rhEscalas, rhFechamentos, rhFeriados, rhFuncionarios, rhLocais, rhOcorrencias, rhRegistros, rhTratamentos, usuarios } from '../db/schema';
 import { RhService, TIPOS_DOCUMENTO, TIPOS_OCORRENCIA, diasDaCompetencia } from './rh.service';
 import { ContabilidadeService, ITENS_CONTABILIDADE, type ItemContabilidade } from './contabilidade.service';
 import { buscaNome } from '../comum/busca-nome';
@@ -342,6 +342,62 @@ export class RhController {
     if (!caminho || !existsSync(caminho)) throw new NotFoundException('Foto não encontrada.');
     res.setHeader('Cache-Control', 'private, max-age=3600');
     res.sendFile(caminho);
+  }
+
+  // ───────── Conferência do rosto (selfie do ponto) ─────────
+
+  /** Selfies que não conferem, incertas, a 1ª selfie que virou referência e falhas: o RH revisa. */
+  @Get('rosto')
+  @Permissao('rh', 'ver')
+  rosto(@Query('todos') todos?: string) {
+    return this.db
+      .select({ id: rhConferenciasRosto.id, registroId: rhConferenciasRosto.registroId, funcionarioId: rhConferenciasRosto.funcionarioId, nome: rhFuncionarios.nome, resultado: rhConferenciasRosto.resultado, motivo: rhConferenciasRosto.motivo, revisao: rhConferenciasRosto.revisao, marcadoEm: rhRegistros.marcadoEm, criadoEm: rhConferenciasRosto.criadoEm })
+      .from(rhConferenciasRosto)
+      .innerJoin(rhFuncionarios, eq(rhFuncionarios.id, rhConferenciasRosto.funcionarioId))
+      .innerJoin(rhRegistros, eq(rhRegistros.id, rhConferenciasRosto.registroId))
+      .where(todos === '1' ? undefined : and(sql`${rhConferenciasRosto.revisao} is null`, ne(rhConferenciasRosto.resultado, 'confere')))
+      .orderBy(desc(rhConferenciasRosto.criadoEm))
+      .limit(200);
+  }
+
+  @Post('rosto/:id/revisar')
+  @Permissao('rh', 'editar')
+  async revisarRosto(@Usuario() u: UsuarioLogado, @Param('id', ParseUUIDPipe) id: string, @Body() body: unknown) {
+    const { revisao, usarComoReferencia } = validar(z.object({ revisao: z.enum(['ok', 'fraude']), usarComoReferencia: z.boolean().default(false) }), body);
+    const [c] = await this.db.update(rhConferenciasRosto).set({ revisao, revisadoPor: u.id, revisadoEm: new Date() }).where(eq(rhConferenciasRosto.id, id)).returning();
+    if (!c) throw new NotFoundException('Conferência não encontrada.');
+    if (revisao === 'ok' && usarComoReferencia) {
+      const [r] = await this.db.select({ foto: rhRegistros.foto }).from(rhRegistros).where(eq(rhRegistros.id, c.registroId));
+      if (r?.foto) await this.db.update(rhFuncionarios).set({ fotoRosto: r.foto }).where(eq(rhFuncionarios.id, c.funcionarioId));
+    }
+    // A 1ª selfie que virou referência e foi marcada como fraude deixa de ser a referência.
+    if (revisao === 'fraude' && c.resultado === 'referencia') await this.db.update(rhFuncionarios).set({ fotoRosto: null }).where(eq(rhFuncionarios.id, c.funcionarioId));
+    await this.auditoria.registrar({ usuarioId: u.id, acao: 'revisar_rosto', entidade: 'rh_ponto', entidadeId: id, dados: { revisao, usarComoReferencia } });
+    return { ok: true };
+  }
+
+  @Get('funcionarios/:id/foto-rosto')
+  @Permissao('rh', 'ver')
+  async fotoRosto(@Param('id', ParseUUIDPipe) id: string, @Res() res: Response) {
+    const [f] = await this.db.select({ foto: rhFuncionarios.fotoRosto }).from(rhFuncionarios).where(eq(rhFuncionarios.id, id));
+    const caminho = f?.foto ? this.arquivos.caminhoPrivado(f.foto, 'rh') : null;
+    if (!caminho || !existsSync(caminho)) throw new NotFoundException('Sem foto de referência.');
+    res.setHeader('Cache-Control', 'private, no-cache');
+    res.sendFile(caminho);
+  }
+
+  /** Foto de referência do rosto, enviada pelo RH (JPEG em base64). */
+  @Post('funcionarios/:id/foto-rosto')
+  @Permissao('rh', 'editar')
+  async salvarFotoRosto(@Usuario() u: UsuarioLogado, @Param('id', ParseUUIDPipe) id: string, @Body() body: unknown) {
+    const { foto } = validar(z.object({ foto: z.string().min(100).max(4_000_000) }), body);
+    const b = Buffer.from(foto.replace(/^data:[^;]+;base64,/, ''), 'base64');
+    if (b[0] !== 0xff || b[1] !== 0xd8) throw new BadRequestException('A foto precisa ser JPEG.');
+    const nome = await this.arquivos.salvarPrivado(b, 'image/jpeg', 'rh');
+    const [f] = await this.db.update(rhFuncionarios).set({ fotoRosto: nome }).where(eq(rhFuncionarios.id, id)).returning({ id: rhFuncionarios.id });
+    if (!f) throw new NotFoundException('Funcionário não encontrado.');
+    await this.auditoria.registrar({ usuarioId: u.id, acao: 'foto_rosto', entidade: 'rh_funcionario', entidadeId: id });
+    return { ok: true };
   }
 
   @Get('fechamentos')

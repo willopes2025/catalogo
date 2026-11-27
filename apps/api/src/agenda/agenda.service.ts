@@ -13,6 +13,7 @@ export type Compromisso = typeof agendaCompromissos.$inferSelect;
 
 export const TIPOS_COMPROMISSO = {
   entrevista: { nome: 'Entrevista de candidata', duracao: 30, online: true },
+  fechamento: { nome: 'Fechamento', duracao: 45, online: false },
   acerto_video: { nome: 'Acerto por vídeo', duracao: 45, online: true },
   retirada: { nome: 'Retirada de maleta', duracao: 30, online: false },
   reuniao: { nome: 'Reunião', duracao: 60, online: true },
@@ -204,7 +205,7 @@ export class AgendaService implements OnModuleInit, OnModuleDestroy {
   private async canalPadrao(escolhido: string | null) {
     const cs = await this.db.select({ id: crmCanais.id, tipo: crmCanais.tipo }).from(crmCanais).where(and(eq(crmCanais.ativo, true), isNull(crmCanais.excluidoEm))).orderBy(asc(crmCanais.criadoEm));
     if (escolhido && cs.some((c) => c.id === escolhido)) return escolhido;
-    return (cs.find((c) => c.tipo !== 'oficial') ?? cs[0])?.id ?? null;
+    return (cs.find((c) => c.tipo !== 'oficial' && c.tipo !== 'instagram') ?? cs.find((c) => c.tipo !== 'instagram'))?.id ?? null;
   }
 
   private async avisar(c: Compromisso, motivo: 'marcado' | 'remarcado' | 'cancelado' | 'lembrete_dia' | 'lembrete_hora') {

@@ -16,7 +16,7 @@ const FUSO = 'America/Sao_Paulo';
 const hora = (d: string) => new Date(d).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: FUSO });
 const diaChave = (d: Date) => d.toLocaleDateString('en-CA', { timeZone: FUSO });
 const STATUS: Record<Compromisso['status'], [string, string]> = { marcado: ['Marcado', ''], confirmado: ['Confirmado', 'ok'], realizado: ['Realizado', 'ok'], faltou: ['Não compareceu', 'erro'], cancelado: ['Cancelado', 'erro'] };
-const COR_TIPO: Record<string, string> = { entrevista: '#8a6a3b', acerto_video: '#2f6f5e', retirada: '#5b4a8a', reuniao: '#3a5f8a', outro: '#7a7166' };
+const COR_TIPO: Record<string, string> = { entrevista: '#8a6a3b', fechamento: '#a0522d', acerto_video: '#2f6f5e', retirada: '#5b4a8a', reuniao: '#3a5f8a', outro: '#7a7166' };
 export const usarTipos = () => useQuery({ queryKey: ['agenda', 'tipos'], queryFn: () => api<Tipos>('/agenda/tipos'), staleTime: 60_000 });
 
 /** Meio-dia (UTC) do dia de Brasília: base estável para somar dias e rotular. */

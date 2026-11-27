@@ -1,4 +1,6 @@
-import { BadRequestException, ForbiddenException, Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { readFile } from 'node:fs/promises';
+import { IaService } from '../ia/ia.service';
 import { and, asc, desc, eq, gte, inArray, isNull, lt, lte, sql } from 'drizzle-orm';
 import { calcularDia, feriadosNacionais, previstoDoTurno, somarJornada, type ResultadoDia, type Turno } from '@aritana/regras';
 import { DB, type Db } from '../comum/db.module';
@@ -10,7 +12,9 @@ import { SegredosService } from '../segredos/segredos.service';
 import { assinarCades, lerCertificado } from './assinatura';
 import {
   empresas,
+  locaisEstoque,
   rhCertificados,
+  rhConferenciasRosto,
   rhDocumentos,
   rhEscalas,
   rhFechamentos,
@@ -98,7 +102,43 @@ export class RhService {
     private readonly arquivos: ArquivosService,
     private readonly config: ConfiguracoesService,
     private readonly segredos: SegredosService,
+    private readonly ia: IaService,
   ) {}
+  private readonly logRosto = new Logger('PontoRosto');
+
+  /**
+   * Confere a selfie com a foto de referência do funcionário (Claude). Não bloqueia o ponto: o que não confere fica
+   * para o RH revisar. Sem referência, a primeira selfie vira a referência (o RH pode trocar no cadastro).
+   */
+  async conferirRosto(registroId: string, funcionarioId: string, foto: string) {
+    const [f] = await this.db.select({ fotoRosto: rhFuncionarios.fotoRosto, nome: rhFuncionarios.nome }).from(rhFuncionarios).where(eq(rhFuncionarios.id, funcionarioId));
+    if (!f) return;
+    if (!f.fotoRosto) {
+      await this.db.update(rhFuncionarios).set({ fotoRosto: foto }).where(eq(rhFuncionarios.id, funcionarioId));
+      await this.db.insert(rhConferenciasRosto).values({ registroId, funcionarioId, resultado: 'referencia', motivo: 'Primeira selfie: virou a foto de referência. Confira se é a pessoa certa.' }).onConflictDoNothing();
+      return;
+    }
+    if (!this.ia.texto) return;
+    try {
+      const ler = async (n: string) => {
+        const c = this.arquivos.caminhoPrivado(n, 'rh');
+        if (!c) throw new Error('arquivo inválido');
+        return (await readFile(c)).toString('base64');
+      };
+      const [ref, selfie] = await Promise.all([ler(f.fotoRosto), ler(foto)]);
+      const r = await this.ia.perguntarJson<{ mesma_pessoa?: string; motivo?: string }>({
+        recurso: 'teste',
+        sistema: 'Você confere o ponto eletrônico. Compare o rosto da FOTO DE REFERÊNCIA com o da SELFIE. Responda só JSON: {"mesma_pessoa": "sim" | "nao" | "incerto", "motivo": "frase curta"}. Use "incerto" se o rosto não aparece bem (escuro, cortado, de longe, coberto) ou se não há rosto. Não descreva traços físicos nem faça suposições sobre a pessoa; diga apenas se parece ser a mesma pessoa e por que a imagem permite ou não concluir.',
+        mensagens: [{ role: 'user', content: [{ type: 'text', text: 'FOTO DE REFERÊNCIA:' }, { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: ref } }, { type: 'text', text: 'SELFIE DO PONTO:' }, { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: selfie } }] }],
+        maxTokens: 200,
+      });
+      const resultado = r.mesma_pessoa === 'sim' ? 'confere' : r.mesma_pessoa === 'nao' ? 'nao_confere' : 'incerto';
+      await this.db.insert(rhConferenciasRosto).values({ registroId, funcionarioId, resultado, motivo: (r.motivo ?? '').slice(0, 300) || null }).onConflictDoNothing();
+    } catch (e) {
+      this.logRosto.warn(`Conferência do rosto (${f.nome}): ${(e as Error).message}`);
+      await this.db.insert(rhConferenciasRosto).values({ registroId, funcionarioId, resultado: 'erro', motivo: (e as Error).message.slice(0, 300) }).onConflictDoNothing();
+    }
+  }
 
   regras() {
     return this.config.ler('regras_rh');
@@ -152,8 +192,16 @@ export class RhService {
     const regras = await this.regras();
     if (regras.exigirFoto && !d.foto) throw new BadRequestException('Tire a foto para bater o ponto.');
 
-    // Cerca pelo GPS: em qual local cadastrado a pessoa está.
-    const locais = await this.db.select().from(rhLocais).where(eq(rhLocais.ativo, true));
+    // Cerca pelo GPS: em qual local cadastrado a pessoa está (inclui os eventos ativos com ponto no mapa).
+    const hojeBr = new Date(Date.now() - 3 * 3600_000).toISOString().slice(0, 10);
+    const eventos = await this.db
+      .select({ nome: locaisEstoque.nome, latitude: locaisEstoque.latitude, longitude: locaisEstoque.longitude, raioM: locaisEstoque.raioM })
+      .from(locaisEstoque)
+      .where(and(eq(locaisEstoque.tipo, 'evento'), eq(locaisEstoque.ativo, true), sql`${locaisEstoque.latitude} is not null and ${locaisEstoque.longitude} is not null`, sql`(${locaisEstoque.inicio} is null or ${locaisEstoque.inicio} <= ${hojeBr})`, sql`(${locaisEstoque.fim} is null or ${locaisEstoque.fim} >= ${hojeBr})`));
+    const locais: { id: string | null; nome: string; latitude: number; longitude: number; raioM: number }[] = [
+      ...(await this.db.select().from(rhLocais).where(eq(rhLocais.ativo, true))),
+      ...eventos.map((e) => ({ id: null, nome: `Evento ${e.nome}`, latitude: e.latitude!, longitude: e.longitude!, raioM: e.raioM ?? 300 })),
+    ];
     let localId: string | null = null;
     let foraDoLocal: boolean | null = null;
     if (locais.length) {
@@ -184,6 +232,10 @@ export class RhService {
         .returning();
       await tx.update(rhPontoEmpresas).set({ ultimoNsr: nsr, ultimoHash: hash }).where(eq(rhPontoEmpresas.empresaId, f.empresaId));
       return this.comprovante(r.id, tx);
+    }).then((c) => {
+      // Conferência do rosto em segundo plano (não segura o comprovante).
+      if (foto && regras.conferirRosto !== false) void this.conferirRosto(c.id, f.id, foto).catch(() => undefined);
+      return c;
     });
   }
 

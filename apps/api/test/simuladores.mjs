@@ -153,6 +153,14 @@ http
     if (url.pathname === '/jueri-img/b.jpg') { res.writeHead(200, { 'content-type': 'image/jpeg' }); return res.end(Buffer.from('ffd8ffdb00430006040506050406060506070706080a100a0a09090a140e0f0c1017141818171416161a1d251f1a1b231c1616202c20232627292a29191f2d302d283025282928ffdb0043010707070a080a130a0a13281a161a2828282828282828282828282828282828282828282828282828282828282828282828282828282828282828282828282828ffc00011080004000403012200021101031101ffc4001500010100000000000000000000000000000006ffc40014100100000000000000000000000000000000ffc4001501010100000000000000000000000000000005ffc40014110100000000000000000000000000000000ffda000c03010002110311003f00b8005b7fffd9', 'hex')); }
     if (url.pathname === '/jueri-img/falsa.jpg') { res.writeHead(200, { 'content-type': 'image/jpeg' }); return res.end('<html>não é foto</html>'); }
 
+    // ── Instagram (Direct pela API da Meta) ──
+    if (url.pathname.startsWith('/meta-ig/')) {
+      const r = url.pathname.replace('/meta-ig/', '');
+      if (url.searchParams.get('access_token') !== 'token-meta-ig') return responder(res, 401, { error: { message: 'Invalid OAuth access token', code: 190 } });
+      if (req.method === 'POST' && r === 'IG1/messages') return responder(res, 200, { recipient_id: corpo?.recipient?.id, message_id: `mid.saida.${Date.now()}` });
+      if (req.method === 'GET' && r === 'IG1') return responder(res, 200, { id: 'IG1', username: 'aritanajoias', name: 'Aritana Semijoias' });
+      if (req.method === 'GET') return responder(res, 200, { name: 'Bruna Insta', username: 'bruna.insta' });
+    }
     // ── WhatsApp oficial (API Cloud da Meta) ──
     if (url.pathname.startsWith('/meta-wa/')) {
       const r = url.pathname.replace('/meta-wa/', '');

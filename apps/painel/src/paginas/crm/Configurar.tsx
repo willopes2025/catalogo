@@ -46,6 +46,7 @@ function Numeros() {
           <button className="botao" disabled={!qrProprio} title={qrProprio ? undefined : 'O servidor de WhatsApp por QR code ainda não foi instalado nesta VPS'} onClick={() => setNovo('evolution')}>+ Evolution API por QR code</button>
           <button className="botao" title="Para uma instância que já existe no seu servidor Evolution: endereço, nome da instância e token" onClick={() => setNovo('evolution-token')}>+ Evolution API com token</button>
           <button className="botao claro" onClick={() => setNovo('oficial')}>+ WhatsApp oficial (Meta)</button>
+          <button className="botao claro" title="Direct do Instagram pela API oficial da Meta" onClick={() => setNovo('instagram')}>+ Instagram (Direct)</button>
           <button className="botao claro" title="Só para quem já tem conta paga na Z-API. O normal é usar o QR code (Evolution API)." onClick={() => setNovo('qrcode')}>+ Z-API (só se já tiver conta)</button>
           {opcoes.data && !qrProprio && <span className="muted" style={{ fontSize: 13 }}>A Evolution por QR code fica disponível depois de rodar o instalador da VPS de novo. Com token já funciona.</span>}
         </div>
@@ -61,7 +62,7 @@ function Numeros() {
 function CartaoCanal({ canal: c, editar, destaque }: { canal: Canal; editar: () => void; destaque?: boolean }) {
   const qc = useQueryClient();
   const admin = pode('configuracoes', 'editar');
-  const sit = useQuery({ queryKey: ['crm', 'canal', c.id, 'situacao'], queryFn: () => api<{ conectado: boolean; detalhe: string; qrcode?: string | null }>(`/crm/canais/${c.id}/situacao`), refetchInterval: (q) => (q.state.data && !q.state.data.conectado && c.tipo !== 'oficial' ? (c.tipo === 'evolution' ? 3000 : 5000) : 60_000) });
+  const sit = useQuery({ queryKey: ['crm', 'canal', c.id, 'situacao'], queryFn: () => api<{ conectado: boolean; detalhe: string; qrcode?: string | null }>(`/crm/canais/${c.id}/situacao`), refetchInterval: (q) => (q.state.data && !q.state.data.conectado && c.tipo !== 'oficial' && c.tipo !== 'instagram' ? (c.tipo === 'evolution' ? 3000 : 5000) : 60_000) });
   const acao = useMutation({ mutationFn: (a: string) => api<any>(`/crm/canais/${c.id}/${a}`, { corpo: {} }), onSuccess: () => qc.invalidateQueries({ queryKey: ['crm'] }) });
   const [copiado, setCopiado] = useState(false);
   const [historico, setHistorico] = useState(false);
@@ -90,8 +91,8 @@ function CartaoCanal({ canal: c, editar, destaque }: { canal: Canal; editar: () 
         {admin && (
           <div className="flex" style={{ gap: 6, flexWrap: 'wrap' }}>
             {c.tipo === 'oficial' && pode('crm', 'excluir') && <button className="botao claro pequeno" disabled={acao.isPending} onClick={() => acao.mutate('templates')}>Sincronizar templates</button>}
-            {c.tipo !== 'oficial' && <button className="botao claro pequeno" title="Use se as mensagens recebidas pararam de chegar: reaponta o aviso para o sistema e reinicia a conexão com o WhatsApp, sem pedir QR" disabled={acao.isPending} onClick={() => acao.mutate('webhook')}>Mensagens não chegam? Reiniciar</button>}
-            {c.tipo !== 'oficial' && sit.data?.conectado && <button className="botao claro pequeno" onClick={() => window.confirm('Desconectar este celular do sistema?') && acao.mutate('desconectar')}>Desconectar</button>}
+            {c.tipo !== 'oficial' && c.tipo !== 'instagram' && <button className="botao claro pequeno" title="Use se as mensagens recebidas pararam de chegar: reaponta o aviso para o sistema e reinicia a conexão com o WhatsApp, sem pedir QR" disabled={acao.isPending} onClick={() => acao.mutate('webhook')}>Mensagens não chegam? Reiniciar</button>}
+            {c.tipo !== 'oficial' && c.tipo !== 'instagram' && sit.data?.conectado && <button className="botao claro pequeno" onClick={() => window.confirm('Desconectar este celular do sistema?') && acao.mutate('desconectar')}>Desconectar</button>}
             {c.tipo === 'evolution' && <button className="botao claro pequeno" title="Trazer as conversas antigas deste número, pelo período que você escolher" onClick={() => setHistorico((v) => !v)}>{historico ? 'Fechar histórico' : 'Importar histórico'}</button>}
             <button className="botao claro pequeno" onClick={editar}>Editar</button>
             <button className="botao claro pequeno perigo" disabled={excluir.isPending} onClick={confirmarExclusao}>{excluir.isPending ? 'Excluindo…' : 'Excluir'}</button>
@@ -116,6 +117,7 @@ function CartaoCanal({ canal: c, editar, destaque }: { canal: Canal; editar: () 
         <div className="muted" style={{ fontSize: 12, marginTop: 8, wordBreak: 'break-all' }}>
           Webhook: <code>{c.webhook}</code>{' '}
           <button className="botao claro pequeno" onClick={async () => { try { await navigator.clipboard.writeText(c.webhook!); setCopiado(true); } catch { window.prompt('Webhook:', c.webhook); } }}>{copiado ? 'Copiado' : 'Copiar'}</button>
+          {c.tipo === 'instagram' && <div>No app da Meta (Instagram › Webhooks, ou Messenger › Configurações do Instagram), cole este endereço como URL de retorno e use como token de verificação o final do endereço (depois da última barra). Assine os campos "messages" (e "messaging_postbacks"). O Instagram precisa ser profissional e estar ligado à página do Facebook do app.</div>}
           {c.tipo === 'oficial' && <div>No app da Meta (WhatsApp › Configuração), cole este endereço como URL de retorno e use como token de verificação o final do endereço (depois da última barra). Assine os campos "messages".</div>}
         </div>
       )}
@@ -241,11 +243,18 @@ function FormCanal({ tipo, canal, fechar, porToken: novoPorToken }: { tipo: Tipo
   );
   return (
     <div className="cartao form">
-      <div className="secao" style={{ gridColumn: '1 / -1', marginTop: 0 }}>{canal ? `Editar ${canal.nome}` : tipo === 'oficial' ? 'Novo WhatsApp oficial (API Cloud da Meta)' : porToken ? 'Evolution API com token (instância que já existe)' : tipo === 'evolution' ? 'Evolution API por QR code' : 'Novo WhatsApp pela Z-API (ID da instância e token)'}</div>
+      <div className="secao" style={{ gridColumn: '1 / -1', marginTop: 0 }}>{canal ? `Editar ${canal.nome}` : tipo === 'instagram' ? 'Novo Instagram (Direct pela API da Meta)' : tipo === 'oficial' ? 'Novo WhatsApp oficial (API Cloud da Meta)' : porToken ? 'Evolution API com token (instância que já existe)' : tipo === 'evolution' ? 'Evolution API por QR code' : 'Novo WhatsApp pela Z-API (ID da instância e token)'}</div>
       {porToken && !canal && <p className="muted l4" style={{ margin: 0 }}>Para um número que já está numa instância do seu servidor Evolution. O sistema confere os dados, aponta o webhook da instância para cá e não cria nem apaga nada no seu servidor. Se a instância estiver desconectada, o QR code aparece aqui.</p>}
       {tipo === 'evolution' && !porToken && !canal && <p className="muted l4" style={{ margin: 0 }}>Só dê um nome ao número e salve. O QR code aparece na hora: é ler com o celular e pronto, sem digitar nenhum código.</p>}
       <Campo rotulo="Nome do número" className="l2"><input value={f.nome} onChange={(e) => setF({ ...f, nome: e.target.value })} placeholder={tipo === 'oficial' ? 'Matriz oficial' : 'Celular da Ana'} /></Campo>
-      {tipo === 'oficial' ? (
+      {tipo === 'instagram' ? (
+        <>
+          {cfg('igId', 'ID da conta do Instagram (IG User ID)', 'Meta for Developers › Instagram › Configuração da API (ou Graph API: página › instagram_business_account)')}
+          {cfg('token', 'Token de acesso', 'Token da página ligada ao Instagram (ou do login do Instagram, começa com IG), com instagram_manage_messages', true)}
+          {cfg('appSecret', 'App Secret (recomendado)', 'Confere que o aviso veio mesmo da Meta', true)}
+          <p className="muted l4" style={{ margin: 0 }}>Responde as mensagens do Direct pelo CRM, com o mesmo funil e as mesmas filas do WhatsApp. Por enquanto vai só texto, e só dá para responder até 24 horas depois da última mensagem da pessoa (regra da Meta).</p>
+        </>
+      ) : tipo === 'oficial' ? (
         <>
           {cfg('phoneNumberId', 'Phone Number ID', 'Meta for Developers › WhatsApp › Configuração da API')}
           {cfg('wabaId', 'WhatsApp Business Account ID (WABA)')}
@@ -268,7 +277,7 @@ function FormCanal({ tipo, canal, fechar, porToken: novoPorToken }: { tipo: Tipo
       <Campo rotulo="Card novo entra no funil" className="l2" ajuda="Quem escreve pela primeira vez vira card aqui">
         <select value={f.funilEntradaId} onChange={(e) => setF({ ...f, funilEntradaId: e.target.value })}><option value="">Não criar card</option>{funis.data?.map((x) => <option key={x.id} value={x.id}>{x.nome}</option>)}</select>
       </Campo>
-      {tipo !== 'oficial' && (
+      {tipo !== 'oficial' && tipo !== 'instagram' && (
         <Campo rotulo="Dono do número (opcional)" className="l2" ajuda="Celular de uma atendente">
           <select value={f.usuarioId} onChange={(e) => setF({ ...f, usuarioId: e.target.value })}><option value="">Número da empresa</option>{atendentes.data?.map((a) => <option key={a.id} value={a.id}>{a.nome} · {a.grupo}{a.semCrm ? ' (sem acesso ao CRM)' : ''}</option>)}</select>
         </Campo>

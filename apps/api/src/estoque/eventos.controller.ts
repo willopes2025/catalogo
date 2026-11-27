@@ -15,6 +15,10 @@ const eventoSchema = z.object({
   cidade: z.string().trim().max(80).nullable().optional(),
   observacao: z.string().trim().max(500).nullable().optional(),
   ativo: z.boolean().optional(),
+  /** Ponto no mapa e raio (m): o ponto eletrônico vale lá enquanto o evento estiver ativo. */
+  latitude: z.number().min(-90).max(90).nullable().optional(),
+  longitude: z.number().min(-180).max(180).nullable().optional(),
+  raioM: z.number().int().min(30).max(5000).nullable().optional(),
 });
 
 /**
@@ -31,7 +35,7 @@ export class EventosController {
   @Get()
   listar() {
     return this.db
-      .select({ id: locaisEstoque.id, nome: locaisEstoque.nome, empresaId: locaisEstoque.empresaId, empresa: empresas.nome, inicio: locaisEstoque.inicio, fim: locaisEstoque.fim, cidade: locaisEstoque.cidade, observacao: locaisEstoque.observacao, ativo: locaisEstoque.ativo })
+      .select({ id: locaisEstoque.id, nome: locaisEstoque.nome, empresaId: locaisEstoque.empresaId, empresa: empresas.nome, inicio: locaisEstoque.inicio, fim: locaisEstoque.fim, cidade: locaisEstoque.cidade, observacao: locaisEstoque.observacao, ativo: locaisEstoque.ativo, latitude: locaisEstoque.latitude, longitude: locaisEstoque.longitude, raioM: locaisEstoque.raioM })
       .from(locaisEstoque)
       .innerJoin(empresas, eq(empresas.id, locaisEstoque.empresaId))
       .where(eq(locaisEstoque.tipo, 'evento'))
@@ -48,7 +52,7 @@ export class EventosController {
     if (!emp) throw new BadRequestException('Empresa não encontrada.');
     const [igual] = await this.db.select({ id: locaisEstoque.id }).from(locaisEstoque).where(and(eq(locaisEstoque.tipo, 'evento'), sql`lower(${locaisEstoque.nome}) = lower(${d.nome})`));
     if (igual) throw new BadRequestException('Já existe um evento com esse nome.');
-    const [l] = await this.db.insert(locaisEstoque).values({ empresaId: emp.id, nome: d.nome, tipo: 'evento', inicio: d.inicio ?? null, fim: d.fim ?? null, cidade: d.cidade ?? null, observacao: d.observacao ?? null, ativo: d.ativo ?? true }).returning();
+    const [l] = await this.db.insert(locaisEstoque).values({ empresaId: emp.id, nome: d.nome, tipo: 'evento', inicio: d.inicio ?? null, fim: d.fim ?? null, cidade: d.cidade ?? null, observacao: d.observacao ?? null, ativo: d.ativo ?? true, latitude: d.latitude ?? null, longitude: d.longitude ?? null, raioM: d.raioM ?? null }).returning();
     await this.auditoria.registrar({ usuarioId: u.id, acao: 'criar', entidade: 'evento', entidadeId: l.id, dados: { nome: l.nome } });
     return l;
   }
@@ -69,7 +73,7 @@ export class EventosController {
       if (r.caixa) throw new BadRequestException('Feche o caixa do evento antes de encerrar.');
       if (r.pecas > 0) throw new BadRequestException(`Ainda há ${r.pecas} peça(s) no estoque do evento. Transfira de volta antes de encerrar.`);
     }
-    const [l] = await this.db.update(locaisEstoque).set({ ...(d.nome ? { nome: d.nome } : {}), ...(d.empresaId ? { empresaId: d.empresaId } : {}), inicio, fim, ...(d.cidade !== undefined ? { cidade: d.cidade } : {}), ...(d.observacao !== undefined ? { observacao: d.observacao } : {}), ...(d.ativo !== undefined ? { ativo: d.ativo } : {}) }).where(eq(locaisEstoque.id, id)).returning();
+    const [l] = await this.db.update(locaisEstoque).set({ ...(d.nome ? { nome: d.nome } : {}), ...(d.empresaId ? { empresaId: d.empresaId } : {}), inicio, fim, ...(d.cidade !== undefined ? { cidade: d.cidade } : {}), ...(d.observacao !== undefined ? { observacao: d.observacao } : {}), ...(d.ativo !== undefined ? { ativo: d.ativo } : {}), ...(d.latitude !== undefined ? { latitude: d.latitude } : {}), ...(d.longitude !== undefined ? { longitude: d.longitude } : {}), ...(d.raioM !== undefined ? { raioM: d.raioM } : {}) }).where(eq(locaisEstoque.id, id)).returning();
     await this.auditoria.registrar({ usuarioId: u.id, acao: 'editar', entidade: 'evento', entidadeId: id, dados: d });
     return l;
   }

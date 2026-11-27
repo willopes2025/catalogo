@@ -139,7 +139,9 @@ export const CONFIGS = {
     padrao: {
       /** Batida fora da cerca do GPS: só sinaliza no espelho ou recusa. */
       cercaGps: 'sinalizar' as 'sinalizar' | 'bloquear',
-      exigirFoto: true,
+      exigirFoto: true as boolean,
+      /** Confere a selfie com a foto de referência (Claude) e marca para o RH revisar o que não confere. */
+      conferirRosto: true as boolean,
       /** Número de registro do programa no INPI (aparece no AFD, no AEJ e no comprovante). */
       inpi: '',
       contabilidadeNome: '',
@@ -155,6 +157,7 @@ export const CONFIGS = {
     schema: z.object({
       cercaGps: z.enum(['sinalizar', 'bloquear']),
       exigirFoto: z.boolean(),
+      conferirRosto: z.boolean().default(true),
       inpi: z.string().max(17),
       contabilidadeNome: z.string().max(120),
       contabilidadeEmail: z.union([z.literal(''), z.string().email('E-mail da contabilidade inválido')]),

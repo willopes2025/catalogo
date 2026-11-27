@@ -10,6 +10,7 @@ import { TranscricaoService } from './transcricao.service';
 import { PEDIU_SAIR, preencherTexto, primeiroNome, variaveisDosCampos } from './telefone';
 import { ConexaoOficial } from './whatsapp/oficial';
 import { ConexaoZapi } from './whatsapp/zapi';
+import { ConexaoInstagram, ehContatoInstagram } from './whatsapp/instagram';
 import { ConexaoEvolution, apagarInstancia, criarInstancia, evolutionDisponivel, nomeInstancia, validarEnderecoEvolution } from './whatsapp/evolution';
 import { ErroCanal, type Conexao, type MensagemEntrada, type MensagemSaida, type ReacaoEntrada, type StatusEntrada } from './whatsapp/tipos';
 import { urlPublica } from '../comum/url';
@@ -132,6 +133,7 @@ export class CanaisService implements OnModuleInit {
   validarConfig(tipo: string, cfg: Record<string, string>) {
     if (tipo === 'oficial' && !(cfg.phoneNumberId && cfg.wabaId && cfg.token)) throw new BadRequestException('Preencha o Phone Number ID, o WABA ID e o token da Meta.');
     if (tipo === 'qrcode' && !(cfg.instancia && cfg.token)) throw new BadRequestException('Preencha a instância e o token da Z-API.');
+    if (tipo === 'instagram' && !(cfg.igId && cfg.token)) throw new BadRequestException('Preencha o ID da conta do Instagram e o token da Meta.');
     if (tipo === 'evolution' && this.evolutionPorToken(cfg)) {
       // Instância que já existe em outro servidor Evolution: endereço, nome e token.
       if (!(cfg.servidor && cfg.instancia && cfg.token)) throw new BadRequestException('Preencha o endereço do servidor Evolution, o nome da instância e o token dela.');
@@ -150,7 +152,7 @@ export class CanaisService implements OnModuleInit {
     return !!(cfg.servidor || cfg.token);
   }
 
-  async criar(d: { nome: string; tipo: 'oficial' | 'qrcode' | 'evolution'; config: Record<string, string>; usuarioId?: string | null; atendentes?: string[]; funilEntradaId?: string | null }) {
+  async criar(d: { nome: string; tipo: 'oficial' | 'qrcode' | 'evolution' | 'instagram'; config: Record<string, string>; usuarioId?: string | null; atendentes?: string[]; funilEntradaId?: string | null }) {
     this.validarConfig(d.tipo, d.config);
     const [c] = await this.db
       .insert(crmCanais)
@@ -209,6 +211,7 @@ export class CanaisService implements OnModuleInit {
 
   conexao(c: Canal): Conexao {
     const cfg = this.abrirConfig(c);
+    if (c.tipo === 'instagram') return new ConexaoInstagram({ igId: cfg.igId, token: cfg.token, appSecret: cfg.appSecret || undefined });
     if (c.tipo === 'oficial') return new ConexaoOficial({ phoneNumberId: cfg.phoneNumberId, wabaId: cfg.wabaId, token: cfg.token, appSecret: cfg.appSecret || undefined });
     // Instância de outro servidor Evolution: ele chega no sistema pela internet (endereço público do webhook).
     if (c.tipo === 'evolution' && this.evolutionPorToken(cfg)) return new ConexaoEvolution(cfg.instancia, this.urlWebhook(c), { url: cfg.servidor, chave: cfg.token });
@@ -388,6 +391,7 @@ export class CanaisService implements OnModuleInit {
         saida = { para: contato.telefone, tipo: 'texto', texto: textoGuardado };
       }
     } else {
+      if (canal.tipo === 'instagram' && !this.dentroDaJanela(cv)) throw new BadRequestException('Fora da janela de 24h: no Instagram só dá para responder quem mandou mensagem nas últimas 24 horas.');
       if (canal.tipo === 'oficial' && !this.dentroDaJanela(cv)) throw new BadRequestException('Fora da janela de 24h: o contato não escreveu nas últimas 24 horas. No número oficial, use um template aprovado.');
       if (e.tipo === 'texto' && !e.texto?.trim()) throw new BadRequestException('Escreva a mensagem.');
       textoGuardado = e.texto ? preencherTexto(e.texto, vars) : null;
@@ -439,7 +443,7 @@ export class CanaisService implements OnModuleInit {
     const c = await this.obter(canalId).catch(() => null);
     if (!c || c.tokenWebhook !== token) throw new ForbiddenException('Webhook inválido.');
     const con = this.conexao(c);
-    if (con instanceof ConexaoOficial && !con.assinaturaValida(bruto, assinatura)) throw new ForbiddenException('Assinatura da Meta inválida.');
+    if ((con instanceof ConexaoOficial || con instanceof ConexaoInstagram) && !con.assinaturaValida(bruto, assinatura)) throw new ForbiddenException('Assinatura da Meta inválida.');
     const { mensagens, status, reacoes, apagadas }: ReturnType<Conexao['ler']> = con.ler(corpo);
     // Marca que o WhatsApp falou com o sistema por este número (a tela de configuração mostra, para conferir se está chegando).
     if (!c.ultimoWebhookEm || Date.now() - c.ultimoWebhookEm.getTime() > 30_000) await this.db.update(crmCanais).set({ ultimoWebhookEm: new Date() }).where(eq(crmCanais.id, c.id));
@@ -542,6 +546,20 @@ export class CanaisService implements OnModuleInit {
     return { ...minha, contato: contato.nome, comOutro: false };
   }
 
+  /** Contato do Instagram: a chave é "ig:<id>"; na primeira mensagem, busca o nome e o @ na Meta. */
+  private async contatoInstagram(con: ConexaoInstagram, chave: string, minha: boolean) {
+    const [ja] = await this.db.select().from(crmContatos).where(eq(crmContatos.telefone, chave)).limit(1);
+    if (ja) return ja;
+    const p = minha ? { nome: null, usuario: null } : await con.perfil(chave);
+    const nome = p.nome || (p.usuario ? `@${p.usuario}` : `Instagram ${chave.slice(-6)}`);
+    const [novo] = await this.db
+      .insert(crmContatos)
+      .values({ telefone: chave, nome, camposExtras: p.usuario ? { Instagram: `@${p.usuario}` } : {} })
+      .onConflictDoUpdate({ target: crmContatos.telefone, set: { telefone: chave } })
+      .returning();
+    return novo;
+  }
+
   private async entrada(c: Canal, con: Conexao, m: MensagemEntrada) {
     const [dup] = await this.db.select({ id: crmMensagens.id }).from(crmMensagens).where(eq(crmMensagens.idExterno, m.idExterno)).limit(1);
     if (dup) return;
@@ -554,7 +572,7 @@ export class CanaisService implements OnModuleInit {
         return;
       }
     }
-    const contato = await this.crm.garantirContato({ telefone: m.telefone, nome: m.minha ? null : m.nome });
+    const contato = ehContatoInstagram(m.telefone) ? await this.contatoInstagram(con as ConexaoInstagram, m.telefone, m.minha) : await this.crm.garantirContato({ telefone: m.telefone, nome: m.minha ? null : m.nome });
     const cv = await this.garantirConversa(contato.id, c.id);
     let midia: string | null = null;
     let texto = m.texto;

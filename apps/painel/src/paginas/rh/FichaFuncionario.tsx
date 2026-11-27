@@ -8,6 +8,7 @@ import { Abas, Campo, Carregando, Erro, Topo, camposComErro } from '../../compon
 import { TabelaEspelho } from './MeuPonto';
 import { abrirArquivo, competenciaAtual, hojeBR, lerArquivo, nomeMes, ultimasCompetencias } from './comum';
 import './rh.css';
+import { FotoRosto } from './Rosto';
 
 type Aba = 'dados' | 'documentos' | 'ponto' | 'ocorrencias' | 'acesso';
 const VAZIO = { empresaId: '', nome: '', nomeSocial: '', cpf: '', pis: '', rg: '', nascimento: '', telefone: '', email: '', cep: '', endereco: '', cidade: '', uf: 'ES', cargo: '', departamento: '', tipoContrato: 'clt', salario: '', ctps: '', matriculaEsocial: '', escalaId: '', dataAdmissao: hojeBR(), batePonto: true, observacao: '', banco: '', agencia: '', conta: '', pix: '' };
@@ -27,6 +28,7 @@ export function FichaFuncionario() {
       <Topo eb={<Link to="/rh?aba=funcionarios">RH › Funcionários</Link>} titulo={novo ? 'Novo funcionário' : f.nome} sub={!novo && <>{f.cargo ?? 'Sem cargo'} · admitido em {new Date(`${f.dataAdmissao}T12:00:00Z`).toLocaleDateString('pt-BR', { timeZone: 'UTC' })} {f.status !== 'ativo' && <span className={`etiqueta ${f.status === 'afastado' ? 'alerta' : 'neutra'}`}>{f.status}</span>}</>} />
       {!novo && <Abas ativa={aba} mudar={(a) => setParams({ aba: a })} abas={[['dados', 'Dados'], ['documentos', `Documentos (${f.documentos.length})`], ['ponto', 'Ponto'], ['ocorrencias', 'Faltas e afastamentos'], ['acesso', 'Acesso e desligamento']]} />}
       {(novo || aba === 'dados') && <Dados f={f} />}
+      {!novo && aba === 'dados' && <FotoRosto funcionarioId={f.id} />}
       {!novo && aba === 'documentos' && <Documentos f={f} tipos={resumo.data?.tiposDocumento ?? {}} />}
       {!novo && aba === 'ponto' && <Ponto f={f} />}
       {!novo && aba === 'ocorrencias' && <Ocorrencias f={f} tipos={resumo.data?.tiposOcorrencia ?? {}} />}

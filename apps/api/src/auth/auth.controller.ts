@@ -14,7 +14,7 @@ import { RhService } from '../rh/rh.service';
 
 // Entra com o e-mail ou, para quem não tem e-mail (ex.: motoboy), com o CPF.
 const loginSchema = z.object({ email: z.string().trim().toLowerCase().refine((v) => /^\S+@\S+\.\S+$/.test(v) || v.replace(/\D/g, '').length === 11, 'Informe o e-mail ou o CPF'), senha: z.string().min(1, 'Informe a senha') });
-const trocaSchema = z.object({ atual: z.string().min(1), nova: z.string().min(10, 'A nova senha precisa de pelo menos 10 caracteres') });
+const trocaSchema = z.object({ atual: z.string().optional().default(''), nova: z.string().min(8, 'A nova senha precisa de pelo menos 8 caracteres') });
 
 const falhasPorEmail = new Limitador(8, 15 * 60_000, 'Muitas tentativas de login com este e-mail.');
 const falhasPorIp = new Limitador(30, 15 * 60_000, 'Muitas tentativas de login deste aparelho.');
@@ -70,7 +70,9 @@ export class AuthController {
   async trocarSenha(@Usuario() u: UsuarioLogado, @Body() body: unknown) {
     const { atual, nova } = validar(trocaSchema, body);
     const [reg] = await this.db.select().from(usuarios).where(eq(usuarios.id, u.id));
-    if (!reg || !(await bcrypt.compare(atual, reg.senhaHash))) throw new BadRequestException('Senha atual incorreta.');
+    if (!reg) throw new BadRequestException('Usuário não encontrado.');
+    // Primeiro acesso (senha provisória): quem acabou de entrar com ela não precisa digitá-la de novo.
+    if (!reg.senhaProvisoria && !(await bcrypt.compare(atual, reg.senhaHash))) throw new BadRequestException('Senha atual incorreta.');
     if (await bcrypt.compare(nova, reg.senhaHash)) throw new BadRequestException('A nova senha precisa ser diferente da atual.');
     await this.db.update(usuarios).set({ senhaHash: await bcrypt.hash(nova, 10), senhaProvisoria: false }).where(eq(usuarios.id, u.id));
     invalidarSessoes();

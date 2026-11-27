@@ -24,7 +24,7 @@ export class EnvioDocumentoService {
   /** Texto livre pelo primeiro número ativo que não é o oficial (o oficial só aceita template fora da janela de 24h). */
   async whatsapp(pessoaId: string, telefone: string, nome: string, texto: string) {
     const cs = await this.db.select({ id: crmCanais.id, tipo: crmCanais.tipo }).from(crmCanais).where(and(eq(crmCanais.ativo, true), isNull(crmCanais.excluidoEm))).orderBy(asc(crmCanais.criadoEm));
-    const canal = cs.find((c) => c.tipo !== 'oficial') ?? cs[0];
+    const canal = cs.find((c) => c.tipo !== 'oficial' && c.tipo !== 'instagram') ?? cs.find((c) => c.tipo !== 'instagram');
     if (!canal) throw new BadRequestException('Nenhum número de WhatsApp ativo no CRM.');
     const contato = await this.crm.garantirContato({ telefone, nome, pessoaId });
     const cv = await this.canais.garantirConversa(contato.id, canal.id, 'resolvida');

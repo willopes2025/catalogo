@@ -88,7 +88,7 @@ export class AvisarMaletaService {
       else {
         try {
           const cs = await this.db.select({ id: crmCanais.id, tipo: crmCanais.tipo }).from(crmCanais).where(and(eq(crmCanais.ativo, true), isNull(crmCanais.excluidoEm))).orderBy(asc(crmCanais.criadoEm));
-          const canal = cs.find((c) => c.tipo !== 'oficial') ?? cs[0];
+          const canal = cs.find((c) => c.tipo !== 'oficial' && c.tipo !== 'instagram') ?? cs.find((c) => c.tipo !== 'instagram');
           if (!canal) throw new Error('nenhum número de WhatsApp ativo no CRM');
           const contato = await this.crm.garantirContato({ telefone: msg.telefone, nome: msg.nome, pessoaId: msg.representanteId });
           const cv = await this.canais.garantirConversa(contato.id, canal.id, 'resolvida');

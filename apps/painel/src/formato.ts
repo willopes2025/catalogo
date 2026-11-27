@@ -25,6 +25,7 @@ export function dataHora(d?: string | null) {
 }
 export const pct = (pb: number) => `${(pb / 100).toLocaleString('pt-BR', { maximumFractionDigits: 1 })}%`;
 export const telefone = (t?: string | null) => {
+  if (t?.startsWith('ig:')) return 'Instagram';
   const d = (t ?? '').replace(/\D/g, '');
   if (d.length === 11) return `(${d.slice(0, 2)}) ${d.slice(2, 7)}-${d.slice(7)}`;
   if (d.length === 10) return `(${d.slice(0, 2)}) ${d.slice(2, 6)}-${d.slice(6)}`;

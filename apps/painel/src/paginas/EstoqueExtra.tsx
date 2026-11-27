@@ -41,6 +41,9 @@ export function Inventario({ locais }: { locais: Local[] }) {
   if (!pode('estoque', 'editar')) return <div className="aviso alerta">Você não tem permissão para ajustar o estoque.</div>;
   return (
     <div className="coluna">
+      <div className="aviso alerta">
+        <b>Ajuste = quantidade real.</b> Informe quantas peças existem de verdade no local (o que você contou), e não quanto quer somar ou tirar. O sistema compara com o que estava registrado, mostra a diferença e corrige só ela.
+      </div>
       <div className="cartao form">
         <Campo rotulo="Local contado"><select value={localId} onChange={(e) => { setLocalId(e.target.value); setItens([]); setConferindo(false); }}><option value="">Escolha</option>{locais.filter((l) => l.tipo !== 'maleta').map((l) => <option key={l.id} value={l.id}>{l.nome}</option>)}</select></Campo>
         <Campo rotulo="Tipo de contagem" ajuda={modo === 'completo' ? 'O que não for bipado será zerado' : 'Só as peças bipadas são ajustadas'}>
@@ -51,7 +54,7 @@ export function Inventario({ locais }: { locais: Local[] }) {
       </div>
       {localId && (
         <div className="cartao">
-          <p className="muted" style={{ marginTop: 0 }}>Bipe cada peça que está fisicamente no local. Bipar de novo soma; você também pode digitar a quantidade.</p>
+          <p className="muted" style={{ marginTop: 0 }}>Bipe cada peça que está fisicamente no local (bipar de novo soma) ou digite a <b>quantidade real contada</b>. Ex.: o sistema diz 5 e você contou 3 → digite 3; o ajuste será −2.</p>
           <Leitor itens={itens} mudar={(i) => { setItens(i); setConferindo(false); }} />
         </div>
       )}
@@ -69,7 +72,7 @@ export function Inventario({ locais }: { locais: Local[] }) {
           </div>
           {diferentes.length ? (
             <table className="tabela">
-              <thead><tr><th></th><th>Código</th><th>Peça</th><th className="num">No sistema</th><th className="num">Contada</th><th className="num">Diferença</th></tr></thead>
+              <thead><tr><th></th><th>Código</th><th>Peça</th><th className="num">Estava no sistema</th><th className="num">Quantidade real (contada)</th><th className="num">Diferença que será ajustada</th></tr></thead>
               <tbody>
                 {diferentes.map((l) => (
                   <tr key={l.codigoBarras}>
@@ -94,7 +97,7 @@ export function Inventario({ locais }: { locais: Local[] }) {
                 title={motivo.trim().length < 3 ? 'Informe o motivo' : undefined}
                 onClick={() => resultado.mutate({ localId, motivo: motivo.trim(), itens: diferentes.map((l) => ({ codigoBarras: l.codigoBarras, quantidadeContada: l.contada })) })}
               >
-                Gravar ajuste de {diferentes.length} produto(s)
+                Gravar quantidade real de {diferentes.length} produto(s)
               </button>
             </div>
           )}

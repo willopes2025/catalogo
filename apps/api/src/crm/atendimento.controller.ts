@@ -581,7 +581,7 @@ export class AtendimentoController {
       // Apagada para todos: o texto e o arquivo não aparecem mais.
       mensagens: ms.reverse().map((m) => (m.apagada ? { ...m, texto: null, midia: null, midiaNome: null, transcricao: null } : m)),
       // O que este tipo de número consegue fazer com uma mensagem.
-      recursos: { reagir: true, apagar: canal.tipo !== 'oficial', ia: this.ia.texto, transcrever: this.ia.imagem },
+      recursos: { reagir: canal.tipo !== 'instagram', apagar: !['oficial', 'instagram'].includes(canal.tipo), ia: this.ia.texto, transcrever: this.ia.imagem },
       // A IA está atendendo esta conversa agora?
       iaAtendendo: this.ia.texto && (cv.iaAtiva === true || (cv.iaAtiva === null && cv.status === 'fila' && (await this.agente.config().then((a) => a.ativo && (!a.canais.length || a.canais.includes(cv.canalId)))))),
     };
@@ -1189,7 +1189,7 @@ export class AtendimentoController {
     const d = validar(
       z.object({
         nome: z.string().trim().min(2).max(80),
-        tipo: z.enum(['oficial', 'qrcode', 'evolution']),
+        tipo: z.enum(['oficial', 'qrcode', 'evolution', 'instagram']),
         config: z.record(z.string().max(40), z.string().max(2000)).default({}),
         usuarioId: uuid.nullable().optional(),
         atendentes: z.array(uuid).default([]),

@@ -379,6 +379,13 @@
       "when": 1795810981283,
       "tag": "0053_contrato_etapa_pix",
       "breakpoints": true
+    },
+    {
+      "idx": 54,
+      "version": "7",
+      "when": 1795813827710,
+      "tag": "0054_rosto_evento_ponto",
+      "breakpoints": true
     }
   ]
 }

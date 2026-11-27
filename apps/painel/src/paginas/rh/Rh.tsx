@@ -6,8 +6,9 @@ import { Abas, Campo, Carregando, Erro, Topo } from '../../componentes/ui';
 import { abrirArquivo, competenciaAtual, hm, nomeMes, SEMANA, ultimasCompetencias } from './comum';
 import '../inicio.css';
 import './rh.css';
+import { ConferirRostos } from './Rosto';
 
-type Aba = 'hoje' | 'funcionarios' | 'mes' | 'contabilidade' | 'configurar';
+type Aba = 'hoje' | 'funcionarios' | 'mes' | 'rosto' | 'contabilidade' | 'configurar';
 const iniciais = (n: string) => n.split(/\s+/).slice(0, 2).map((p) => p[0]?.toUpperCase() ?? '').join('');
 
 /** RH e ponto (visão da empresa). */
@@ -17,10 +18,11 @@ export function Rh() {
   return (
     <>
       <Topo eb="RH e ponto" titulo="RH e ponto eletrônico" acoes={pode('rh', 'criar') && <Link className="botao" to="/rh/funcionario/novo">Novo funcionário</Link>} />
-      <Abas ativa={aba} mudar={(a) => setParams(a === 'hoje' ? {} : { aba: a })} abas={[['hoje', 'Hoje'], ['funcionarios', 'Funcionários'], ['mes', 'Ponto do mês'], ['contabilidade', 'Enviar à contabilidade'], ['configurar', 'Configurar']]} />
+      <Abas ativa={aba} mudar={(a) => setParams(a === 'hoje' ? {} : { aba: a })} abas={[['hoje', 'Hoje'], ['funcionarios', 'Funcionários'], ['mes', 'Ponto do mês'], ['rosto', 'Conferir rostos'], ['contabilidade', 'Enviar à contabilidade'], ['configurar', 'Configurar']]} />
       {aba === 'hoje' && <Hoje />}
       {aba === 'funcionarios' && <Funcionarios />}
       {aba === 'mes' && <PontoDoMes />}
+      {aba === 'rosto' && <ConferirRostos />}
       {aba === 'contabilidade' && <Contabilidade />}
       {aba === 'configurar' && <Configurar />}
     </>
@@ -251,6 +253,7 @@ function Configurar() {
         <Campo rotulo="Batida fora do local (GPS)" className="l2" ajuda="Sinalizar registra e marca no espelho; bloquear não deixa bater fora do raio.">
           <select disabled={!editar} value={r.cercaGps} onChange={(e) => setR({ ...r, cercaGps: e.target.value })}><option value="sinalizar">Registrar e sinalizar</option><option value="bloquear">Não deixar bater</option></select>
         </Campo>
+        <Campo rotulo="Conferir o rosto da selfie" className="l2" ajuda="O Claude compara com a foto de referência; o que não confere vai para RH › Conferir rostos (não bloqueia o ponto)."><select disabled={!editar || !r.exigirFoto} value={r.conferirRosto !== false && r.exigirFoto ? '1' : '0'} onChange={(e) => setR({ ...r, conferirRosto: e.target.value === '1' })}><option value="1">Conferir</option><option value="0">Não conferir</option></select></Campo>
         <Campo rotulo="Foto na batida" className="l2"><select disabled={!editar} value={r.exigirFoto ? '1' : '0'} onChange={(e) => setR({ ...r, exigirFoto: e.target.value === '1' })}><option value="1">Exigir selfie</option><option value="0">Sem foto</option></select></Campo>
         <Campo rotulo="Registro do programa no INPI" className="l2" ajuda="Obrigatório para o REP-P valer como registro oficial. Sai no AFD, AEJ e comprovante."><input disabled={!editar} value={r.inpi} onChange={(e) => setR({ ...r, inpi: e.target.value })} placeholder="BR 51 2026 000000-0" /></Campo>
         <Campo rotulo="CNPJ do desenvolvedor do programa" className="l2" ajuda="Identificação exigida no AEJ (Wide Inteligência Comercial)."><input disabled={!editar} value={r.desenvolvedorDocumento} onChange={(e) => setR({ ...r, desenvolvedorDocumento: e.target.value })} /></Campo>
