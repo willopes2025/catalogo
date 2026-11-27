@@ -1,5 +1,5 @@
-import { useMemo, useState, type FormEvent, type ReactNode } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react';
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { data, reais } from '../formato';
 import { apiPortal, ErroPortal } from './api';
@@ -36,6 +36,7 @@ export function Mais() {
   const perfil = useQuery({ queryKey: ['p-perfil'], queryFn: () => apiPortal('/perfil') });
   const contato = perfil.data?.whatsappMatriz ? zap(perfil.data.whatsappMatriz, `Oi! Aqui é a ${perfil.data.nome.split(' ')[0]}, consultora.`) : null;
   const itens: [string, string, string][] = [
+    ['/portal/meu-catalogo', '🛒', 'Meu catálogo online'],
     ['/portal/pedir', '🛍️', 'Pedir peças para a maleta'],
     ['/portal/financeiro', '💳', 'Minhas parcelas com a Aritana'],
     ['/portal/extrato', '📈', 'Comissões e créditos'],
@@ -53,6 +54,110 @@ export function Mais() {
         <Link key={to} to={to} className="p-cartao p-bloco p-linha"><span>{ico} {nome}</span><span>›</span></Link>
       ))}
       {contato && <a className="p-botao p-bloco" href={contato} target="_blank" rel="noreferrer">💬 Falar com a Aritana no WhatsApp</a>}
+    </>
+  );
+}
+
+// ───── Peças liberadas pela matriz (pedir peças e montar o catálogo) ─────
+
+interface PaginaVitrine { itens: any[]; temMais: boolean; pagina: number; total: number; categorias: string[]; porCategoria: { nome: string; n: number }[]; meuCatalogo: { manual: boolean; escolhidas: number } }
+
+/** Busca com espera de meio segundo depois de digitar, carregando de 60 em 60 peças. */
+export function usarVitrinePortal(busca: string, categoria: string, escolhidas = false) {
+  const [termo, setTermo] = useState(busca);
+  useEffect(() => { const t = setTimeout(() => setTermo(busca), 450); return () => clearTimeout(t); }, [busca]);
+  return useInfiniteQuery({
+    queryKey: ['p-catalogo', termo, categoria, escolhidas],
+    initialPageParam: 1,
+    queryFn: ({ pageParam }) => apiPortal<PaginaVitrine>(`/catalogo?${new URLSearchParams({ pagina: String(pageParam), ...(termo.trim() && { busca: termo.trim() }), ...(categoria && { categoria }), ...(escolhidas && { escolhidas: '1' }) })}`),
+    getNextPageParam: (ultima) => (ultima.temMais ? ultima.pagina + 1 : undefined),
+  });
+}
+
+export function ChipsCategorias({ porCategoria, cat, setCat }: { porCategoria?: { nome: string; n: number }[]; cat: string; setCat: (c: string) => void }) {
+  if (!porCategoria?.length) return null;
+  return (
+    <div className="p-chips">
+      <button className={!cat ? 'ativo' : ''} onClick={() => setCat('')}>Todas</button>
+      {porCategoria.map((c) => <button key={c.nome} className={cat === c.nome ? 'ativo' : ''} onClick={() => setCat(c.nome)}>{c.nome} <span className="p-suave">{c.n}</span></button>)}
+    </div>
+  );
+}
+
+/**
+ * Catálogo online da consultora: no padrão entram todas as peças que a matriz liberou; no manual, só as que
+ * ela escolher aqui. As peças da maleta dela aparecem sempre, como pronta entrega.
+ */
+export function MeuCatalogo() {
+  const qc = useQueryClient();
+  const eu = useQuery({ queryKey: ['p-eu'], queryFn: () => apiPortal<any>('/eu') });
+  const [busca, setBusca] = useState('');
+  const [cat, setCat] = useState('');
+  const [soMinhas, setSoMinhas] = useState(false);
+  const [copiado, setCopiado] = useState(false);
+  const q = usarVitrinePortal(busca, cat, soMinhas);
+  const primeira = q.data?.pages[0];
+  const manual = primeira?.meuCatalogo.manual ?? false;
+  const atualizar = () => qc.invalidateQueries({ queryKey: ['p-catalogo'] });
+  const modo = useMutation({ mutationFn: (m: boolean) => apiPortal('/meu-catalogo/modo', { corpo: { manual: m } }), onSuccess: atualizar });
+  const escolher = useMutation({ mutationFn: (corpo: { incluir: boolean; produtoIds?: string[]; categoria?: string; todas?: boolean }) => apiPortal('/meu-catalogo/pecas', { corpo }), onSuccess: atualizar });
+  const url = eu.data?.catalogo ? `${window.location.origin}${eu.data.catalogo}` : null;
+  const copiar = async () => {
+    if (!url) return;
+    try {
+      if (navigator.share) await navigator.share({ title: 'Meu catálogo Aritana', url });
+      else { await navigator.clipboard.writeText(url); setCopiado(true); }
+    } catch { /* cancelado */ }
+  };
+  const itens = q.data?.pages.flatMap((p) => p.itens) ?? [];
+  return (
+    <>
+      <Topo titulo="Meu catálogo online" voltar="/portal/mais" sub="O link que você manda para as clientes escolherem e pedirem." />
+      {url && (
+        <div className="p-cartao p-col">
+          <span className="p-suave" style={{ wordBreak: 'break-all' }}>{url}</span>
+          <div className="p-linha" style={{ gap: 8 }}>
+            <button className="p-botao" onClick={() => void copiar()}>{copiado ? 'Link copiado!' : 'Compartilhar'}</button>
+            <a className="p-botao claro" href={url} target="_blank" rel="noreferrer">Ver como a cliente vê</a>
+          </div>
+        </div>
+      )}
+      <div className="p-cartao p-col">
+        <div className="p-rotulo">O que aparece no seu catálogo</div>
+        <label className="p-check"><input type="radio" checked={!manual} disabled={modo.isPending || !primeira} onChange={() => modo.mutate(false)} /> <span><b>Catálogo padrão</b><br /><span className="p-suave">Todas as peças que a Aritana libera, atualizado sozinho.</span></span></label>
+        <label className="p-check"><input type="radio" checked={manual} disabled={modo.isPending || !primeira} onChange={() => modo.mutate(true)} /> <span><b>Escolher as peças</b><br /><span className="p-suave">Só as que você marcar abaixo ({primeira?.meuCatalogo.escolhidas ?? 0} escolhida(s)).</span></span></label>
+        <span className="p-suave">As peças da sua maleta aparecem sempre, como pronta entrega. As outras a Aritana envia para a cliente (ou você retira).</span>
+        <Aviso erro={modo.error ?? escolher.error} />
+      </div>
+      <input className="p-busca" placeholder="Buscar por nome ou referência" value={busca} onChange={(e) => setBusca(e.target.value)} />
+      <ChipsCategorias porCategoria={primeira?.porCategoria} cat={cat} setCat={setCat} />
+      {manual && (
+        <div className="p-linha" style={{ gap: 8, flexWrap: 'wrap' }}>
+          <label className="p-check"><input type="checkbox" checked={soMinhas} onChange={(e) => setSoMinhas(e.target.checked)} /> Só as do meu catálogo</label>
+          <span style={{ display: 'flex', gap: 6 }}>
+            <button className="p-botao claro" disabled={escolher.isPending} onClick={() => escolher.mutate(cat ? { incluir: true, categoria: cat } : { incluir: true, todas: true })}>+ {cat ? `Toda ${cat}` : 'Todas'}</button>
+            <button className="p-botao claro" disabled={escolher.isPending} onClick={() => escolher.mutate(cat ? { incluir: false, categoria: cat } : { incluir: false, todas: true })}>− {cat ? `Tirar ${cat}` : 'Limpar'}</button>
+          </span>
+        </div>
+      )}
+      {q.isLoading && <Carregando />}
+      <Aviso erro={q.error} />
+      {primeira && <div className="p-suave">{primeira.total} peça(s) {soMinhas ? 'no seu catálogo' : 'liberadas'}{cat ? ` em ${cat}` : ''}</div>}
+      <div className="p-vitrine">
+        {itens.map((i) => (
+          <div key={i.id} className="p-cartao p-produto" style={manual && i.noCatalogo ? { outline: '2px solid var(--dourado, #b0813f)' } : undefined}>
+            {i.foto ? <img src={i.foto} alt="" loading="lazy" /> : <div className="p-foto" />}
+            <b>{i.descricao}</b>
+            <span className="p-suave">ref. {i.referencia}</span>
+            <span>{reais(i.preco)}</span>
+            {manual && (i.noCatalogo
+              ? <button className="p-botao claro" disabled={escolher.isPending} onClick={() => escolher.mutate({ incluir: false, produtoIds: [i.id] })}>✓ No catálogo</button>
+              : <button className="p-botao" disabled={escolher.isPending} onClick={() => escolher.mutate({ incluir: true, produtoIds: [i.id] })}>Colocar</button>)}
+          </div>
+        ))}
+      </div>
+      {q.data && !itens.length && <div className="p-cartao p-suave">Nenhuma peça encontrada.</div>}
+      {q.hasNextPage && <button className="p-botao claro" disabled={q.isFetchingNextPage} onClick={() => void q.fetchNextPage()}>{q.isFetchingNextPage ? 'Carregando…' : 'Ver mais peças'}</button>}
     </>
   );
 }

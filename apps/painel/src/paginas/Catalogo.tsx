@@ -6,7 +6,7 @@ import { reais } from '../formato';
 import { Carregando, Erro } from '../componentes/ui';
 import './catalogo.css';
 
-interface Peca { id: string; referencia: string; descricao: string; categoria: string | null; cor: string | null; tamanho: string | null; preco: number; foto: string | null; disponivel: number }
+interface Peca { id: string; referencia: string; descricao: string; categoria: string | null; cor: string | null; tamanho: string | null; preco: number; foto: string | null; disponivel: number; origem?: 'maleta' | 'matriz' }
 interface Vitrine {
   representante: { nome: string; cidade: string | null; uf: string | null; whatsapp: string | null; instagram: string | null };
   origem: 'maleta' | 'matriz' | null;
@@ -44,9 +44,11 @@ export function Catalogo() {
   const [busca, setBusca] = useState('');
   const [cat, setCat] = useState('');
   const [faixa, setFaixa] = useState('');
+  const [mostrar, setMostrar] = useState(60);
+  useEffect(() => setMostrar(60), [busca, cat, faixa]);
   const [sacola, setSacola] = usarSacola(slug);
   const [fechando, setFechando] = useState(false);
-  const [feito, setFeito] = useState<{ numero: number; total: number; origem: string; mensagem: string | null } | null>(null);
+  const [feito, setFeito] = useState<{ numero: number; numeros?: number[]; total: number; origem: string; mensagem: string | null } | null>(null);
   const [f, setF] = useState({ nome: '', telefone: '', cidade: '', entrega: 'combinar', endereco: '', observacao: '', consentimento: false, site: '' });
   const pecas = useMemo(() => {
     const lista = q.data?.pecas ?? [];
@@ -61,7 +63,7 @@ export function Catalogo() {
   const qtdTotal = naSacola.reduce((a, x) => a + x.qtd, 0);
   const enviar = useMutation({
     mutationFn: () =>
-      api<{ numero: number; total: number; origem: string; mensagem: string | null }>(`/publico/catalogo/${slug}/pedido`, {
+      api<{ numero: number; numeros?: number[]; total: number; origem: string; mensagem: string | null }>(`/publico/catalogo/${slug}/pedido`, {
         corpo: { itens: naSacola.map((x) => ({ produtoId: x.peca.id, quantidade: x.qtd })), nome: f.nome, telefone: f.telefone, cidade: f.cidade || null, entrega: f.entrega, endereco: f.entrega === 'entregar' ? f.endereco : null, observacao: f.observacao || null, consentimento: f.consentimento, site: f.site, origem: utmDaUrl() },
       }),
     onSuccess: (r) => { setFeito(r); setSacola({}); setFechando(false); },
@@ -80,7 +82,7 @@ export function Catalogo() {
     return (
       <div className="publico cat-feito">
         <img src="/logo-creme.png" alt="Aritana Semijoias" className="cat-logo-escuro" />
-        <h1>Pedido nº {feito.numero} enviado!</h1>
+        <h1>{(feito.numeros?.length ?? 1) > 1 ? `Pedidos nº ${feito.numeros!.join(' e ')} enviados!` : `Pedido nº ${feito.numero} enviado!`}</h1>
         <p>{feito.mensagem || `${primeiro} recebeu o seu pedido de ${reais(feito.total)} e vai falar com você pelo WhatsApp para combinar o pagamento e a entrega.`}</p>
         {zap(`Oi, ${primeiro}! Acabei de fazer o pedido nº ${feito.numero} pelo seu catálogo.`) && <a className="botao" href={zap(`Oi, ${primeiro}! Acabei de fazer o pedido nº ${feito.numero} pelo seu catálogo.`)!} target="_blank" rel="noreferrer">Avisar {primeiro} no WhatsApp</a>}
         <button className="botao claro" onClick={() => setFeito(null)}>Voltar ao catálogo</button>
@@ -106,7 +108,7 @@ export function Catalogo() {
       </div>
       {pecas.length === 0 ? <div className="cartao vazio">Nenhuma peça disponível agora. Fale com {primeiro} pelo WhatsApp.</div> : (
         <div className="grade" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))' }}>
-          {pecas.map((p) => {
+          {pecas.slice(0, mostrar).map((p) => {
             const qtd = sacola[p.id] ?? 0;
             return (
               <div key={p.id} className="cartao coluna" style={{ gap: 6, padding: 12, minWidth: 0 }}>
@@ -114,6 +116,7 @@ export function Catalogo() {
                 <b>{p.descricao}</b>
                 <span className="muted">ref. {p.referencia}{p.tamanho ? ` · tam. ${p.tamanho}` : ''}</span>
                 <span style={{ fontSize: 20, fontWeight: 700 }}>{reais(p.preco)}</span>
+                {p.origem && <span className="muted" style={{ fontSize: 12 }}>{p.origem === 'maleta' ? '✓ Pronta entrega' : 'Enviada pela Aritana'}</span>}
                 {pedidos.ativo ? (
                   qtd ? (
                     <div className="cat-qtd" style={{ marginTop: 'auto' }}>
@@ -133,7 +136,8 @@ export function Catalogo() {
           })}
         </div>
       )}
-      <p className="muted" style={{ marginTop: 24, textAlign: 'center' }}>Aritana Semijoias · {q.data!.origem === 'matriz' ? 'peças enviadas pela Aritana' : `as peças mostradas estão com ${primeiro}`}</p>
+      {pecas.length > mostrar && <div style={{ textAlign: 'center', marginTop: 16 }}><button className="botao claro" onClick={() => setMostrar((n) => n + 60)}>Ver mais peças ({pecas.length - mostrar})</button></div>}
+      <p className="muted" style={{ marginTop: 24, textAlign: 'center' }}>Aritana Semijoias · {pecas.length} peça(s) · "pronta entrega" está com {primeiro}; as outras a Aritana envia</p>
 
       {qtdTotal > 0 && !fechando && (
         <div className="cat-barra">

@@ -67,3 +67,4 @@ select.p-busca { appearance: auto; }
 .p-notas button.ativo { background: var(--marrom); color: #faf6ef; border-color: var(--marrom); }
 
 .p-bolha { position: absolute; top: 5px; right: 6px; min-width: 17px; height: 17px; padding: 0 4px; border-radius: 9px; background: var(--erro); color: #fff; font-size: 11px; line-height: 17px; }
+.p-check { display: flex; align-items: center; gap: 8px; }

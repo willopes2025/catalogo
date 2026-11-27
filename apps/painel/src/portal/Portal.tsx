@@ -5,7 +5,7 @@ import { data, reais } from '../formato';
 import { apiPortal, salvarSessaoPortal, sessaoPortal } from './api';
 import { desligarNotificacoes, ligarNotificacoes, noApp } from './app';
 import './portal.css';
-import { AgendarAcerto, Clientes, Conteudos, DetalheVenda, Extrato, Garantia, Mais, NovaVenda, OndeEstaMaleta, Perfil, Vendas } from './Consultora';
+import { AgendarAcerto, ChipsCategorias, Clientes, Conteudos, DetalheVenda, Extrato, Garantia, Mais, MeuCatalogo, NovaVenda, OndeEstaMaleta, Perfil, usarVitrinePortal, Vendas } from './Consultora';
 
 const msgErro = (e: unknown) => (e instanceof Error ? e.message : 'Algo deu errado. Tente de novo.');
 const Aviso = ({ erro }: { erro: unknown }) => (erro ? <div className="p-aviso erro">{msgErro(erro)}</div> : null);
@@ -122,6 +122,7 @@ function Area() {
           <Route path="maletas" element={<Maletas />} />
           <Route path="maletas/:id" element={<Maleta />} />
           <Route path="pedir" element={<Pedir />} />
+          <Route path="meu-catalogo" element={<MeuCatalogo />} />
           <Route path="financeiro" element={<Financeiro />} />
           <Route path="pontos" element={<PontosRep />} />
           <Route path="leads" element={<Leads />} />
@@ -213,8 +214,9 @@ function Inicio() {
       {urlCatalogo && (
         <div className="p-cartao p-col">
           <div className="p-rotulo">Seu catálogo</div>
-          <p className="p-suave">As peças da sua maleta, com foto e preço, para mandar às clientes.</p>
+          <p className="p-suave">Peças com foto e preço para mandar às clientes: as da sua maleta e as que a Aritana envia.</p>
           <button className="p-botao" onClick={() => void compartilhar()}>{copiado ? 'Link copiado!' : 'Compartilhar catálogo'}</button>
+          <Link to="/portal/meu-catalogo" className="p-link">Escolher as peças do catálogo</Link>
         </div>
       )}
       <IndiqueGanhe />
@@ -334,7 +336,8 @@ function Pedir() {
   const [carrinho, setCarrinho] = useState<Record<string, { item: any; q: number }>>({});
   const [obs, setObs] = useState('');
   const [verCarrinho, setVerCarrinho] = useState(false);
-  const q = useQuery({ queryKey: ['p-catalogo', busca, cat], queryFn: () => apiPortal(`/catalogo?${new URLSearchParams({ ...(busca && { busca }), ...(cat && { categoria: cat }) })}`) });
+  const q = usarVitrinePortal(busca, cat);
+  const itens = q.data?.pages.flatMap((p) => p.itens) ?? [];
   const pedidos = useQuery({ queryKey: ['p-pedidos'], queryFn: () => apiPortal<any[]>('/pedidos') });
   const enviar = useMutation({
     mutationFn: () => apiPortal('/pedidos', { corpo: { itens: Object.values(carrinho).map((c) => ({ produtoId: c.item.id, quantidade: c.q })), observacao: obs || null } }),
@@ -356,20 +359,15 @@ function Pedir() {
       {!verCarrinho ? (
         <>
           <input className="p-busca" placeholder="Buscar por nome ou referência" value={busca} onChange={(e) => setBusca(e.target.value)} />
-          {q.data?.categorias?.length > 0 && (
-            <div className="p-chips">
-              <button className={!cat ? 'ativo' : ''} onClick={() => setCat('')}>Todas</button>
-              {q.data.categorias.map((c: string) => <button key={c} className={cat === c ? 'ativo' : ''} onClick={() => setCat(c)}>{c}</button>)}
-            </div>
-          )}
+          <ChipsCategorias porCategoria={q.data?.pages[0]?.porCategoria} cat={cat} setCat={setCat} />
           {q.isLoading && <Carregando />}
           <Aviso erro={q.error} />
           <div className="p-vitrine">
-            {q.data?.itens.map((i: any) => {
+            {itens.map((i: any) => {
               const n = carrinho[i.id]?.q ?? 0;
               return (
                 <div key={i.id} className="p-cartao p-produto">
-                  {i.foto ? <img src={i.foto} alt="" /> : <div className="p-foto" />}
+                  {i.foto ? <img src={i.foto} alt="" loading="lazy" /> : <div className="p-foto" />}
                   <b>{i.descricao}</b>
                   <span className="p-suave">ref. {i.referencia}{i.poucas ? ' · últimas peças' : ''}</span>
                   <span>{reais(i.preco)}</span>
@@ -382,7 +380,8 @@ function Pedir() {
               );
             })}
           </div>
-          {q.data && !q.data.itens.length && <div className="p-cartao p-suave">Nenhuma peça encontrada.</div>}
+          {q.data && !itens.length && <div className="p-cartao p-suave">Nenhuma peça encontrada.</div>}
+          {q.hasNextPage && <button className="p-botao claro" disabled={q.isFetchingNextPage} onClick={() => void q.fetchNextPage()}>{q.isFetchingNextPage ? 'Carregando…' : 'Ver mais peças'}</button>}
           {qtd > 0 && <div className="p-rodape-fixo"><b>{qtd} peça(s) escolhida(s)</b><button className="p-botao" onClick={() => setVerCarrinho(true)}>Revisar pedido</button></div>}
         </>
       ) : (

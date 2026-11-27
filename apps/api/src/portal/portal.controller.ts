@@ -18,8 +18,9 @@ import { DistribuicaoService } from '../crm/distribuicao.service';
 import { AgendaService } from '../agenda/agenda.service';
 import { PedidosLinkService } from '../catalogo/pedidos.service';
 import { PushService } from './push.service';
+import { normalizarBusca } from '../comum/busca-nome';
 import { EnvioDocumentoService } from '../documentos/envio-documento.service';
-import { acertos, categorias, crmContatos, crmFunis, crmLeads, documentos, locaisEstoque, maletas, niveis, pedidosPecas, pessoas, portalAcessos, premios, produtos, resgates, saldos, titulos } from '../db/schema';
+import { acertos, catalogoEscolhas, categorias, crmContatos, crmFunis, crmLeads, documentos, locaisEstoque, maletas, niveis, pedidosPecas, pessoas, portalAcessos, premios, produtos, resgates, saldos, titulos } from '../db/schema';
 
 const sha256 = (t: string) => createHash('sha256').update(t).digest('hex');
 const pedidosDeCodigo = new Limitador(5, 30 * 60_000, 'Muitos pedidos de código.');
@@ -406,23 +407,87 @@ export class PortalController {
     return this.asaas.cobrar(id, 'PIX', null);
   }
 
-  /** Peças disponíveis na matriz para pedir (sem custo, sem quantidade exata). */
+  /**
+   * Peças liberadas pela matriz (marcadas para o catálogo e com estoque), de 60 em 60.
+   * Serve para pedir peças e para a consultora montar o catálogo online dela (`noCatalogo`).
+   */
   @RotaPortal()
   @Get('catalogo')
-  async catalogo(@Query('busca') busca?: string, @Query('categoria') categoria?: string) {
+  async catalogo(@Representante() r: RepresentanteLogada, @Query('busca') busca?: string, @Query('categoria') categoria?: string, @Query('pagina') pagina?: string, @Query('escolhidas') escolhidas?: string) {
+    const POR_PAGINA = 60;
+    const pg = Math.max(1, Math.min(500, Number(pagina) || 1));
     const disponivel = sql<number>`coalesce((select sum(s.quantidade) from ${saldos} s join ${locaisEstoque} l on l.id = s.local_id where s.produto_id = ${produtos.id} and l.tipo = 'deposito' and l.nome <> 'Avarias e garantia'),0)::int`;
-    const f = [eq(produtos.ativo, true), eq(produtos.exibeCatalogo, true), sql`${disponivel} > 0`];
-    if (busca?.trim()) f.push(sql`(${produtos.descricao} ilike ${'%' + busca.trim() + '%'} or ${produtos.referencia} ilike ${'%' + busca.trim() + '%'})`);
-    if (categoria) f.push(eq(categorias.nome, categoria));
-    const itens = await this.db
-      .select({ id: produtos.id, referencia: produtos.referencia, descricao: produtos.descricao, categoria: categorias.nome, cor: produtos.cor, tamanho: produtos.tamanho, preco: produtos.preco, foto: sql<string | null>`${produtos.fotos}->>0`, poucas: sql<boolean>`${disponivel} <= 2` })
+    const escolhida = sql<boolean>`exists (select 1 from ${catalogoEscolhas} e where e.pessoa_id = ${r.rep} and e.produto_id = ${produtos.id})`;
+    const base = [eq(produtos.ativo, true), eq(produtos.exibeCatalogo, true), sql`${disponivel} > 0`];
+    const f = [...base];
+    const b = normalizarBusca(busca ?? '');
+    if (b) f.push(sql`(busca_norm(${produtos.descricao}) like ${'%' + b + '%'} or ${produtos.referencia} ilike ${'%' + b + '%'} or ${produtos.codigoBarras} = ${b})`);
+    if (categoria === 'Sem categoria') f.push(sql`${produtos.categoriaId} is null`);
+    else if (categoria) f.push(eq(categorias.nome, categoria));
+    if (escolhidas === '1') f.push(escolhida);
+    const linhas = await this.db
+      .select({ id: produtos.id, referencia: produtos.referencia, descricao: produtos.descricao, categoria: categorias.nome, cor: produtos.cor, tamanho: produtos.tamanho, preco: produtos.preco, foto: sql<string | null>`${produtos.fotos}->>0`, poucas: sql<boolean>`${disponivel} <= 2`, noCatalogo: escolhida })
       .from(produtos)
       .leftJoin(categorias, eq(categorias.id, produtos.categoriaId))
       .where(and(...f))
-      .orderBy(asc(categorias.nome), asc(produtos.descricao))
-      .limit(120);
-    const cats = await this.db.select({ nome: categorias.nome }).from(categorias).orderBy(asc(categorias.nome));
-    return { itens, categorias: cats.map((c) => c.nome) };
+      .orderBy(asc(categorias.nome), asc(produtos.descricao), asc(produtos.id))
+      .limit(POR_PAGINA + 1)
+      .offset((pg - 1) * POR_PAGINA);
+    const [{ total }] = await this.db.select({ total: sql<number>`count(*)::int` }).from(produtos).leftJoin(categorias, eq(categorias.id, produtos.categoriaId)).where(and(...f));
+    // Só as categorias que têm peça liberada (com quantas), para não abrir categoria vazia.
+    const cats = await this.db
+      .select({ nome: sql<string>`coalesce(${categorias.nome}, 'Sem categoria')`, n: sql<number>`count(*)::int` })
+      .from(produtos)
+      .leftJoin(categorias, eq(categorias.id, produtos.categoriaId))
+      .where(and(...base))
+      .groupBy(sql`1`)
+      .orderBy(sql`1`);
+    const [eu] = await this.db.select({ manual: pessoas.catalogoManual }).from(pessoas).where(eq(pessoas.id, r.rep));
+    const [{ escolhidasN }] = await this.db.select({ escolhidasN: sql<number>`count(*)::int` }).from(catalogoEscolhas).where(eq(catalogoEscolhas.pessoaId, r.rep));
+    return {
+      itens: linhas.slice(0, POR_PAGINA),
+      temMais: linhas.length > POR_PAGINA,
+      pagina: pg,
+      total,
+      categorias: cats.map((c) => c.nome),
+      porCategoria: cats,
+      meuCatalogo: { manual: eu?.manual ?? false, escolhidas: escolhidasN },
+    };
+  }
+
+  /** Catálogo online da consultora: padrão (tudo o que a matriz libera) ou só as peças que ela escolher. */
+  @RotaPortal()
+  @Post('meu-catalogo/modo')
+  async modoCatalogo(@Representante() r: RepresentanteLogada, @Body() body: unknown) {
+    const d = validar(z.object({ manual: z.boolean() }), body);
+    await this.db.update(pessoas).set({ catalogoManual: d.manual, atualizadoEm: new Date() }).where(eq(pessoas.id, r.rep));
+    return { ok: true, manual: d.manual };
+  }
+
+  /** Põe ou tira peças do catálogo dela (uma, várias ou a categoria inteira). */
+  @RotaPortal()
+  @Post('meu-catalogo/pecas')
+  async escolherPecas(@Representante() r: RepresentanteLogada, @Body() body: unknown) {
+    const d = validar(z.object({ incluir: z.boolean(), produtoIds: z.array(z.string().uuid()).max(2000).optional(), categoria: z.string().max(120).optional(), todas: z.boolean().optional() }), body);
+    let ids = d.produtoIds ?? [];
+    if (d.categoria || d.todas) {
+      const f = [eq(produtos.ativo, true), eq(produtos.exibeCatalogo, true)];
+      if (d.categoria === 'Sem categoria') f.push(sql`${produtos.categoriaId} is null`);
+      else if (d.categoria) f.push(eq(categorias.nome, d.categoria));
+      ids = (await this.db.select({ id: produtos.id }).from(produtos).leftJoin(categorias, eq(categorias.id, produtos.categoriaId)).where(and(...f))).map((x) => x.id);
+    }
+    if (!d.incluir) {
+      if (d.todas) await this.db.delete(catalogoEscolhas).where(eq(catalogoEscolhas.pessoaId, r.rep));
+      else if (ids.length) await this.db.delete(catalogoEscolhas).where(and(eq(catalogoEscolhas.pessoaId, r.rep), inArray(catalogoEscolhas.produtoId, ids)));
+    } else if (ids.length) {
+      // Só entra peça que a matriz liberou para o catálogo.
+      const liberadas = (await this.db.select({ id: produtos.id }).from(produtos).where(and(inArray(produtos.id, ids), eq(produtos.ativo, true), eq(produtos.exibeCatalogo, true)))).map((x) => x.id);
+      for (let i = 0; i < liberadas.length; i += 500) {
+        await this.db.insert(catalogoEscolhas).values(liberadas.slice(i, i + 500).map((produtoId) => ({ pessoaId: r.rep, produtoId }))).onConflictDoNothing();
+      }
+    }
+    const [{ n }] = await this.db.select({ n: sql<number>`count(*)::int` }).from(catalogoEscolhas).where(eq(catalogoEscolhas.pessoaId, r.rep));
+    return { ok: true, escolhidas: n };
   }
 
   @RotaPortal()

@@ -133,7 +133,7 @@ export const CONFIGS = {
     schema: z.object({ prazoDias: z.number().int().min(0).max(3650) }),
   },
   regras_link: {
-    padrao: { ativo: true, localId: '', comissaoPb: 1000, catalogoMatrizSemMaleta: true, aceitaEntrega: true, mensagemFinal: '' },
+    padrao: { ativo: true, localId: '', comissaoPb: 1000, catalogoMatrizSemMaleta: true, catalogoMatrizComMaleta: true, aceitaEntrega: true, mensagemFinal: '' },
     schema: z.object({
       ativo: z.boolean(),
       /** Local do estoque da matriz que abastece os pedidos das afiliadas (vazio: o primeiro depósito ativo). */
@@ -142,6 +142,8 @@ export const CONFIGS = {
       comissaoPb: z.number().int().min(0).max(10000),
       /** Consultora sem maleta aberta mostra as peças da matriz (em vez de catálogo vazio). */
       catalogoMatrizSemMaleta: z.boolean(),
+      /** Consultora com maleta também mostra as peças liberadas da matriz (a matriz envia para a cliente). */
+      catalogoMatrizComMaleta: z.boolean().default(true),
       aceitaEntrega: z.boolean(),
       mensagemFinal: z.string().max(300),
     }),

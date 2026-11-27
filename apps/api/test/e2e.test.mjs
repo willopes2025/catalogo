@@ -330,7 +330,8 @@ test('catálogo público mostra as peças da maleta, sem custo', async () => {
   const salvo = token;
   token = '';
   const cat = await ok('GET', '/publico/catalogo/representante-teste-e2e');
-  assert.equal(cat.pecas.length, 1);
+  token = salvo;
+  assert.equal(cat.pecas.filter((p) => p.origem === 'maleta').length, 1, 'a da maleta é a pronta entrega; as liberadas da matriz vêm junto');
   assert.ok(!('custo' in cat.pecas[0]));
   assert.ok(!('documento' in cat.representante) && !('id' in cat.representante));
   assert.equal((await chamar('GET', '/publico/catalogo/nao-existe')).status, 404);
@@ -2798,6 +2799,35 @@ test('venda pelo link: afiliada vende do estoque da matriz com comissão; consul
     assert.equal((await chamar('POST', `/portal/pedidos-link/${doAf.id}/cancelar`)).status, 400);
     token = '';
     assert.equal((await ok('GET', `/publico/catalogo/${cons.slug}`)).pecas.find((x) => x.id === prod.id).disponivel, 1, 'a vendida sai do catálogo');
+    // Catálogo online: com maleta também mostra as liberadas da matriz; no modo manual, só as escolhidas.
+    const outra = (await ok('GET', `/publico/catalogo/${af.slug}`)).pecas.find((x) => x.id !== prod.id);
+    token = admin;
+    const linkC = await ok('POST', `/portal/gerar-link/${cons.id}`);
+    const tokC = (await ok('POST', `/portal/link/${linkC.token}`)).token;
+    token = tokC;
+    const pv = await ok('GET', '/portal/catalogo');
+    assert.ok(pv.porCategoria.length > 0 && pv.total >= pv.itens.length && pv.itens.length <= 60);
+    assert.equal(pv.meuCatalogo.manual, false);
+    if (outra) {
+      token = '';
+      let c = await ok('GET', `/publico/catalogo/${cons.slug}`);
+      assert.equal(c.pecas.find((x) => x.id === outra.id)?.origem, 'matriz', 'com maleta, também mostra as liberadas da matriz');
+      assert.equal(c.pecas.find((x) => x.id === prod.id).origem, 'maleta', 'a da maleta aparece como pronta entrega');
+      token = tokC;
+      await ok('POST', '/portal/meu-catalogo/modo', { manual: true });
+      token = '';
+      c = await ok('GET', `/publico/catalogo/${cons.slug}`);
+      assert.ok(!c.pecas.some((x) => x.origem === 'matriz'), 'manual sem escolha: só a maleta');
+      token = tokC;
+      assert.equal((await ok('POST', '/portal/meu-catalogo/pecas', { incluir: true, produtoIds: [outra.id] })).escolhidas, 1);
+      assert.equal((await ok('GET', '/portal/catalogo?escolhidas=1')).total, 1);
+      token = '';
+      c = await ok('GET', `/publico/catalogo/${cons.slug}`);
+      assert.deepEqual(c.pecas.filter((x) => x.origem === 'matriz').map((x) => x.id), [outra.id]);
+      token = tokC;
+      assert.equal((await ok('POST', '/portal/meu-catalogo/pecas', { incluir: false, todas: true })).escolhidas, 0);
+      await ok('POST', '/portal/meu-catalogo/modo', { manual: false });
+    }
   } finally {
     token = admin;
   }

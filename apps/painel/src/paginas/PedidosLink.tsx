@@ -103,7 +103,7 @@ function Detalhe({ p }: { p: Pedido }) {
   );
 }
 
-interface RegrasLink { ativo: boolean; localId: string; comissaoPb: number; catalogoMatrizSemMaleta: boolean; aceitaEntrega: boolean; mensagemFinal: string }
+interface RegrasLink { ativo: boolean; localId: string; comissaoPb: number; catalogoMatrizSemMaleta: boolean; catalogoMatrizComMaleta?: boolean; aceitaEntrega: boolean; mensagemFinal: string }
 
 function Regras() {
   const qc = useQueryClient();
@@ -121,6 +121,7 @@ function Regras() {
         <Campo rotulo="Comissão da consultora/afiliada (%)" ajuda="Sobre pedidos atendidos pela matriz, no fechamento do mês."><input inputMode="decimal" value={String(r.comissaoPb / 100).replace('.', ',')} onChange={(e) => setR({ ...r, comissaoPb: Math.round(Number(e.target.value.replace(',', '.')) * 100) || 0 })} /></Campo>
         <Campo rotulo="Estoque que atende a matriz" className="l2"><select value={r.localId} onChange={(e) => setR({ ...r, localId: e.target.value })}><option value="">O primeiro depósito</option>{locais.data?.filter((l) => l.ativo && l.tipo !== 'maleta').map((l) => <option key={l.id} value={l.id}>{l.nome}</option>)}</select></Campo>
         <label className="check l2"><input type="checkbox" checked={r.catalogoMatrizSemMaleta} onChange={(e) => setR({ ...r, catalogoMatrizSemMaleta: e.target.checked })} /> Consultora sem maleta mostra as peças da matriz</label>
+        <label className="check l2"><input type="checkbox" checked={r.catalogoMatrizComMaleta !== false} onChange={(e) => setR({ ...r, catalogoMatrizComMaleta: e.target.checked })} /> Consultora com maleta também mostra as peças liberadas da matriz (a Aritana envia)</label>
         <label className="check l2"><input type="checkbox" checked={r.aceitaEntrega} onChange={(e) => setR({ ...r, aceitaEntrega: e.target.checked })} /> Oferecer "receber em casa"</label>
         <Campo rotulo="Mensagem depois do pedido (opcional)" className="l4"><input value={r.mensagemFinal} maxLength={300} onChange={(e) => setR({ ...r, mensagemFinal: e.target.value })} placeholder="Obrigada! A consultora vai falar com você pelo WhatsApp." /></Campo>
         {salvar.error && <div className="l4"><Erro erro={salvar.error} /></div>}

@@ -35,13 +35,13 @@ export class CatalogoController {
   @Get('publico/catalogo/:slug')
   async ver(@Param('slug') slug: string) {
     const rep = await this.svc.consultoraPorSlug(slug);
-    const origem = await this.svc.origemDe(rep);
     const regras = await this.svc.regras();
-    const pecas = origem ? await this.svc.pecas(rep, origem) : [];
+    const pecas = await this.svc.pecas(rep);
+    const origem = pecas.some((p) => p.origem === 'maleta') ? 'maleta' : pecas.length ? 'matriz' : await this.svc.origemDe(rep);
     return {
       representante: { nome: rep.nome, cidade: rep.cidade, uf: rep.uf, whatsapp: rep.telefone1, instagram: rep.instagram },
       origem,
-      pedidos: { ativo: regras.ativo && !!origem, entrega: regras.aceitaEntrega },
+      pedidos: { ativo: regras.ativo && pecas.length > 0, entrega: regras.aceitaEntrega },
       pecas,
     };
   }
@@ -54,7 +54,14 @@ export class CatalogoController {
     const d = validar(pedidoSchema, body);
     const utm = Object.fromEntries(Object.entries(d.origem ?? {}).filter(([k, v]) => /^(utm_[a-z]+|ref)$/.test(k) && typeof v === 'string').map(([k, v]) => [k, v.slice(0, 200)]));
     const r = await this.svc.criar(slug, d, utm);
-    return { ok: true, numero: r.pedido.numero, total: r.pedido.total, origem: r.pedido.origem, mensagem: r.mensagem };
+    return {
+      ok: true,
+      numero: r.pedido.numero,
+      numeros: r.pedidos.map((p) => p.numero),
+      total: r.pedidos.reduce((a, p) => a + p.total, 0),
+      origem: r.pedidos.length > 1 ? 'misto' : r.pedido.origem,
+      mensagem: r.mensagem,
+    };
   }
 
   // ───── Equipe ─────

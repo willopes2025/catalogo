@@ -180,6 +180,8 @@ export const pessoas = pgTable(
     observacaoInterna: text('observacao_interna'),
     /** Endereço do catálogo da representante: /catalogo/<slug> */
     slug: text('slug'),
+    /** Catálogo online: false = catálogo padrão (todas as peças liberadas pela matriz); true = só as que ela escolheu. */
+    catalogoManual: boolean('catalogo_manual').notNull().default(false),
     /** Cliente correspondente no Asaas, criado na primeira cobrança. */
     asaasClienteId: text('asaas_cliente_id'),
     /** Id no Jueri, para conferência da migração. */
@@ -2714,4 +2716,15 @@ export const conteudoVistos = pgTable(
     criadoEm: criadoEm(),
   },
   (t) => ({ unico: uniqueIndex('conteudo_vistos_uq').on(t.conteudoId, t.pessoaId) }),
+);
+
+/** Peças que a consultora escolheu para o catálogo dela (vale quando catalogo_manual = true). */
+export const catalogoEscolhas = pgTable(
+  'catalogo_escolhas',
+  {
+    pessoaId: uuid('pessoa_id').notNull().references(() => pessoas.id, { onDelete: 'cascade' }),
+    produtoId: uuid('produto_id').notNull().references(() => produtos.id, { onDelete: 'cascade' }),
+    criadoEm: criadoEm(),
+  },
+  (t) => ({ pk: primaryKey({ columns: [t.pessoaId, t.produtoId] }) }),
 );

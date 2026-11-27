@@ -393,6 +393,13 @@
       "when": 1795818305469,
       "tag": "0055_portal_consultora",
       "breakpoints": true
+    },
+    {
+      "idx": 56,
+      "version": "7",
+      "when": 1795820586598,
+      "tag": "0056_catalogo_escolhas",
+      "breakpoints": true
     }
   ]
 }

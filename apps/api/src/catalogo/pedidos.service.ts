@@ -5,7 +5,7 @@ import { DB, type Db } from '../comum/db.module';
 import { urlPublica } from '../comum/url';
 import { AuditoriaService } from '../comum/auditoria.service';
 import { ConfiguracoesService } from '../configuracoes/configuracoes.service';
-import { categorias, crmCanais, crmFunis, locaisEstoque, maletaItens, maletas, pedidosLink, pessoas, produtos, saldos } from '../db/schema';
+import { catalogoEscolhas, categorias, crmCanais, crmFunis, locaisEstoque, maletaItens, maletas, pedidosLink, pessoas, produtos, saldos } from '../db/schema';
 import { CanaisService } from '../crm/canais.service';
 import { CrmService } from '../crm/crm.service';
 import { VendasService, type Forma } from '../vendas/vendas.service';
@@ -24,6 +24,8 @@ export interface PecaVitrine {
   preco: number;
   foto: string | null;
   disponivel: number;
+  /** maleta: está com a consultora (pronta entrega); matriz: a Aritana envia. */
+  origem: Origem;
 }
 
 const reais = (c: number) => (c / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
@@ -110,8 +112,19 @@ export class PedidosLinkService implements OnModuleInit {
     return new Map(r.rows.map((x) => [x.produto_id, x.qtd]));
   }
 
-  /** Peças que a cliente pode pedir agora, com o que está livre (já descontado o que outros pedidos seguram). */
-  async pecas(rep: typeof pessoas.$inferSelect, origem: Origem): Promise<PecaVitrine[]> {
+  /** De onde vêm as peças da matriz desta consultora (liberadas no catálogo e, no modo manual, só as escolhidas). */
+  private async mostraMatriz(rep: typeof pessoas.$inferSelect, temMaleta: boolean) {
+    if (rep.modeloTrabalho === 'afiliado') return true;
+    const r = await this.regras();
+    return temMaleta ? Boolean(r.catalogoMatrizComMaleta) : r.catalogoMatrizSemMaleta;
+  }
+
+  /**
+   * Peças que a cliente pode pedir agora, com o que está livre (já descontado o que outros pedidos seguram).
+   * As da maleta aparecem como pronta entrega; as liberadas da matriz entram junto (a Aritana envia).
+   * Sem `origem`, junta as duas; com `origem`, só aquela.
+   */
+  async pecas(rep: typeof pessoas.$inferSelect, origem?: Origem): Promise<PecaVitrine[]> {
     const campos = {
       id: produtos.id,
       referencia: produtos.referencia,
@@ -122,32 +135,43 @@ export class PedidosLinkService implements OnModuleInit {
       preco: produtos.preco,
       foto: sql<string | null>`${produtos.fotos}->>0`,
     };
-    let lista: (PecaVitrine & { disponivel: number })[];
-    if (origem === 'maleta') {
-      const disp = sql<number>`sum(${maletaItens.enviada} - ${maletaItens.vendida} - ${maletaItens.devolvida} - ${maletaItens.perdida} - coalesce(${maletaItens.prebaixaVendida}, 0))::int`;
-      lista = await this.db
-        .select({ ...campos, disponivel: disp })
-        .from(maletaItens)
-        .innerJoin(maletas, eq(maletas.id, maletaItens.maletaId))
-        .innerJoin(produtos, eq(produtos.id, maletaItens.produtoId))
-        .leftJoin(categorias, eq(categorias.id, produtos.categoriaId))
-        .where(and(eq(maletas.representanteId, rep.id), eq(maletas.status, 'aberta'), eq(produtos.exibeCatalogo, true), eq(produtos.ativo, true)))
-        .groupBy(produtos.id, categorias.nome)
-        .orderBy(asc(categorias.nome), asc(produtos.descricao));
-    } else {
-      const local = await this.localMatriz();
-      if (!local) return [];
-      lista = await this.db
+    const disp = sql<number>`sum(${maletaItens.enviada} - ${maletaItens.vendida} - ${maletaItens.devolvida} - ${maletaItens.perdida} - coalesce(${maletaItens.prebaixaVendida}, 0))::int`;
+    const daMaleta = rep.modeloTrabalho === 'afiliado' ? [] : await this.db
+      .select({ ...campos, disponivel: disp })
+      .from(maletaItens)
+      .innerJoin(maletas, eq(maletas.id, maletaItens.maletaId))
+      .innerJoin(produtos, eq(produtos.id, maletaItens.produtoId))
+      .leftJoin(categorias, eq(categorias.id, produtos.categoriaId))
+      .where(and(eq(maletas.representanteId, rep.id), eq(maletas.status, 'aberta'), eq(produtos.exibeCatalogo, true), eq(produtos.ativo, true)))
+      .groupBy(produtos.id, categorias.nome)
+      .orderBy(asc(categorias.nome), asc(produtos.descricao));
+    const [aberta] = rep.modeloTrabalho === 'afiliado' ? [] : await this.db.select({ id: maletas.id }).from(maletas).where(and(eq(maletas.representanteId, rep.id), eq(maletas.status, 'aberta'))).limit(1);
+    const reservasMaleta = await this.reservado('maleta', rep.id);
+    const lista: PecaVitrine[] = daMaleta
+      .map((p) => ({ ...p, origem: 'maleta' as const, disponivel: Math.max(0, p.disponivel - (reservasMaleta.get(p.id) ?? 0)) }))
+      .filter((p) => p.disponivel > 0);
+    if (origem === 'maleta') return lista;
+    const local = (await this.mostraMatriz(rep, !!aberta)) ? await this.localMatriz() : null;
+    if (local) {
+      const f = [eq(saldos.localId, local.id), sql`${saldos.quantidade} > 0`, eq(produtos.exibeCatalogo, true), eq(produtos.ativo, true)];
+      if (rep.catalogoManual) f.push(sql`exists (select 1 from ${catalogoEscolhas} e where e.pessoa_id = ${rep.id} and e.produto_id = ${produtos.id})`);
+      const daMatriz = await this.db
         .select({ ...campos, disponivel: saldos.quantidade })
         .from(saldos)
         .innerJoin(produtos, eq(produtos.id, saldos.produtoId))
         .leftJoin(categorias, eq(categorias.id, produtos.categoriaId))
-        .where(and(eq(saldos.localId, local.id), sql`${saldos.quantidade} > 0`, eq(produtos.exibeCatalogo, true), eq(produtos.ativo, true)))
+        .where(and(...f))
         .orderBy(asc(categorias.nome), asc(produtos.descricao))
-        .limit(3000);
+        .limit(5000);
+      const reservas = await this.reservado('matriz', rep.id);
+      const naMaleta = new Set(lista.map((p) => p.id));
+      for (const p of daMatriz) {
+        const livre = Math.max(0, p.disponivel - (reservas.get(p.id) ?? 0));
+        if (livre > 0 && !naMaleta.has(p.id)) lista.push({ ...p, origem: 'matriz', disponivel: livre });
+      }
     }
-    const reservas = await this.reservado(origem, rep.id);
-    return lista.map((p) => ({ ...p, disponivel: Math.max(0, p.disponivel - (reservas.get(p.id) ?? 0)) })).filter((p) => p.disponivel > 0);
+    const r = origem === 'matriz' ? lista.filter((p) => p.origem === 'matriz') : lista;
+    return r.sort((a, b) => (a.origem === b.origem ? 0 : a.origem === 'maleta' ? -1 : 1) || (a.categoria ?? '').localeCompare(b.categoria ?? '') || a.descricao.localeCompare(b.descricao));
   }
 
   async criar(
@@ -158,30 +182,36 @@ export class PedidosLinkService implements OnModuleInit {
     const regras = await this.regras();
     if (!regras.ativo) throw new BadRequestException('Os pedidos pelo catálogo estão pausados. Fale com a consultora pelo WhatsApp.');
     const rep = await this.consultoraPorSlug(slug);
-    const origem = await this.origemDe(rep);
-    if (!origem) throw new BadRequestException('Este catálogo não tem peças disponíveis agora.');
     if (d.entrega === 'entregar' && !regras.aceitaEntrega) throw new BadRequestException('Este catálogo não faz entrega: escolha retirar ou combinar.');
     if (d.entrega === 'entregar' && !d.endereco?.trim()) throw new BadRequestException({ mensagem: 'Informe o endereço para a entrega.', campos: { endereco: 'Obrigatório para entrega' } });
     // Preço e estoque sempre do servidor: o que vem do navegador é só a escolha.
-    const pecas = new Map((await this.pecas(rep, origem)).map((p) => [p.id, p]));
+    const pecas = new Map((await this.pecas(rep)).map((p) => [p.id, p]));
+    if (!pecas.size) throw new BadRequestException('Este catálogo não tem peças disponíveis agora.');
     const juntos = new Map<string, number>();
     for (const i of d.itens) juntos.set(i.produtoId, (juntos.get(i.produtoId) ?? 0) + i.quantidade);
     const itens = [...juntos].map(([produtoId, quantidade]) => {
       const p = pecas.get(produtoId);
       if (!p) throw new BadRequestException('Uma das peças não está mais disponível. Atualize a página e confira o pedido.');
       if (quantidade > p.disponivel) throw new BadRequestException(`Só há ${p.disponivel} de "${p.descricao}" disponível.`);
-      return { produtoId, referencia: p.referencia, descricao: p.descricao, preco: p.preco, quantidade };
+      return { origem: p.origem, item: { produtoId, referencia: p.referencia, descricao: p.descricao, preco: p.preco, quantidade } };
     });
-    const total = itens.reduce((a, i) => a + i.preco * i.quantidade, 0);
-    const [pedido] = await this.db
-      .insert(pedidosLink)
-      .values({ pessoaId: rep.id, origem, clienteNome: d.nome, clienteTelefone: d.telefone, clienteCidade: d.cidade ?? null, entrega: d.entrega, endereco: d.entrega === 'entregar' ? (d.endereco ?? null) : null, observacao: d.observacao ?? null, itens, total, origemUtm: utm })
-      .returning();
-    // Card no CRM (funil de clientes) e aviso para a consultora; falha aqui não perde o pedido.
-    await this.cardNoCrm(pedido, rep).catch((e) => this.log.warn(`Pedido ${pedido.numero}: card não criado (${(e as Error).message})`));
-    void this.push.paraPessoa(rep.id, { titulo: `Pedido nº ${pedido.numero} pelo seu catálogo`, texto: `${pedido.clienteNome.split(' ')[0]} pediu ${pedido.itens.reduce((a, i) => a + i.quantidade, 0)} peça(s) · ${reais(pedido.total)}`, link: '/portal/leads' });
-    await this.avisarConsultora(pedido, rep).catch((e) => this.log.warn(`Pedido ${pedido.numero}: aviso não enviado (${(e as Error).message})`));
-    return { pedido, rep, mensagem: regras.mensagemFinal || null };
+    // Peças da maleta e da matriz viram pedidos separados: cada um tem quem atende.
+    const criados: PedidoLink[] = [];
+    for (const origem of ['maleta', 'matriz'] as const) {
+      const doGrupo = itens.filter((i) => i.origem === origem).map((i) => i.item);
+      if (!doGrupo.length) continue;
+      const total = doGrupo.reduce((a, i) => a + i.preco * i.quantidade, 0);
+      const [pedido] = await this.db
+        .insert(pedidosLink)
+        .values({ pessoaId: rep.id, origem, clienteNome: d.nome, clienteTelefone: d.telefone, clienteCidade: d.cidade ?? null, entrega: d.entrega, endereco: d.entrega === 'entregar' ? (d.endereco ?? null) : null, observacao: d.observacao ?? null, itens: doGrupo, total, origemUtm: utm })
+        .returning();
+      criados.push(pedido);
+      // Card no CRM (funil de clientes) e aviso para a consultora; falha aqui não perde o pedido.
+      await this.cardNoCrm(pedido, rep).catch((e) => this.log.warn(`Pedido ${pedido.numero}: card não criado (${(e as Error).message})`));
+      void this.push.paraPessoa(rep.id, { titulo: `Pedido nº ${pedido.numero} pelo seu catálogo`, texto: `${pedido.clienteNome.split(' ')[0]} pediu ${pedido.itens.reduce((a, i) => a + i.quantidade, 0)} peça(s) · ${reais(pedido.total)}`, link: '/portal/leads' });
+      await this.avisarConsultora(pedido, rep).catch((e) => this.log.warn(`Pedido ${pedido.numero}: aviso não enviado (${(e as Error).message})`));
+    }
+    return { pedido: criados[0], pedidos: criados, rep, mensagem: regras.mensagemFinal || null };
   }
 
   private async cardNoCrm(p: PedidoLink, rep: typeof pessoas.$inferSelect) {
