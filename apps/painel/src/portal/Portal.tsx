@@ -271,7 +271,7 @@ function Maleta() {
   const pecasVendidas = Object.values(vendidas).reduce((a, b) => a + b, 0);
   return (
     <>
-      <Topo voltar="/portal/maletas" titulo={`Maleta nº ${m.numero}`} sub={aberta ? `Acerto até ${data(m.dataLimite)} · ${m.totais.pecas} peças · ${reais(m.totais.valor)}` : 'Acertada'} />
+      <Topo voltar="/portal/maletas" titulo={`Maleta nº ${m.numero}`} sub={aberta ? `Acerto até ${data(m.dataLimite)} · ${m.totais.pecas} peças · ${reais(m.totais.valor)}` : 'Baixada'} />
       {aberta && !m.recebidaEm && <button className="p-botao claro p-bloco" disabled={recebi.isPending} onClick={() => recebi.mutate()}>Confirmar que recebi a maleta</button>}
       {m.codigoRastreio && <div className="p-cartao">Rastreio dos Correios: <b>{m.codigoRastreio}</b></div>}
       {aberta && (
