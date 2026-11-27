@@ -142,14 +142,17 @@ function HistoricoCaixas({ localId }: { localId: string }) {
   );
 }
 
-export function BotaoNfce({ vendaId }: { vendaId: string }) {
+/** NFC-e (consumidor final) ou NF-e (revendedora, ou cliente que pede nota com CPF/CNPJ e endereço). */
+export function BotaoNfce({ vendaId, revenda = false }: { vendaId: string; revenda?: boolean }) {
   const [r, setR] = useState<any>(null);
-  const emitir = useMutation({ mutationFn: () => api<any>(`/fiscal/nfce/venda/${vendaId}`, { corpo: {} }), onSuccess: setR });
+  const emitir = useMutation({ mutationFn: (modelo: 'nfce' | 'nfe') => api<any>(`/fiscal/${modelo}/venda/${vendaId}`, { corpo: {} }), onSuccess: setR });
   if (!pode('fiscal', 'criar')) return null;
-  if (r?.status === 'autorizada') return <a className="botao pequeno" href={r.urlDanfe} target="_blank" rel="noreferrer">Cupom fiscal nº {r.numero}</a>;
+  if (r?.status === 'autorizada') return <a className="botao pequeno" href={r.urlDanfe} target="_blank" rel="noreferrer">{r.modelo === 'nfe' ? 'NF-e' : 'Cupom fiscal'} nº {r.numero}</a>;
+  if (r?.status === 'processando') return <span className="muted">NF-e enviada: a Sefaz está processando (veja em Fiscal).</span>;
   return (
     <>
-      <button className="botao claro pequeno" onClick={() => emitir.mutate()} disabled={emitir.isPending}>{emitir.isPending ? 'Emitindo…' : 'Emitir NFC-e'}</button>
+      {!revenda && <button className="botao claro pequeno" onClick={() => emitir.mutate('nfce')} disabled={emitir.isPending}>{emitir.isPending ? 'Emitindo…' : 'Emitir NFC-e'}</button>}
+      <button className="botao claro pequeno" title={revenda ? 'Venda para revendedora sai em NF-e' : 'Para cliente que pede nota com CPF/CNPJ e endereço'} onClick={() => emitir.mutate('nfe')} disabled={emitir.isPending}>{emitir.isPending ? 'Emitindo…' : 'Emitir NF-e'}</button>
       {(emitir.error || r?.status === 'erro') && <span className="muted" style={{ color: 'var(--erro)' }}>{(emitir.error as any)?.dados?.mensagem ?? r?.mensagem}</span>}
     </>
   );

@@ -82,7 +82,7 @@ export function DetalheVenda() {
         sub={<>{dataHora(v.criadoEm)} · {v.local}{v.cliente ? ` · ${v.cliente}` : ''}{v.clienteDocumento ? ` (${documento(v.clienteDocumento)})` : ''} &nbsp; {ativa ? <span className="etiqueta ok">Concluída</span> : <span className="etiqueta neutra">Cancelada · {v.motivoCancelamento}</span>}</>}
         acoes={<>
           <a className="botao claro" href={`/imprimir/venda/${id}`} target="_blank" rel="noreferrer">Recibo</a>
-          {ativa && !nfce && <BotaoNfce vendaId={id!} />}
+          {ativa && !nfce && <BotaoNfce vendaId={id!} revenda={v.tipo === 'revenda'} />}
           {nfce && <a className="botao claro" href={nfce.urlDanfe} target="_blank" rel="noreferrer">Nota nº {nfce.numero}</a>}
         </>}
       />

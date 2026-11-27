@@ -5004,3 +5004,19 @@ test('itens 29–37: Instagram no CRM, Fechamento na agenda, 1º acesso sem senh
   await ok('POST', `/rh/rosto/${conf.id}/revisar`, { revisao: 'ok' });
   assert.ok(!(await ok('GET', '/rh/rosto')).some((x) => x.id === conf.id), 'revisada sai da lista');
 });
+
+test('nota fiscal: revenda não sai em NFC-e, NF-e exige cadastro na venda, pendências de NCM', async () => {
+  const vendas = await ok('GET', '/vendas');
+  const lista = Array.isArray(vendas) ? vendas : vendas.itens;
+  const semCliente = lista.find((v) => !v.clienteId && v.status === 'concluida');
+  if (semCliente) {
+    const r = await chamar('POST', `/fiscal/nfe/venda/${semCliente.id}`);
+    assert.equal(r.status, 400);
+    assert.match(r.dados.mensagem, /ligue a venda a um cadastro/);
+  }
+  const revenda = lista.find((v) => v.tipo === 'revenda' && v.status === 'concluida');
+  if (revenda) assert.equal((await chamar('POST', `/fiscal/nfce/venda/${revenda.id}`)).status, 400, 'revenda não sai em NFC-e');
+  const p = await ok('GET', '/fiscal/pendencias');
+  assert.equal(typeof p.produtosSemNcm, 'number');
+  assert.equal((await chamar('POST', '/fiscal/ncm-em-lote', { ncm: '123' })).status, 400);
+});

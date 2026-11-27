@@ -21,6 +21,7 @@ export function Fiscal() {
   return (
     <>
       <Topo eb="Fiscal" titulo="Notas fiscais" sub={sit.data && (sit.data.configurado ? <>Emissor ligado · ambiente de <b>{sit.data.ambiente}</b></> : 'Emissor ainda não ligado: falta o token da Focus NFe e o certificado A1 da Aritana.')} />
+      <Pendencias />
       <Abas ativa={aba} mudar={setAba} abas={[['notas', 'Notas emitidas'], ['regras', 'Regras fiscais']]} />
       {aba === 'notas' ? <Notas /> : <Regras />}
     </>
@@ -110,6 +111,36 @@ function Regras() {
           })}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+/** O que ainda trava a emissão (peças sem NCM, empresa sem CNPJ), com o preenchimento do NCM em lote. */
+function Pendencias() {
+  const qc = useQueryClient();
+  const q = useQuery({ queryKey: ['fiscal-pendencias'], queryFn: () => api<{ produtosSemNcm: number; exemplos: { referencia: string; descricao: string }[]; ncmsMaisUsados: { ncm: string; n: number }[]; empresasSemCnpj: string[] }>('/fiscal/pendencias') });
+  const [ncm, setNcm] = useState('');
+  const lote = useMutation({ mutationFn: () => api<{ atualizados: number }>('/fiscal/ncm-em-lote', { corpo: { ncm } }), onSuccess: () => qc.invalidateQueries({ queryKey: ['fiscal-pendencias'] }) });
+  const p = q.data;
+  if (!p || (!p.produtosSemNcm && !p.empresasSemCnpj.length && !lote.data)) return null;
+  return (
+    <div className="cartao" style={{ marginBottom: 14, borderColor: 'var(--dourado)' }}>
+      {lote.data && <div className="aviso ok" style={{ marginBottom: 8 }}>NCM preenchido em {lote.data.atualizados} peça(s).</div>}
+      {p.empresasSemCnpj.length > 0 && <p style={{ marginTop: 0 }}><b>Empresa sem CNPJ:</b> {p.empresasSemCnpj.join(', ')}. Preencha em Configurações › Empresas.</p>}
+      {p.produtosSemNcm > 0 && (
+        <>
+          <p style={{ marginTop: 0 }}><b>{p.produtosSemNcm.toLocaleString('pt-BR')} peça(s) ativa(s) sem NCM</b>: a nota dessas peças é recusada. Ex.: {p.exemplos.map((e) => `${e.referencia} ${e.descricao}`).join(' · ')}</p>
+          {p.ncmsMaisUsados.length > 0 && <p className="muted" style={{ fontSize: 13 }}>NCM mais usado nas outras peças: {p.ncmsMaisUsados.map((x) => `${x.ncm} (${x.n})`).join(', ')}</p>}
+          {pode('configuracoes', 'editar') && (
+            <div className="flex" style={{ gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+              <input placeholder="NCM (8 números) confirmado pelo contador" inputMode="numeric" value={ncm} onChange={(e) => setNcm(e.target.value)} style={{ maxWidth: 280 }} />
+              <button className="botao" disabled={ncm.replace(/\D/g, '').length !== 8 || lote.isPending} onClick={() => lote.mutate()}>{lote.isPending ? 'Preenchendo…' : 'Preencher nas peças sem NCM'}</button>
+              <span className="muted" style={{ fontSize: 12 }}>Só muda as peças que estão sem NCM. Confirme o código com o contador antes.</span>
+            </div>
+          )}
+          {lote.error && <Erro erro={lote.error} />}
+        </>
+      )}
     </div>
   );
 }

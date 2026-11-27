@@ -168,11 +168,9 @@ export class FiscalService {
   }
 
   /** NFC-e de uma venda do caixa. */
-  async emitirNfce(vendaId: string, usuarioId: string | null) {
-    const [v] = await this.db.select().from(vendas).where(eq(vendas.id, vendaId));
-    if (!v || v.status !== 'concluida') throw new NotFoundException('Venda não encontrada.');
-    const emp = await this.empresa(v.empresaId);
-    const regra = await this.regra(v.tipo === 'revenda' ? 'venda_revenda' : 'venda_consumidor');
+  /** Itens da venda com o desconto geral rateado (a soma bate com o total) e as formas de pagamento no código da Sefaz. */
+  private async itensDaVenda(v: typeof vendas.$inferSelect) {
+    const vendaId = v.id;
     const itens = await this.db
       .select({ codigo: produtos.referencia, descricao: produtos.descricao, ncm: produtos.ncm, quantidade: vendaItens.quantidade, valorUnitario: vendaItens.preco, desconto: vendaItens.desconto })
       .from(vendaItens)
@@ -189,6 +187,17 @@ export class FiscalService {
       });
     }
     const pags = await this.db.select().from(vendaPagamentos).where(eq(vendaPagamentos.vendaId, vendaId));
+    return { itens, formas: pags.map((p) => ({ forma_pagamento: FORMA_SEFAZ[p.forma] ?? '99', valor_pagamento: (p.valor / 100).toFixed(2) })) };
+  }
+
+  async emitirNfce(vendaId: string, usuarioId: string | null) {
+    const [v] = await this.db.select().from(vendas).where(eq(vendas.id, vendaId));
+    if (!v || v.status !== 'concluida') throw new NotFoundException('Venda não encontrada.');
+    // NFC-e é só para consumidor final: venda para revendedora sai em NF-e.
+    if (v.tipo === 'revenda') throw new BadRequestException('Venda para revenda sai em NF-e (a NFC-e é só para consumidor final). Use "Emitir NF-e".');
+    const emp = await this.empresa(v.empresaId);
+    const regra = await this.regra('venda_consumidor');
+    const { itens, formas } = await this.itensDaVenda(v);
     let cliente: typeof pessoas.$inferSelect | undefined;
     if (v.clienteId) [cliente] = await this.db.select().from(pessoas).where(eq(pessoas.id, v.clienteId));
     const payload = {
@@ -200,11 +209,26 @@ export class FiscalService {
       local_destino: 1,
       ...(cliente?.documento && cliente.tipoDocumento === 'cpf' ? { cpf_destinatario: cliente.documento, nome_destinatario: cliente.nome } : {}),
       items: this.itensFocus(itens, regra.cfopDentro, regra.csosn),
-      formas_pagamento: pags.map((p) => ({ forma_pagamento: FORMA_SEFAZ[p.forma] ?? '99', valor_pagamento: (p.valor / 100).toFixed(2) })),
+      formas_pagamento: formas,
     };
     const nota = await this.registrar({ empresaId: v.empresaId, modelo: 'nfce', operacao: regra.operacao, origemTipo: 'venda', origemId: v.id, destinatarioId: v.clienteId, valor: v.total, payload }, usuarioId);
     await this.auditoria.registrar({ usuarioId, acao: 'emitir_nota', entidade: 'nota', entidadeId: nota.id, dados: { modelo: 'nfce', venda: v.numero } });
     return this.enviar(nota.id);
+  }
+
+  /**
+   * NF-e de uma venda: para revendedora (operação "venda para revenda", não é consumidor final) ou para cliente que
+   * pede nota com CPF/CNPJ e endereço (consumidor final; empresa com IE não é consumidor final).
+   */
+  async emitirNfeVenda(vendaId: string, usuarioId: string | null) {
+    const [v] = await this.db.select().from(vendas).where(eq(vendas.id, vendaId));
+    if (!v || v.status !== 'concluida') throw new NotFoundException('Venda não encontrada.');
+    if (!v.clienteId) throw new BadRequestException('Para a NF-e, ligue a venda a um cadastro (cliente ou revendedora) com CPF/CNPJ e endereço.');
+    const [p] = await this.db.select().from(pessoas).where(eq(pessoas.id, v.clienteId));
+    const revenda = v.tipo === 'revenda' || p?.tipo === 'representante';
+    const { itens, formas } = await this.itensDaVenda(v);
+    const consumidorFinal = revenda || (p?.tipoDocumento === 'cnpj' && p.inscricaoEstadual) ? 0 : 1;
+    return this.emitirNfe(v.empresaId, v.clienteId, revenda ? 'venda_revenda' : 'venda_consumidor', 'venda', v.id, itens, usuarioId, `Venda nº ${v.numero}`, { consumidorFinal, formas });
   }
 
   /** NF-e de remessa da maleta para a representante. */
@@ -240,14 +264,14 @@ export class FiscalService {
     return this.emitirNfe(m.empresaId, m.representanteId, operacao, 'acerto', a.id, itens, usuarioId, `Acerto da maleta nº ${m.numero}`);
   }
 
-  private async emitirNfe(empresaId: string, pessoaId: string, operacao: string, origemTipo: string, origemId: string, itens: ItemNota[], usuarioId: string | null, info: string) {
+  private async emitirNfe(empresaId: string, pessoaId: string, operacao: string, origemTipo: string, origemId: string, itens: ItemNota[], usuarioId: string | null, info: string, extra: { consumidorFinal?: 0 | 1; formas?: { forma_pagamento: string; valor_pagamento: string }[] } = {}) {
     const emp = await this.empresa(empresaId);
     const regra = await this.regra(operacao);
     const [p] = await this.db.select().from(pessoas).where(eq(pessoas.id, pessoaId));
-    if (!p?.documento || !p.logradouro || !p.cidade || !p.uf || !p.cep) throw new BadRequestException('O cadastro da representante precisa de CPF e endereço completo (rua, cidade, UF e CEP) para a nota.');
+    if (!p?.documento || !p.logradouro || !p.cidade || !p.uf || !p.cep) throw new BadRequestException(`O cadastro de ${p?.nome ?? 'quem recebe a nota'} precisa de CPF/CNPJ e endereço completo (rua, cidade, UF e CEP) para a NF-e.`);
     const cfop = (p.uf ?? '').toUpperCase() === (emp.uf ?? '').toUpperCase() ? regra.cfopDentro : regra.cfopFora;
     const entrada = cfop.startsWith('1') || cfop.startsWith('2');
-    const valor = itens.reduce((a, i) => a + i.valorUnitario * i.quantidade, 0);
+    const valor = itens.reduce((a, i) => a + i.valorUnitario * i.quantidade - (i.desconto ?? 0), 0);
     const payload = {
       cnpj_emitente: emp.cnpj,
       data_emissao: new Date().toISOString(),
@@ -255,10 +279,11 @@ export class FiscalService {
       tipo_documento: entrada ? 0 : 1,
       finalidade_emissao: 1,
       local_destino: cfop.startsWith('6') || cfop.startsWith('2') ? 2 : 1,
-      consumidor_final: 1,
+      consumidor_final: extra.consumidorFinal ?? 1,
       presenca_comprador: 1,
       modalidade_frete: 9,
       ...this.destinatario(p),
+      ...(extra.formas?.length ? { formas_pagamento: extra.formas } : {}),
       informacoes_adicionais_contribuinte: `${info}. ${regra.observacao ?? ''}`.trim(),
       items: this.itensFocus(itens, cfop, regra.csosn),
     };
@@ -290,7 +315,7 @@ export class FiscalService {
     const [n] = await this.db.select().from(notasFiscais).where(eq(notasFiscais.id, notaId));
     if (!n || n.status !== 'erro') throw new BadRequestException('Só notas com erro podem ser reenviadas.');
     await this.db.update(notasFiscais).set({ status: 'cancelada', mensagem: `Substituída. ${n.mensagem ?? ''}` }).where(eq(notasFiscais.id, n.id));
-    if (n.origemTipo === 'venda') return this.emitirNfce(n.origemId, usuarioId);
+    if (n.origemTipo === 'venda') return n.modelo === 'nfe' ? this.emitirNfeVenda(n.origemId, usuarioId) : this.emitirNfce(n.origemId, usuarioId);
     if (n.origemTipo === 'maleta') return this.emitirRemessaMaleta(n.origemId, usuarioId);
     return this.emitirAcerto(n.origemId, n.operacao as 'retorno_consignacao', usuarioId);
   }
