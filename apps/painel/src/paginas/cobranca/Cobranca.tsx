@@ -8,6 +8,7 @@ import './cobranca.css';
 import { usarEquipe } from '../Mesa';
 import { ListaEnvios } from '../crm/Envios';
 import { CancelarBoletosDoDia } from './CancelarBoletos';
+import { TextoComVariaveis } from '../../componentes/TextoComVariaveis';
 
 export type Eu = { cobradorId: string | null; restrito: boolean; gestor: boolean; cobrador: string | null; protestoLigado: boolean };
 export const useEu = () => useQuery({ queryKey: ['cobranca', 'eu'], queryFn: () => api<Eu>('/cobranca/eu'), staleTime: 60_000 });
@@ -547,7 +548,7 @@ function Configurar() {
               <button className="botao perigo pequeno" style={{ alignSelf: 'end' }} onClick={() => muda({ regua: { ...cfg.regua, passos: cfg.regua.passos.filter((_: any, j: number) => j !== i) } })}>Tirar</button>
             </div>
             <Campo rotulo={`${Number(p.dias) < 0 ? `${-p.dias} dia(s) antes do vencimento` : Number(p.dias) === 0 ? 'No dia do vencimento' : `De ${p.dias} dia(s) de atraso`}${cfg.regua.passos[i + 1] ? ` até ${Number(cfg.regua.passos[i + 1].dias) - 1}` : ' em diante'} · ${(p.acao ?? 'mensagem') === 'tarefa' ? 'o que a equipe precisa fazer' : 'mensagem'}`}>
-              <textarea value={p.texto} onChange={(e) => passo(i, { texto: e.target.value })} />
+              <TextoComVariaveis formato="simples" value={p.texto} onChange={(t) => passo(i, { texto: t })} variaveis={VARIAVEIS.split(' ').map((v) => v.replace(/[{}]/g, ''))} />
               {canal?.tipo === 'oficial' && (p.acao ?? 'mensagem') === 'mensagem' && p.canal === 'whatsapp' && (
                 <select value={p.templateId ?? ''} onChange={(e) => passo(i, { templateId: e.target.value || null })} style={{ marginTop: 6 }}>
                   <option value="">Template aprovado pela Meta…</option>

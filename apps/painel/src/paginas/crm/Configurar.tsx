@@ -5,6 +5,7 @@ import { Link } from 'react-router-dom';
 import { Abas, Campo, Carregando, Erro, camposComErro } from '../../componentes/ui';
 import { Distribuicao } from './Distribuicao';
 import { NOME_TIPO_CANAL, NovoCampo, TIPOS_CAMPO, usarAtendentes, usarCampos, usarUsuariosDoCrm, usarCanais, usarFunis, useMidia, variavelDoCampo, type CampoDef, type Canal, type Template, type TipoCanal } from './comum';
+import { TextoComVariaveis } from '../../componentes/TextoComVariaveis';
 
 type Sub = 'numeros' | 'funis' | 'distribuicao' | 'campos' | 'templates' | 'respostas' | 'ia' | 'ramais';
 const sel = { padding: 7, borderRadius: 8, border: '1px solid var(--linha)', font: 'inherit' } as const;
@@ -497,7 +498,7 @@ function Templates() {
         {gestor && (
           <div className="coluna" style={{ gap: 6, marginTop: 10 }}>
             <input placeholder="Nome do modelo" value={f.nome} onChange={(e) => setF({ ...f, nome: e.target.value })} style={sel} />
-            <textarea rows={3} placeholder="Oi {{primeiro_nome}}, …" value={f.texto} onChange={(e) => setF({ ...f, texto: e.target.value })} style={sel} />
+            <TextoComVariaveis linhas={3} placeholder="Oi {{primeiro_nome}}, … (digite { para as variáveis)" value={f.texto} onChange={(t) => setF({ ...f, texto: t })} variaveis={FONTES.map(([n, r]) => ({ nome: n, rotulo: r }))} style={sel} />
             <div><button className="botao claro" disabled={!f.nome.trim() || !f.texto.trim()} onClick={() => { m.mutate({ rota: '/crm/templates', corpo: f }); setF({ nome: '', texto: '' }); }}>Criar modelo</button></div>
           </div>
         )}

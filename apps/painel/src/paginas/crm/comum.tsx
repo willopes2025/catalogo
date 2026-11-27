@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, lerSessao } from '../../api';
 import { paraCentavos, reais } from '../../formato';
+import { VARIAVEIS_CRM } from '../../componentes/TextoComVariaveis';
 
 export interface Etapa { id: string; nome: string; cor: string; ordem: number; tipo: 'aberta' | 'ganho' | 'perdido'; chave: string | null; leads?: number; valor?: number }
 export interface Funil { id: string; nome: string; tipo: string; ordem: number; ativo: boolean; etapas: Etapa[] }
@@ -18,6 +19,11 @@ export const usarAtendentes = () => useQuery({ queryKey: ['crm', 'atendentes'], 
 export const usarUsuariosDoCrm = () => useQuery({ queryKey: ['crm', 'atendentes', 'todos'], queryFn: () => api<(Atendente & { grupo: string; semCrm: boolean })[]>('/crm/atendentes?todos=1'), staleTime: 60_000 });
 export const usarCanais = () => useQuery({ queryKey: ['crm', 'canais'], queryFn: () => api<Canal[]>('/crm/canais') });
 export const usarCampos = () => useQuery({ queryKey: ['crm', 'campos'], queryFn: () => api<CampoDef[]>('/crm/campos'), staleTime: 60_000 });
+/** Variáveis das mensagens do CRM com os campos personalizados (para a lista que abre ao digitar "{"). */
+export function usarVariaveisCrm() {
+  const campos = usarCampos();
+  return [...VARIAVEIS_CRM, ...(campos.data ?? []).map((c) => ({ nome: variavelDoCampo(c.nome), rotulo: `Campo: ${c.nome}` }))];
+}
 export const usarContadores = (ativo = true) => useQuery({ queryKey: ['crm', 'contadores'], queryFn: () => api<{ fila: number; minhas: number; naoLidas: number; tarefasVencidas: number; mencoes: number }>('/crm/contadores'), refetchInterval: 15_000, enabled: ativo });
 export const meuId = () => lerSessao()?.usuario.id ?? '';
 

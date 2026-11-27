@@ -1,7 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../api';
 import { Erro } from '../../componentes/ui';
-import { usarCanais, type Template } from './comum';
+import { usarCanais, usarVariaveisCrm, type Template } from './comum';
+import { TextoComVariaveis } from '../../componentes/TextoComVariaveis';
 
 /** Mensagem de WhatsApp escolhida ao criar uma tarefa do card. */
 export interface EstadoMensagem {
@@ -30,6 +31,7 @@ const icone = (mime: string | null) => (mime?.startsWith('image/') ? '🖼 ' : m
 
 /** Bloco "Enviar mensagem de WhatsApp" do formulário de tarefa. */
 export function EscolherMensagem({ valor: m, mudar }: { valor: EstadoMensagem; mudar: (m: EstadoMensagem) => void }) {
+  const variaveis = usarVariaveisCrm();
   const canais = usarCanais();
   const respostas = useQuery({ queryKey: ['crm', 'respostas'], queryFn: () => api<Resposta[]>('/crm/respostas'), staleTime: 60_000, enabled: m.ativo });
   const templates = useQuery({ queryKey: ['crm', 'templates', 'todos'], queryFn: () => api<Template[]>('/crm/templates'), staleTime: 60_000, enabled: m.ativo });
@@ -51,7 +53,7 @@ export function EscolherMensagem({ valor: m, mudar }: { valor: EstadoMensagem; m
             ))}
           </div>
           {m.tipo === 'texto' && (
-            <textarea aria-label="Mensagem" rows={3} maxLength={4096} placeholder="Ex.: Oi {{primeiro_nome}}, passando para lembrar do acerto da sua maleta amanhã!" value={m.texto} onChange={(e) => set({ texto: e.target.value })} style={{ ...campo, resize: 'vertical' }} />
+            <TextoComVariaveis aria-label="Mensagem" linhas={3} maxLength={4096} placeholder="Ex.: Oi {{primeiro_nome}}, passando para lembrar do acerto da sua maleta amanhã! (digite { para as variáveis)" value={m.texto} onChange={(t) => set({ texto: t })} variaveis={variaveis} style={{ ...campo, resize: 'vertical' }} />
           )}
           {m.tipo === 'resposta' && (
             <select aria-label="Resposta rápida" value={m.respostaId} onChange={(e) => set({ respostaId: e.target.value })} style={campo}>

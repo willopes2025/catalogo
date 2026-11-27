@@ -3,7 +3,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { api, pode } from '../../api';
 import { Campo, Carregando, Erro } from '../../componentes/ui';
-import { usarAtendentes, usarCanais, usarFunis, type Template } from './comum';
+import { usarAtendentes, usarCanais, usarFunis, usarVariaveisCrm, type Template } from './comum';
+import { TextoComVariaveis } from '../../componentes/TextoComVariaveis';
 
 // ───────────── Tarefas ─────────────
 
@@ -106,6 +107,7 @@ export function Gatilhos() {
 }
 
 function EditorGatilho({ inicial, fechar }: { inicial: Partial<Gatilho>; fechar: () => void }) {
+  const variaveis = usarVariaveisCrm();
   const qc = useQueryClient();
   const funis = usarFunis();
   const canais = usarCanais();
@@ -162,7 +164,7 @@ function EditorGatilho({ inicial, fechar }: { inicial: Partial<Gatilho>; fechar:
                 {templates.data?.filter((t) => t.tipo === 'livre' || t.status === 'APPROVED').map((t) => <option key={t.id} value={t.id}>{t.nome}{t.tipo === 'meta' ? ' (Meta)' : ''}</option>)}
               </select>
             )}
-            {a.tipo === 'enviar_mensagem' && <input value={a.texto ?? ''} onChange={(e) => setAcao(i, { ...a, texto: e.target.value })} placeholder="Oi {{primeiro_nome}}…" style={{ ...sel, flex: 1, minWidth: 220 }} />}
+            {a.tipo === 'enviar_mensagem' && <div style={{ flex: 1, minWidth: 220 }}><TextoComVariaveis umaLinha value={a.texto ?? ''} onChange={(t) => setAcao(i, { ...a, texto: t })} variaveis={variaveis} placeholder="Oi {{primeiro_nome}}… (digite { para as variáveis)" style={sel} /></div>}
             {(a.tipo === 'enviar_mensagem' || (a.tipo === 'enviar_template' && templates.data?.find((t) => t.id === a.templateId)?.tipo !== 'meta')) && (
               <select value={a.canalId ?? ''} onChange={(e) => setAcao(i, { ...a, canalId: e.target.value || undefined })} style={sel}>
                 <option value="">Número da última conversa</option>
@@ -257,6 +259,7 @@ export function Disparos() {
 }
 
 function NovoDisparo({ fechar }: { fechar: () => void }) {
+  const variaveis = usarVariaveisCrm();
   const qc = useQueryClient();
   const funis = usarFunis();
   const canais = usarCanais();
@@ -292,7 +295,7 @@ function NovoDisparo({ fechar }: { fechar: () => void }) {
           <select value={f.templateId} onChange={(e) => setF({ ...f, templateId: e.target.value })}><option value="">{canal?.tipo === 'oficial' ? 'Escolha…' : 'Mensagem livre'}</option>{usaveis.map((t) => <option key={t.id} value={t.id}>{t.nome}</option>)}</select>
         </Campo>
       )}
-      {f.canalId && canal && canal.tipo !== 'oficial' && !f.templateId && <Campo rotulo="Mensagem" className="l2"><textarea rows={3} value={f.texto} onChange={(e) => setF({ ...f, texto: e.target.value })} placeholder="Oi {{primeiro_nome}}!…" /></Campo>}
+      {f.canalId && canal && canal.tipo !== 'oficial' && !f.templateId && <Campo rotulo="Mensagem" className="l2"><TextoComVariaveis linhas={3} value={f.texto} onChange={(t) => setF({ ...f, texto: t })} variaveis={variaveis} placeholder="Oi {{primeiro_nome}}!… (digite { para ver as variáveis)" /></Campo>}
       <Campo rotulo="Funil" className="l2"><select value={f.funilId} onChange={(e) => setF({ ...f, funilId: e.target.value, etapaIds: [] })}><option value="">Todos os funis</option>{funis.data?.map((x) => <option key={x.id} value={x.id}>{x.nome}</option>)}</select></Campo>
       <Campo rotulo="Situação dos cards" className="l2"><select value={f.status} onChange={(e) => setF({ ...f, status: e.target.value })}><option value="aberto">Abertos</option><option value="ganho">Ganhos</option><option value="perdido">Perdidos</option><option value="">Todos</option></select></Campo>
       {funil && (

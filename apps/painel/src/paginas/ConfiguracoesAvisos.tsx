@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, pode } from '../api';
 import { dataHora } from '../formato';
 import { Campo, Carregando, Erro } from '../componentes/ui';
+import { TextoComVariaveis } from '../componentes/TextoComVariaveis';
 
 /** Lê e grava uma configuração por chave (impressao, avisos, regras_garantia, regras_comissao). */
 function useConfig<T>(chave: string) {
@@ -65,7 +66,7 @@ function MensagemApp() {
           <label htmlFor="msg-app"><b>Texto</b> <span className="muted" style={{ fontSize: 12 }}>· variáveis: {'{{primeiro_nome}}'} {'{{nome}}'} {'{{link_android}}'} (baixar o app) {'{{link_portal}}'} (portal, para o iPhone)</span></label>
           {padrao.data && v.texto !== padrao.data.texto && <button type="button" className="botao claro pequeno" onClick={() => setV({ ...v, texto: padrao.data!.texto })}>Voltar ao padrão</button>}
         </div>
-        <textarea id="msg-app" rows={9} maxLength={2000} value={v.texto} onChange={(e) => setV({ ...v, texto: e.target.value })} style={{ resize: 'vertical', fontFamily: 'inherit' }} />
+        <TextoComVariaveis id="msg-app" linhas={9} maxLength={2000} value={v.texto} onChange={(t) => setV({ ...v, texto: t })} variaveis={[{ nome: 'primeiro_nome', rotulo: 'Primeiro nome' }, { nome: 'nome', rotulo: 'Nome completo' }, { nome: 'link_android', rotulo: 'Link para baixar o app (Android)' }, { nome: 'link_portal', rotulo: 'Endereço do portal (iPhone)' }]} style={{ resize: 'vertical', fontFamily: 'inherit' }} />
       </div>
       <Salvar s={salvar} valor={v} />
     </div>
@@ -113,7 +114,7 @@ function MensagensAgenda() {
               {padrao.data && v[k] !== padrao.data[k] && <button type="button" className="botao claro pequeno" onClick={() => setV({ ...v, [k]: padrao.data![k] })}>Voltar ao padrão</button>}
             </span>
           </div>
-          <textarea id={`msg-agenda-${k}`} rows={4} maxLength={1500} value={v[k]} onChange={(e) => setV({ ...v, [k]: e.target.value })} style={{ resize: 'vertical', fontFamily: 'inherit' }} />
+          <TextoComVariaveis id={`msg-agenda-${k}`} linhas={4} maxLength={1500} value={v[k]} onChange={(t) => setV({ ...v, [k]: t })} variaveis={VARS_AGENDA} style={{ resize: 'vertical', fontFamily: 'inherit' }} />
           {aberta === k && <div className="aviso" style={{ whiteSpace: 'pre-wrap', fontSize: 13 }}><b>Exemplo:</b>{'\n'}{previaAgenda(v[k])}</div>}
         </div>
       ))}
