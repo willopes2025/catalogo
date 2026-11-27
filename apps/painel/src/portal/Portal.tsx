@@ -242,7 +242,7 @@ function Maletas() {
       {q.error && <Aviso erro={q.error} />}
       {q.data?.map((m) => (
         <Link key={m.id} to={`/portal/maletas/${m.id}`} className="p-cartao p-bloco p-linha">
-          <span><b>Nº {m.numero}</b><br /><span className="p-suave">{m.status === 'aberta' ? `Acerto até ${data(m.dataLimite)}` : `Acertada`}</span></span>
+          <span><b>Nº {m.numero}</b><br /><span className="p-suave">{m.status === 'aberta' ? `Acerto até ${data(m.dataLimite)}` : `Baixada`}</span></span>
           <b>{reais(m.valor)}</b>
         </Link>
       ))}

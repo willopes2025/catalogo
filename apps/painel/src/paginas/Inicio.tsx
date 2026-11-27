@@ -152,7 +152,7 @@ export function Inicio() {
       {verMaletas && (
         <div className="ini-grade k4">
           <Kpi i={i++} tipo="escuro" rotulo="Valor em maletas na rua" valor={<Conta valor={d.maletas.valorNaRua} dinheiro />} detalhe={`${d.maletas.pecasNaRua.toLocaleString('pt-BR')} peças em ${d.maletas.abertas} maletas`} cor="var(--areia)" />
-          <Kpi i={i++} tipo={d.maletas.atrasadas ? 'atencao' : undefined} rotulo="Maletas atrasadas" valor={<Conta valor={d.maletas.atrasadas} />} detalhe={<Link to="/maletas?aba=atrasadas">ver lista</Link>} cor={d.maletas.atrasadas ? 'var(--erro)' : undefined} />
+          <Kpi i={i++} tipo={d.maletas.atrasadas ? 'atencao' : undefined} rotulo="Maletas atrasadas" valor={<Conta valor={d.maletas.atrasadas} />} detalhe={<Link to="/maletas?aba=abertas">ver lista</Link>} cor={d.maletas.atrasadas ? 'var(--erro)' : undefined} />
           <Kpi i={i++} rotulo="Vencem nos próximos 7 dias" valor={<Conta valor={d.maletas.vencendo} />} detalhe={`${d.maletas.acertosHoje} com acerto hoje`} />
           <Kpi i={i++} rotulo="Representantes ativas" valor={<Conta valor={d.rede.ativas} />} detalhe={`${d.rede.novasMes} novas no mês · ${d.rede.semMaleta} sem maleta`} cor="var(--ok)" />
         </div>
