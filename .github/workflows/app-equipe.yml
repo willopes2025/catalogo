@@ -1,0 +1,81 @@
+# App da equipe ("Aritana Gestão"): o sistema inteiro (aritana.wideic.com) num app Android.
+# Usa o mesmo projeto do app da representante (pasta app-representante), trocando endereço, nome e ID.
+# Roda à mão em Actions › "App da equipe (APK)" › Run workflow, ou quando o projeto do app muda.
+#
+# Gera um APK para instalar direto no Android (permitir "instalar apps desconhecidos").
+# Com os segredos de assinatura (os mesmos do app da representante), gera também o .aab para a Play Store.
+# Atualizar o sistema na VPS já atualiza o app: só precisa gerar de novo se mudar ícone, nome ou plugins.
+name: App da equipe (APK)
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'app-representante/**'
+      - '.github/workflows/app-equipe.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    env:
+      TEM_CHAVE: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' && 'sim' || 'nao' }}
+      APP_URL: https://aritana.wideic.com/
+      APP_NOME: Aritana Gestão
+      APP_ID: br.com.aritanaonline.gestao
+    defaults:
+      run:
+        working-directory: app-representante
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app-representante/package-lock.json
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 21
+      - run: npm ci
+      - name: Nome e ID do app da equipe
+        run: |
+          sed -i "s/applicationId \"br.com.aritanaonline.representante\"/applicationId \"$APP_ID\"/" android/app/build.gradle
+          sed -i "s|<string name=\"app_name\">Aritana</string>|<string name=\"app_name\">$APP_NOME</string>|; s|<string name=\"title_activity_main\">Aritana</string>|<string name=\"title_activity_main\">$APP_NOME</string>|; s|<string name=\"package_name\">br.com.aritanaonline.representante</string>|<string name=\"package_name\">$APP_ID</string>|; s|<string name=\"custom_url_scheme\">br.com.aritanaonline.representante</string>|<string name=\"custom_url_scheme\">$APP_ID</string>|" android/app/src/main/res/values/strings.xml
+          grep -n "applicationId" android/app/build.gradle
+          cat android/app/src/main/res/values/strings.xml
+      # Sem google-services.json: o app da equipe não usa as notificações do app da representante.
+      - run: npx cap sync android
+      - name: APK
+        working-directory: app-representante/android
+        run: ./gradlew --no-daemon assembleDebug
+      - run: cp android/app/build/outputs/apk/debug/app-debug.apk "android/app/build/outputs/apk/debug/aritana-gestao.apk"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aritana-gestao-apk
+          path: app-representante/android/app/build/outputs/apk/debug/aritana-gestao.apk
+          retention-days: 30
+      - name: Arquivo para a Play Store (assinado)
+        if: ${{ env.TEM_CHAVE == 'sim' }}
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_SENHA: ${{ secrets.ANDROID_KEYSTORE_SENHA }}
+          ANDROID_CHAVE_ALIAS: ${{ secrets.ANDROID_CHAVE_ALIAS }}
+          ANDROID_CHAVE_SENHA: ${{ secrets.ANDROID_CHAVE_SENHA }}
+        working-directory: app-representante/android
+        run: |
+          echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/aritana.keystore"
+          ./gradlew --no-daemon bundleRelease \
+            -Pandroid.injected.signing.store.file="$RUNNER_TEMP/aritana.keystore" \
+            -Pandroid.injected.signing.store.password="$ANDROID_KEYSTORE_SENHA" \
+            -Pandroid.injected.signing.key.alias="$ANDROID_CHAVE_ALIAS" \
+            -Pandroid.injected.signing.key.password="$ANDROID_CHAVE_SENHA"
+          rm -f "$RUNNER_TEMP/aritana.keystore"
+      - uses: actions/upload-artifact@v4
+        if: ${{ hashFiles('app-representante/android/app/build/outputs/bundle/release/*.aab') != '' }}
+        with:
+          name: aritana-gestao-play-store-aab
+          path: app-representante/android/app/build/outputs/bundle/release/*.aab
+          retention-days: 30

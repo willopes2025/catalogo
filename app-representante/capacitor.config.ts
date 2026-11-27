@@ -14,9 +14,11 @@ const url = process.env.APP_URL ?? 'https://aritana.wideic.com/portal';
 // O portal lê esta marca no navegador do app e só registra quando o Firebase está no app.
 const firebase = existsSync('android/app/google-services.json'); // caminho relativo: o cap roda dentro de app-representante
 
+// O mesmo projeto gera também o app da equipe ("Aritana Gestão", sistema inteiro): APP_URL e APP_NOME mudam
+// no GitHub Actions (workflow app-equipe.yml), que troca também o ID do Android para br.com.aritanaonline.gestao.
 const config: CapacitorConfig = {
-  appId: 'br.com.aritanaonline.representante',
-  appName: 'Aritana',
+  appId: process.env.APP_ID ?? 'br.com.aritanaonline.representante',
+  appName: process.env.APP_NOME ?? 'Aritana',
   webDir: 'www',
   server: {
     url,
