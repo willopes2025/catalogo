@@ -1429,6 +1429,23 @@ export const crmDisparos = pgTable('crm_disparos', {
   usuarioId: uuid('usuario_id').references(() => usuarios.id, { onDelete: 'set null' }),
   criadoEm: criadoEm(),
   concluidoEm: timestamp('concluido_em', { withTimezone: true }),
+  /** crm (cards do funil) | lista (planilha anexada) */
+  origem: text('origem').notNull().default('crm'),
+  /**
+   * Ritmo detalhado (como no Widezap): intervalo aleatório entre mensagens, limite por dia, horário,
+   * dias da semana e lotes (X mensagens, pausa de Y min). Vazio = ritmo simples por minuto.
+   */
+  envio: jsonb('envio').$type<{ intervaloMinS: number; intervaloMaxS: number; limiteDiario: number | null; inicio: string; fim: string; dias: number[]; loteTamanho: number | null; lotePausaMin: number | null }>(),
+  proximoEm: timestamp('proximo_em', { withTimezone: true }),
+  hojeData: date('hoje_data', { mode: 'string' }),
+  hojeEnviados: integer('hoje_enviados').notNull().default(0),
+  loteEnviados: integer('lote_enviados').notNull().default(0),
+  /** Lista anexada: cria card neste funil/etapa para quem ainda não tem card aberto nele. */
+  funilDestinoId: uuid('funil_destino_id').references(() => crmFunis.id, { onDelete: 'set null' }),
+  etapaDestinoId: uuid('etapa_destino_id').references(() => crmEtapas.id, { onDelete: 'set null' }),
+  /** Quando a pessoa responder, o agente de IA atende (o especialista escolhido, ou a recepção decide). */
+  iaAtivar: boolean('ia_ativar').notNull().default(false),
+  iaAgenteId: uuid('ia_agente_id').references((): AnyPgColumn => iaAgentes.id, { onDelete: 'set null' }),
 });
 
 export const crmDisparoDestinos = pgTable(
@@ -1443,6 +1460,8 @@ export const crmDisparoDestinos = pgTable(
     erro: text('erro'),
     mensagemId: uuid('mensagem_id'),
     enviadoEm: timestamp('enviado_em', { withTimezone: true }),
+    /** Colunas extras da planilha ({{coluna}} na mensagem). */
+    variaveis: jsonb('variaveis').$type<Record<string, string>>().notNull().default({}),
   },
   (t) => ({ unico: uniqueIndex('crm_disparo_destino_idx').on(t.disparoId, t.contatoId), pendentes: index('crm_disparo_pendentes_idx').on(t.disparoId, t.status) }),
 );

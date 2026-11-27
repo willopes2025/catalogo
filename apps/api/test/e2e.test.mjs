@@ -1477,6 +1477,27 @@ test('CRM: funis, números de WhatsApp, fila de atendimento, chat, conversa inte
   assert.equal(fim.enviados, 1);
   assert.equal((await sim()).filter((r) => r.caminho.endsWith('/send-text')).pop().corpo.message, 'Oi Maria, seu acerto vence em breve.');
 
+  // Lista anexada (planilha): card no funil, colunas como variáveis, ritmo detalhado (uma por vez) e IA nas respostas.
+  const csv = 'nome;telefone;cidade\nLia Lista;(27) 99999-7001;Serra\nLeo Lista;27999997002;Cariacica\nLeo Lista;27999997002;Cariacica\nsem;123;x\n';
+  const lida = await ok('POST', '/crm/disparos/lista', { nome: 'lista.csv', base64: Buffer.from(csv).toString('base64') });
+  assert.deepEqual([lida.total, lida.invalidos, lida.repetidos, lida.colunas], [2, 1, 1, ['cidade']]);
+  const d2 = await ok('POST', '/crm/disparos', { nome: 'Lista de teste', canalId: qr.id, texto: 'Oi {{primeiro_nome}}, novidades em {{cidade}}!', lista: lida.linhas, funilDestinoId: cli.id, iaAtivar: true, envio: { intervaloMinS: 600, intervaloMaxS: 600, limiteDiario: null, inicio: '00:00', fim: '23:59', dias: [0, 1, 2, 3, 4, 5, 6], loteTamanho: null, lotePausaMin: null } });
+  assert.equal(d2.total, 2);
+  assert.equal(d2.cardsCriados, 2, 'cada contato da lista ganhou card no funil');
+  await ok('POST', `/crm/disparos/${d2.id}/iniciar`, {});
+  await ok('POST', '/crm/processar');
+  await ok('POST', '/crm/processar');
+  const d2b = await ok('GET', `/crm/disparos/${d2.id}`);
+  assert.equal(d2b.enviados, 1, 'uma por vez: a segunda espera o intervalo');
+  assert.ok(new Date(d2b.proximoEm) > new Date(Date.now() + 500_000));
+  const txt = (await sim()).filter((r) => r.caminho.endsWith('/send-text')).pop().corpo.message;
+  assert.match(txt, /^Oi (Lia|Leo), novidades em (Serra|Cariacica)!$/);
+  const quem = d2b.destinos.find((x) => x.status === 'enviada');
+  const cvL = (await ok('GET', '/crm/conversas?aba=todas')).find((x) => x.telefone === quem.telefone);
+  assert.equal((await ok('GET', `/crm/conversas/${cvL.id}/mensagens`)).conversa.iaAtiva, true, 'a IA atende quando a pessoa responder');
+  assert.ok((await ok('GET', `/crm/leads?funilId=${cli.id}`)).some((l) => l.titulo === 'Lia Lista'));
+  await ok('POST', `/crm/disparos/${d2.id}/cancelar`, {});
+
   // Revendedoras: cada uma num card, na etapa conforme as maletas.
   await ok('POST', '/crm/revendedoras/sincronizar'); // (a sincronização diária pode já ter rodado no ciclo)
   const doFunil = await ok('GET', `/crm/leads?funilId=${revF.id}`);

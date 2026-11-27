@@ -34,6 +34,8 @@ import {
   iaAgentes,
 } from '../db/schema';
 import { ESPECIALISTAS_SUGERIDOS, duplicarEspecialista } from './especialistas';
+import { linhasCsv, linhasXlsx } from '../assistente/anexos';
+import { normalizarTelefone } from './telefone';
 import { CrmService } from './crm.service';
 import { CanaisService } from './canais.service';
 import { HistoricoWhatsappService } from './historico.service';
@@ -1457,6 +1459,48 @@ export class AtendimentoController {
     return ds.map(({ d, canal, template }) => ({ ...d, canal, template, porStatus: Object.fromEntries(st.rows.filter((x) => x.disparo_id === d.id).map((x) => [x.status, x.n])) }));
   }
 
+  /**
+   * Lê a planilha da lista de disparo (.xlsx ou .csv): acha as colunas de nome e telefone; as outras
+   * viram variáveis ({{coluna}}). Só lê, não grava: a lista vai junto ao criar o disparo.
+   */
+  @Post('crm/disparos/lista')
+  @Permissao('crm', 'excluir')
+  lerLista(@Body() body: unknown) {
+    const d = validar(z.object({ nome: z.string().max(200), base64: z.string().min(4).max(14_000_000) }), body);
+    const conteudo = Buffer.from(d.base64, 'base64');
+    const linhas = /\.xlsx$/i.test(d.nome) ? linhasXlsx(conteudo) : /\.(csv|txt)$/i.test(d.nome) ? linhasCsv(conteudo.toString('utf8')) : null;
+    if (!linhas?.length) throw new BadRequestException('Mande a lista em .xlsx ou .csv, com uma linha de títulos (nome, telefone…).');
+    const chave = (t: string) => t.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
+    const cab = linhas[0].map((c) => chave(String(c ?? '')));
+    let iTel = cab.findIndex((c) => /^(telefone|celular|whats(app)?|fone|numero|contato|phone|tel)/.test(c));
+    let iNome = cab.findIndex((c) => /^(nome|name|cliente|contato_nome|razao)/.test(c));
+    let corpo = linhas.slice(1);
+    // Sem títulos: procura a coluna que tem cara de telefone.
+    if (iTel < 0) {
+      const amostra = linhas.slice(0, 20);
+      iTel = linhas[0].findIndex((_, j) => amostra.filter((l) => normalizarTelefone(String(l[j] ?? ''))).length >= Math.min(3, amostra.length));
+      if (iTel >= 0) corpo = linhas;
+    }
+    if (iTel < 0) throw new BadRequestException('Não achei a coluna de telefone. Ponha uma coluna "telefone" (ou "celular", "whatsapp").');
+    const nomesCol = cab.map((c, j) => (j === iTel || j === iNome ? null : c || `coluna_${j + 1}`));
+    const vistos = new Set<string>();
+    const validos: { nome: string | null; telefone: string; variaveis: Record<string, string> }[] = [];
+    let invalidos = 0;
+    let repetidos = 0;
+    for (const l of corpo) {
+      const tel = normalizarTelefone(String(l[iTel] ?? ''));
+      if (!tel) { if (l.some((x) => String(x ?? '').trim())) invalidos++; continue; }
+      if (vistos.has(tel)) { repetidos++; continue; }
+      vistos.add(tel);
+      const variaveis: Record<string, string> = {};
+      nomesCol.forEach((k, j) => { if (k && String(l[j] ?? '').trim()) variaveis[k] = String(l[j]).trim().slice(0, 300); });
+      validos.push({ nome: iNome >= 0 ? String(l[iNome] ?? '').trim().slice(0, 150) || null : null, telefone: tel, variaveis });
+      if (validos.length >= 20000) break;
+    }
+    if (iNome < 0) iNome = -1;
+    return { colunas: nomesCol.filter(Boolean), temNome: iNome >= 0, total: validos.length, invalidos, repetidos, linhas: validos, exemplo: validos.slice(0, 5) };
+  }
+
   @Post('crm/disparos')
   @Permissao('crm', 'excluir')
   async criarDisparo(@Usuario() u: UsuarioLogado, @Body() body: unknown) {
@@ -1466,11 +1510,32 @@ export class AtendimentoController {
         canalId: uuid,
         templateId: uuid.nullable().optional(),
         texto: z.string().trim().max(4096).nullable().optional(),
-        filtro: z.object({ funilId: uuid.optional(), etapaIds: z.array(uuid).optional(), etiquetas: z.array(z.string()).optional(), status: z.enum(['aberto', 'ganho', 'perdido']).optional(), contatoIds: z.array(uuid).max(5000).optional() }),
+        filtro: z.object({ funilId: uuid.optional(), etapaIds: z.array(uuid).optional(), etiquetas: z.array(z.string()).optional(), status: z.enum(['aberto', 'ganho', 'perdido']).optional(), contatoIds: z.array(uuid).max(5000).optional() }).default({}),
         ritmo: z.number().int().min(1).max(200).default(20),
+        envio: z
+          .object({
+            intervaloMinS: z.number().int().min(5).max(3600),
+            intervaloMaxS: z.number().int().min(5).max(7200),
+            limiteDiario: z.number().int().min(1).max(100000).nullable(),
+            inicio: z.string().regex(/^\d{2}:\d{2}$/),
+            fim: z.string().regex(/^\d{2}:\d{2}$/),
+            dias: z.array(z.number().int().min(0).max(6)).min(1),
+            loteTamanho: z.number().int().min(1).max(10000).nullable(),
+            lotePausaMin: z.number().int().min(1).max(1440).nullable(),
+          })
+          .refine((e) => e.intervaloMaxS >= e.intervaloMinS, 'O intervalo máximo tem de ser maior ou igual ao mínimo.')
+          .refine((e) => e.fim > e.inicio, 'A hora do fim tem de ser depois da hora do início.')
+          .nullable()
+          .optional(),
+        lista: z.array(z.object({ nome: z.string().max(150).nullable().optional(), telefone: z.string().max(30), variaveis: z.record(z.string(), z.string().max(300)).optional() })).max(20000).optional(),
+        funilDestinoId: uuid.nullable().optional(),
+        etapaDestinoId: uuid.nullable().optional(),
+        iaAtivar: z.boolean().default(false),
+        iaAgenteId: uuid.nullable().optional(),
       }),
       body,
     );
+    if (d.lista && !d.lista.length) throw new BadRequestException('A lista está vazia.');
     const canal = await this.canais.obter(d.canalId);
     if (!d.templateId && !d.texto) throw new BadRequestException('Escolha um template ou escreva a mensagem.');
     if (canal.tipo === 'oficial' && !d.templateId) throw new BadRequestException('No número oficial, disparo em massa só com template aprovado pela Meta.');
@@ -1480,7 +1545,35 @@ export class AtendimentoController {
       if (canal.tipo === 'oficial' && (t.tipo !== 'meta' || t.canalId !== canal.id)) throw new BadRequestException('Use um template aprovado deste número.');
       if (t.tipo === 'meta' && t.status !== 'APPROVED') throw new BadRequestException('Template ainda não aprovado pela Meta.');
     }
-    const [r] = await this.db.insert(crmDisparos).values({ ...d, usuarioId: u.id }).returning();
+    const { lista, ...dados } = d;
+    const [r] = await this.db.insert(crmDisparos).values({ ...dados, origem: lista ? 'lista' : 'crm', usuarioId: u.id }).returning();
+    if (lista) {
+      // Cada linha vira contato (ou acha o que já existe pelo telefone); com funil escolhido, ganha card nele.
+      let cards = 0;
+      for (let i = 0; i < lista.length; i += 200) {
+        const valores: (typeof crmDisparoDestinos.$inferInsert)[] = [];
+        for (const l of lista.slice(i, i + 200)) {
+          if (!normalizarTelefone(l.telefone)) continue;
+          const contato = await this.crm.garantirContato({ telefone: l.telefone, nome: l.nome || null });
+          let leadId: string | null = null;
+          if (d.funilDestinoId) {
+            const [aberto] = await this.db.select({ id: crmLeads.id }).from(crmLeads).where(and(eq(crmLeads.contatoId, contato.id), eq(crmLeads.funilId, d.funilDestinoId), eq(crmLeads.status, 'aberto'))).limit(1);
+            if (aberto) leadId = aberto.id;
+            else {
+              const lead = await this.crm.criarLead({ funilId: d.funilDestinoId, etapaId: d.etapaDestinoId ?? null, contatoId: contato.id, titulo: l.nome || contato.nome || l.telefone, origem: { origem: 'disparo', disparo: d.nome }, usuarioId: u.id });
+              leadId = lead.id;
+              cards++;
+            }
+          }
+          const vars = Object.fromEntries(Object.entries(l.variaveis ?? {}).map(([k, v]) => [k.toLowerCase(), v]));
+          valores.push({ disparoId: r.id, contatoId: contato.id, leadId, variaveis: vars });
+        }
+        if (valores.length) await this.db.insert(crmDisparoDestinos).values(valores).onConflictDoNothing();
+      }
+      const total = await this.automacao.prepararDisparo(r.id);
+      await this.auditoria.registrar({ usuarioId: u.id, acao: 'criar', entidade: 'crm_disparo', entidadeId: r.id, dados: { lista: lista.length, total, cards } });
+      return { ...r, total, cardsCriados: cards };
+    }
     const total = await this.automacao.prepararDisparo(r.id);
     return { ...r, total };
   }

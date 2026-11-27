@@ -1,4 +1,5 @@
 import { BadRequestException, Inject, Injectable, Logger, NotFoundException, type OnModuleDestroy, type OnModuleInit } from '@nestjs/common';
+import { dentroDaJanela, proximaAbertura } from './fila-envio.service';
 import { and, asc, desc, eq, inArray, isNull, lte, sql } from 'drizzle-orm';
 import { somarDias } from '@aritana/regras';
 import { DB, type Db } from '../comum/db.module';
@@ -238,6 +239,12 @@ export class AutomacaoService implements OnModuleInit, OnModuleDestroy {
   async prepararDisparo(id: string) {
     const [d] = await this.db.select().from(crmDisparos).where(eq(crmDisparos.id, id));
     if (!d) throw new NotFoundException('Disparo não encontrado.');
+    // Lista anexada: os destinos já foram gravados na criação (com as colunas da planilha).
+    if (d.origem === 'lista') {
+      const [{ n }] = await this.db.select({ n: sql<number>`count(*)::int` }).from(crmDisparoDestinos).where(eq(crmDisparoDestinos.disparoId, id));
+      await this.db.update(crmDisparos).set({ total: n }).where(eq(crmDisparos.id, id));
+      return n;
+    }
     const f = d.filtro as { funilId?: string; etapaIds?: string[]; etiquetas?: string[]; status?: string; contatoIds?: string[] };
     const r = await this.db.execute<{ contato_id: string; lead_id: string | null }>(sql`
       select distinct on (c.id) c.id as contato_id, l.id as lead_id
@@ -267,7 +274,29 @@ export class AutomacaoService implements OnModuleInit, OnModuleDestroy {
       await this.db.update(crmDisparos).set({ status: 'enviando' }).where(eq(crmDisparos.id, d.id));
     }
     for (const d of await this.db.select().from(crmDisparos).where(eq(crmDisparos.status, 'enviando'))) {
-      const cota = Math.max(1, Math.round((d.ritmo * this.intervaloMs) / 60_000));
+      // Ritmo detalhado: uma por vez, no intervalo aleatório, no horário/dias, com limite diário e lotes.
+      let cota = Math.max(1, Math.round((d.ritmo * this.intervaloMs) / 60_000));
+      if (d.envio) {
+        const e = d.envio;
+        const janela = { envioInicio: e.inicio, envioFim: e.fim, envioDias: e.dias, envioIntervaloMinS: e.intervaloMinS, envioIntervaloMaxS: e.intervaloMaxS };
+        if (d.proximoEm && d.proximoEm > agora) continue;
+        if (!dentroDaJanela(janela, agora)) {
+          await this.db.update(crmDisparos).set({ proximoEm: proximaAbertura(janela, agora) ?? new Date(agora.getTime() + 3600_000) }).where(eq(crmDisparos.id, d.id));
+          continue;
+        }
+        const hojeBR = new Date(agora.getTime() - 3 * 3600_000).toISOString().slice(0, 10);
+        if (d.hojeData !== hojeBR) {
+          d.hojeEnviados = 0;
+          await this.db.update(crmDisparos).set({ hojeData: hojeBR, hojeEnviados: 0 }).where(eq(crmDisparos.id, d.id));
+        }
+        if (e.limiteDiario && d.hojeEnviados >= e.limiteDiario) {
+          // Bateu o limite do dia: volta na abertura de amanhã.
+          const amanha = new Date(Date.UTC(Number(hojeBR.slice(0, 4)), Number(hojeBR.slice(5, 7)) - 1, Number(hojeBR.slice(8, 10)) + 1, 3, 0));
+          await this.db.update(crmDisparos).set({ proximoEm: proximaAbertura(janela, amanha) ?? amanha }).where(eq(crmDisparos.id, d.id));
+          continue;
+        }
+        cota = 1;
+      }
       const lote = await this.db.select().from(crmDisparoDestinos).where(and(eq(crmDisparoDestinos.disparoId, d.id), eq(crmDisparoDestinos.status, 'pendente'))).limit(cota);
       if (!lote.length) {
         await this.db.update(crmDisparos).set({ status: 'concluido', concluidoEm: new Date() }).where(eq(crmDisparos.id, d.id));
@@ -284,9 +313,21 @@ export class AutomacaoService implements OnModuleInit, OnModuleDestroy {
         }
         try {
           const cv = await this.canais.garantirConversa(contato.id, d.canalId, 'resolvida');
-          const m = await this.canais.enviar({ conversaId: cv.id, tipo: d.templateId ? 'template' : 'texto', templateId: d.templateId, texto: d.texto, disparoId: d.id, leadId: dest.leadId });
+          // Colunas da planilha: {{coluna}} vira o valor desta linha (o resto o envio já preenche).
+          const vars = dest.variaveis ?? {};
+          const texto = d.texto && Object.keys(vars).length ? d.texto.replace(/\{\{\s*([\p{L}\w]+)\s*\}\}/gu, (t, k: string) => vars[k.toLowerCase()] ?? t) : d.texto;
+          const m = await this.canais.enviar({ conversaId: cv.id, tipo: d.templateId ? 'template' : 'texto', templateId: d.templateId, texto, disparoId: d.id, leadId: dest.leadId });
           await this.db.update(crmDisparoDestinos).set({ status: 'enviada', mensagemId: m.id, enviadoEm: new Date() }).where(eq(crmDisparoDestinos.id, dest.id));
           await this.db.update(crmDisparos).set({ enviados: sql`${crmDisparos.enviados} + 1` }).where(eq(crmDisparos.id, d.id));
+          // Quando ela responder, o agente de IA atende (o especialista escolhido, ou a recepção escolhe).
+          if (d.iaAtivar) await this.db.update(crmConversas).set({ iaAtiva: true, iaAgenteId: d.iaAgenteId ?? null, iaRespostas: 0 }).where(eq(crmConversas.id, cv.id));
+          if (d.envio) {
+            const e = d.envio;
+            const lote = (d.loteEnviados ?? 0) + 1;
+            const pausaLote = e.loteTamanho && lote >= e.loteTamanho;
+            const espera = (e.intervaloMinS + Math.random() * Math.max(0, e.intervaloMaxS - e.intervaloMinS)) * 1000 + (pausaLote ? (e.lotePausaMin ?? 0) * 60_000 : 0);
+            await this.db.update(crmDisparos).set({ hojeEnviados: sql`${crmDisparos.hojeEnviados} + 1`, loteEnviados: pausaLote ? 0 : lote, proximoEm: new Date(Date.now() + espera) }).where(eq(crmDisparos.id, d.id));
+          }
         } catch (e) {
           const msg = (e as Error).message;
           const janela = /janela de 24h/i.test(msg);

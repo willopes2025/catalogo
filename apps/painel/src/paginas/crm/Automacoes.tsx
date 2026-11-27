@@ -228,7 +228,7 @@ export function Disparos() {
                 <div className="flex entre" style={{ gap: 10, flexWrap: 'wrap' }}>
                   <div>
                     <b>{d.nome}</b> <span className={`etiqueta ${cls}`}>{nome}</span>
-                    <div className="muted" style={{ fontSize: 13 }}>{d.canal} · {d.template ? `template "${d.template}"` : 'mensagem livre'} · {d.ritmo}/min{d.agendadoPara ? ` · para ${new Date(d.agendadoPara).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' })}` : ''}</div>
+                    <div className="muted" style={{ fontSize: 13 }}>{d.canal} · {d.template ? `template "${d.template}"` : 'mensagem livre'} · {d.envio ? `${d.envio.intervaloMinS}–${d.envio.intervaloMaxS}s, ${d.envio.inicio}–${d.envio.fim}${d.envio.limiteDiario ? `, até ${d.envio.limiteDiario}/dia` : ''}${d.envio.loteTamanho ? `, lotes de ${d.envio.loteTamanho} (pausa ${d.envio.lotePausaMin} min)` : ''}` : `${d.ritmo}/min`}{d.origem === 'lista' ? ' · lista anexada' : ''}{d.iaAtivar ? ' · IA nas respostas' : ''}{d.status === 'enviando' && d.proximoEm && new Date(d.proximoEm) > new Date() ? ` · próxima ${new Date(d.proximoEm).toLocaleString('pt-BR', { weekday: 'short', hour: '2-digit', minute: '2-digit' })}` : ''}{d.agendadoPara ? ` · para ${new Date(d.agendadoPara).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' })}` : ''}</div>
                   </div>
                   {gestor && (
                     <div className="flex" style={{ gap: 6, flexWrap: 'wrap' }}>
@@ -258,33 +258,74 @@ export function Disparos() {
   );
 }
 
+const DIAS_SEMANA = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
+interface ListaLida { colunas: string[]; temNome: boolean; total: number; invalidos: number; repetidos: number; linhas: { nome: string | null; telefone: string; variaveis: Record<string, string> }[]; exemplo: { nome: string | null; telefone: string }[] }
+
 function NovoDisparo({ fechar }: { fechar: () => void }) {
-  const variaveis = usarVariaveisCrm();
+  const variaveisCrm = usarVariaveisCrm();
   const qc = useQueryClient();
   const funis = usarFunis();
   const canais = usarCanais();
+  const ia = useQuery({ queryKey: ['crm', 'ia-agente'], queryFn: () => api<{ especialistas: { id: string; nome: string; ativo: boolean }[] }>('/crm/ia-agente') });
   const [f, setF] = useState({ nome: '', canalId: '', templateId: '', texto: '', funilId: '', etapaIds: [] as string[], etiquetas: '', status: 'aberto', ritmo: 20 });
+  const [fonte, setFonte] = useState<'crm' | 'lista'>('crm');
+  const [lista, setLista] = useState<ListaLida | null>(null);
+  const [destino, setDestino] = useState({ usar: false, funilId: '', etapaId: '' });
+  const [agendar, setAgendar] = useState({ usar: false, quando: '' });
+  const [verConfig, setVerConfig] = useState(true);
+  const [env, setEnv] = useState({ detalhado: true, min: 90, max: 180, limite: '100', inicio: '09:00', fim: '17:00', dias: [1, 2, 3, 4, 5], lotes: true, loteTamanho: 10, lotePausa: 20 });
+  const [iaOp, setIaOp] = useState({ usar: false, agenteId: '' });
   const canal = canais.data?.find((c) => c.id === f.canalId);
   const templates = useQuery({ queryKey: ['crm', 'templates', f.canalId], queryFn: () => api<Template[]>(`/crm/templates?canalId=${f.canalId}`), enabled: !!f.canalId });
   const funil = funis.data?.find((x) => x.id === f.funilId);
+  const funilDestino = funis.data?.find((x) => x.id === destino.funilId);
+  const variaveis = [...(lista?.colunas ?? []).map((c) => ({ nome: c, rotulo: 'Coluna da planilha' })), ...variaveisCrm];
+  const ler = useMutation({
+    mutationFn: async (arq: File) => {
+      const base64 = await new Promise<string>((ok, erro) => {
+        const r = new FileReader();
+        r.onload = () => ok(String(r.result).split(',')[1] ?? '');
+        r.onerror = () => erro(new Error('Não consegui ler o arquivo.'));
+        r.readAsDataURL(arq);
+      });
+      return api<ListaLida>('/crm/disparos/lista', { corpo: { nome: arq.name, base64 } });
+    },
+    onSuccess: (r) => setLista(r),
+  });
   const criar = useMutation({
-    mutationFn: () =>
-      api<{ total: number }>('/crm/disparos', {
+    mutationFn: async () => {
+      const r = await api<{ id: string; total: number }>('/crm/disparos', {
         corpo: {
           nome: f.nome,
           canalId: f.canalId,
           templateId: f.templateId || null,
           texto: f.templateId ? null : f.texto || null,
           ritmo: f.ritmo,
-          filtro: { funilId: f.funilId || undefined, etapaIds: f.etapaIds.length ? f.etapaIds : undefined, etiquetas: f.etiquetas.trim() ? f.etiquetas.split(',').map((x) => x.trim()).filter(Boolean) : undefined, status: f.status || undefined },
+          filtro: fonte === 'crm' ? { funilId: f.funilId || undefined, etapaIds: f.etapaIds.length ? f.etapaIds : undefined, etiquetas: f.etiquetas.trim() ? f.etiquetas.split(',').map((x) => x.trim()).filter(Boolean) : undefined, status: f.status || undefined } : {},
+          envio: env.detalhado
+            ? { intervaloMinS: env.min, intervaloMaxS: env.max, limiteDiario: Number(env.limite) || null, inicio: env.inicio, fim: env.fim, dias: env.dias, loteTamanho: env.lotes ? env.loteTamanho : null, lotePausaMin: env.lotes ? env.lotePausa : null }
+            : null,
+          lista: fonte === 'lista' ? lista?.linhas : undefined,
+          funilDestinoId: fonte === 'lista' && destino.usar ? destino.funilId || null : null,
+          etapaDestinoId: fonte === 'lista' && destino.usar ? destino.etapaId || null : null,
+          iaAtivar: iaOp.usar,
+          iaAgenteId: iaOp.usar ? iaOp.agenteId || null : null,
         },
-      }),
+      });
+      // Agendado: já fica marcado para a data; senão fica como rascunho para conferir e mandar.
+      if (agendar.usar && agendar.quando) await api(`/crm/disparos/${r.id}/iniciar`, { corpo: { quando: new Date(agendar.quando).toISOString() } });
+      return r;
+    },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['crm', 'disparos'] });
       fechar();
     },
   });
   const usaveis = (templates.data ?? []).filter((t) => (canal?.tipo === 'oficial' ? t.tipo === 'meta' && t.status === 'APPROVED' : t.tipo === 'livre'));
+  const porDia = env.detalhado && env.max ? Math.max(1, Math.floor(((Number(env.fim.slice(0, 2)) * 60 + Number(env.fim.slice(3))) - (Number(env.inicio.slice(0, 2)) * 60 + Number(env.inicio.slice(3)))) * 60 / ((env.min + env.max) / 2 + (env.lotes && env.loteTamanho ? (env.lotePausa * 60) / env.loteTamanho : 0)))) : null;
+  const capacidade = porDia ? Math.min(porDia, Number(env.limite) || porDia) : null;
+  const totalLista = fonte === 'lista' ? lista?.total ?? 0 : null;
+  const podeCriar = f.nome.trim() && f.canalId && (f.templateId || f.texto.trim()) && (fonte === 'crm' || (lista && lista.total > 0)) && (!destino.usar || destino.funilId) && (!agendar.usar || agendar.quando) && (!env.detalhado || (env.max >= env.min && env.fim > env.inicio && env.dias.length));
   return (
     <div className="cartao form" style={{ marginBottom: 14 }}>
       <div className="secao" style={{ gridColumn: '1 / -1', marginTop: 0 }}>Novo disparo em massa</div>
@@ -295,23 +336,104 @@ function NovoDisparo({ fechar }: { fechar: () => void }) {
           <select value={f.templateId} onChange={(e) => setF({ ...f, templateId: e.target.value })}><option value="">{canal?.tipo === 'oficial' ? 'Escolha…' : 'Mensagem livre'}</option>{usaveis.map((t) => <option key={t.id} value={t.id}>{t.nome}</option>)}</select>
         </Campo>
       )}
-      {f.canalId && canal && canal.tipo !== 'oficial' && !f.templateId && <Campo rotulo="Mensagem" className="l2"><TextoComVariaveis linhas={3} value={f.texto} onChange={(t) => setF({ ...f, texto: t })} variaveis={variaveis} placeholder="Oi {{primeiro_nome}}!… (digite { para ver as variáveis)" /></Campo>}
-      <Campo rotulo="Funil" className="l2"><select value={f.funilId} onChange={(e) => setF({ ...f, funilId: e.target.value, etapaIds: [] })}><option value="">Todos os funis</option>{funis.data?.map((x) => <option key={x.id} value={x.id}>{x.nome}</option>)}</select></Campo>
-      <Campo rotulo="Situação dos cards" className="l2"><select value={f.status} onChange={(e) => setF({ ...f, status: e.target.value })}><option value="aberto">Abertos</option><option value="ganho">Ganhos</option><option value="perdido">Perdidos</option><option value="">Todos</option></select></Campo>
-      {funil && (
-        <div className="l4">
-          <label className="muted" style={{ fontSize: 13, fontWeight: 600 }}>Só estas etapas (vazio = todas)</label>
-          <div className="flex" style={{ gap: 10, flexWrap: 'wrap' }}>
-            {funil.etapas.map((e) => <label key={e.id} className="check" style={{ fontSize: 13 }}><input type="checkbox" checked={f.etapaIds.includes(e.id)} onChange={(ev) => setF({ ...f, etapaIds: ev.target.checked ? [...f.etapaIds, e.id] : f.etapaIds.filter((x) => x !== e.id) })} /> {e.nome}</label>)}
-          </div>
+      {f.canalId && canal && canal.tipo !== 'oficial' && !f.templateId && <Campo rotulo="Mensagem" className="l2"><TextoComVariaveis linhas={4} value={f.texto} onChange={(t) => setF({ ...f, texto: t })} variaveis={variaveis} placeholder="Oi {{primeiro_nome}}!… (digite { para ver as variáveis)" /></Campo>}
+
+      <div className="secao" style={{ gridColumn: '1 / -1' }}>Para quem</div>
+      <div className="l4 flex" style={{ gap: 16, flexWrap: 'wrap' }}>
+        <label className="check"><input type="radio" checked={fonte === 'crm'} onChange={() => setFonte('crm')} /> Cards do CRM (funil, etapa, etiquetas)</label>
+        <label className="check"><input type="radio" checked={fonte === 'lista'} onChange={() => setFonte('lista')} /> Anexar uma lista (planilha .xlsx ou .csv)</label>
+      </div>
+      {fonte === 'crm' ? (
+        <>
+          <Campo rotulo="Funil" className="l2"><select value={f.funilId} onChange={(e) => setF({ ...f, funilId: e.target.value, etapaIds: [] })}><option value="">Todos os funis</option>{funis.data?.map((x) => <option key={x.id} value={x.id}>{x.nome}</option>)}</select></Campo>
+          <Campo rotulo="Situação dos cards" className="l2"><select value={f.status} onChange={(e) => setF({ ...f, status: e.target.value })}><option value="aberto">Abertos</option><option value="ganho">Ganhos</option><option value="perdido">Perdidos</option><option value="">Todos</option></select></Campo>
+          {funil && (
+            <div className="l4">
+              <label className="muted" style={{ fontSize: 13, fontWeight: 600 }}>Só estas etapas (vazio = todas)</label>
+              <div className="flex" style={{ gap: 10, flexWrap: 'wrap' }}>
+                {funil.etapas.map((e) => <label key={e.id} className="check" style={{ fontSize: 13 }}><input type="checkbox" checked={f.etapaIds.includes(e.id)} onChange={(ev) => setF({ ...f, etapaIds: ev.target.checked ? [...f.etapaIds, e.id] : f.etapaIds.filter((x) => x !== e.id) })} /> {e.nome}</label>)}
+              </div>
+            </div>
+          )}
+          <Campo rotulo="Com estas etiquetas (opcional)" className="l2" ajuda="Separadas por vírgula"><input value={f.etiquetas} onChange={(e) => setF({ ...f, etiquetas: e.target.value })} /></Campo>
+        </>
+      ) : (
+        <div className="l4 coluna" style={{ gap: 8 }}>
+          <input type="file" accept=".xlsx,.csv,.txt" onChange={(e) => { const a = e.target.files?.[0]; if (a) ler.mutate(a); }} />
+          <span className="muted" style={{ fontSize: 12.5 }}>Uma linha de títulos: <b>telefone</b> (ou celular/whatsapp) e, se tiver, <b>nome</b>. As outras colunas viram variáveis para a mensagem (ex.: {'{{cidade}}'}).</span>
+          {ler.isPending && <Carregando />}
+          {ler.error && <Erro erro={ler.error} />}
+          {lista && (
+            <div className="aviso ok" style={{ fontSize: 13 }}>
+              <b>{lista.total} contato(s)</b> para receber{lista.invalidos ? ` · ${lista.invalidos} telefone(s) inválido(s) ficaram de fora` : ''}{lista.repetidos ? ` · ${lista.repetidos} repetido(s)` : ''}.
+              {lista.colunas.length > 0 && <> Colunas para usar na mensagem: {lista.colunas.map((c) => <code key={c} style={{ marginRight: 6 }}>{`{{${c}}}`}</code>)}</>}
+              {!lista.temNome && <div>Sem coluna de nome: {'{{nome}}'} usa o nome do contato se ele já existir no CRM.</div>}
+            </div>
+          )}
+          <label className="check"><input type="checkbox" checked={destino.usar} onChange={(e) => setDestino({ ...destino, usar: e.target.checked })} /> Colocar estes contatos num funil (cria o card para quem ainda não tem card aberto nele)</label>
+          {destino.usar && (
+            <div className="grade" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 10 }}>
+              <select value={destino.funilId} onChange={(e) => setDestino({ ...destino, funilId: e.target.value, etapaId: '' })}><option value="">Funil…</option>{funis.data?.map((x) => <option key={x.id} value={x.id}>{x.nome}</option>)}</select>
+              <select value={destino.etapaId} onChange={(e) => setDestino({ ...destino, etapaId: e.target.value })} disabled={!funilDestino}><option value="">Primeira etapa</option>{funilDestino?.etapas.map((x) => <option key={x.id} value={x.id}>{x.nome}</option>)}</select>
+            </div>
+          )}
         </div>
       )}
-      <Campo rotulo="Com estas etiquetas (opcional)" className="l2" ajuda="Separadas por vírgula"><input value={f.etiquetas} onChange={(e) => setF({ ...f, etiquetas: e.target.value })} /></Campo>
-      <Campo rotulo="Mensagens por minuto" className="l2" ajuda={canal && canal.tipo !== 'oficial' ? 'No QR code, até 20 por minuto reduz o risco de bloqueio' : 'Oficial: respeita o limite da conta na Meta'}><input type="number" min={1} max={200} value={f.ritmo} onChange={(e) => setF({ ...f, ritmo: Number(e.target.value) })} /></Campo>
-      <p className="muted l4" style={{ fontSize: 13 }}>Quem pediu para não receber (respondeu SAIR) fica de fora sozinho. O disparo é criado como rascunho com a contagem; você confere e manda enviar ou agenda.</p>
+
+      <div className="secao" style={{ gridColumn: '1 / -1' }}>Quando e como</div>
+      <div className="l4 coluna" style={{ gap: 8 }}>
+        <label className="check"><input type="checkbox" checked={agendar.usar} onChange={(e) => setAgendar({ ...agendar, usar: e.target.checked })} /> <b>Agendar envio</b> <span className="muted">(defina data e hora para começar sozinho)</span></label>
+        {agendar.usar && <input type="datetime-local" value={agendar.quando} onChange={(e) => setAgendar({ ...agendar, quando: e.target.value })} style={{ maxWidth: 260 }} />}
+        <button type="button" className="botao claro pequeno" style={{ alignSelf: 'flex-start' }} onClick={() => setVerConfig(!verConfig)}>{verConfig ? '▾' : '▸'} Configurações de envio</button>
+        {verConfig && (
+          <div className="coluna" style={{ gap: 10, padding: 12, border: '1px solid var(--linha)', borderRadius: 10 }}>
+            <label className="check"><input type="checkbox" checked={env.detalhado} onChange={(e) => setEnv({ ...env, detalhado: e.target.checked })} /> Intervalo, horário, dias e limite (recomendado no QR code, imita uma pessoa enviando)</label>
+            {env.detalhado ? (
+              <>
+                <div className="grade" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 10 }}>
+                  <Campo rotulo="Intervalo mínimo (seg)"><input type="number" min={5} value={env.min} onChange={(e) => setEnv({ ...env, min: Number(e.target.value) })} /></Campo>
+                  <Campo rotulo="Intervalo máximo (seg)"><input type="number" min={5} value={env.max} onChange={(e) => setEnv({ ...env, max: Number(e.target.value) })} /></Campo>
+                  <Campo rotulo="Limite diário de mensagens" ajuda="Vazio = sem limite"><input type="number" min={1} value={env.limite} onChange={(e) => setEnv({ ...env, limite: e.target.value })} /></Campo>
+                  <Campo rotulo="Hora início"><input type="time" value={env.inicio} onChange={(e) => setEnv({ ...env, inicio: e.target.value })} /></Campo>
+                  <Campo rotulo="Hora fim"><input type="time" value={env.fim} onChange={(e) => setEnv({ ...env, fim: e.target.value })} /></Campo>
+                </div>
+                <div>
+                  <div className="muted" style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>Dias permitidos</div>
+                  <div className="flex" style={{ gap: 12, flexWrap: 'wrap' }}>
+                    {[1, 2, 3, 4, 5, 6, 0].map((d) => <label key={d} className="check" style={{ fontSize: 13 }}><input type="checkbox" checked={env.dias.includes(d)} onChange={(e) => setEnv({ ...env, dias: e.target.checked ? [...env.dias, d] : env.dias.filter((x) => x !== d) })} /> {DIAS_SEMANA[d]}</label>)}
+                  </div>
+                </div>
+                <label className="check"><input type="checkbox" checked={env.lotes} onChange={(e) => setEnv({ ...env, lotes: e.target.checked })} /> <b>Disparo em lotes</b> <span className="muted">(envia X mensagens, pausa por Y minutos e repete)</span></label>
+                {env.lotes && (
+                  <div className="grade" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 10 }}>
+                    <Campo rotulo="Mensagens por lote"><input type="number" min={1} value={env.loteTamanho} onChange={(e) => setEnv({ ...env, loteTamanho: Number(e.target.value) })} /></Campo>
+                    <Campo rotulo="Pausa entre lotes (min)"><input type="number" min={1} value={env.lotePausa} onChange={(e) => setEnv({ ...env, lotePausa: Number(e.target.value) })} /></Campo>
+                  </div>
+                )}
+                {capacidade && <div className="muted" style={{ fontSize: 12.5 }}>Cerca de {capacidade} mensagem(ns) por dia{totalLista ? ` · a lista de ${totalLista} leva uns ${Math.ceil(totalLista / capacidade)} dia(s) útil(eis)` : ''}.</div>}
+              </>
+            ) : (
+              <Campo rotulo="Mensagens por minuto" ajuda={canal && canal.tipo !== 'oficial' ? 'No QR code, até 20 por minuto reduz o risco de bloqueio' : 'Oficial: respeita o limite da conta na Meta'}><input type="number" min={1} max={200} value={f.ritmo} onChange={(e) => setF({ ...f, ritmo: Number(e.target.value) })} /></Campo>
+            )}
+          </div>
+        )}
+      </div>
+
+      <div className="secao" style={{ gridColumn: '1 / -1' }}>Quando responderem</div>
+      <div className="l4 coluna" style={{ gap: 8 }}>
+        <label className="check"><input type="checkbox" checked={iaOp.usar} onChange={(e) => setIaOp({ ...iaOp, usar: e.target.checked })} /> <b>Agente de IA atende quem responder</b> <span className="muted">(até alguém da equipe assumir ou a IA passar a vez)</span></label>
+        {iaOp.usar && (
+          <select value={iaOp.agenteId} onChange={(e) => setIaOp({ ...iaOp, agenteId: e.target.value })} style={{ maxWidth: 360 }}>
+            <option value="">A recepção da IA escolhe o especialista</option>
+            {ia.data?.especialistas.filter((a) => a.ativo).map((a) => <option key={a.id} value={a.id}>{a.nome}</option>)}
+          </select>
+        )}
+      </div>
+
+      <p className="muted l4" style={{ fontSize: 13 }}>Quem pediu para não receber (respondeu SAIR) fica de fora sozinho. {agendar.usar ? 'O disparo começa sozinho na data marcada.' : 'O disparo é criado como rascunho com a contagem; você confere e manda enviar ou agenda.'}</p>
       {criar.error && <div className="l4"><Erro erro={criar.error} /></div>}
       <div className="flex l4">
-        <button className="botao" disabled={!f.nome.trim() || !f.canalId || (!f.templateId && !f.texto.trim()) || criar.isPending} onClick={() => criar.mutate()}>Criar e contar destinatários</button>
+        <button className="botao" disabled={!podeCriar || criar.isPending} onClick={() => criar.mutate()}>{criar.isPending ? 'Criando…' : agendar.usar ? 'Criar e agendar' : 'Criar e contar destinatários'}</button>
         <button className="botao claro" onClick={fechar}>Voltar</button>
       </div>
     </div>
