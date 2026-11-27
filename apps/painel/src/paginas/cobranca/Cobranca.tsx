@@ -264,6 +264,7 @@ function Protestos({ eu }: { eu: Eu }) {
           </p>
         </div>
       )}
+      {eu.gestor && <ParaProtestar ligado={eu.protestoLigado} />}
       <div className="busca">
         <select value={status} onChange={(e) => setStatus(e.target.value)} aria-label="Situação">
           <option value="">Todas as situações</option>
@@ -730,4 +731,51 @@ function FotoComprovante({ id, abrir, grande }: { id: string; abrir?: () => void
   if (!url) return <div className="cob-sem-foto muted">…</div>;
   if (grande) return <img src={url} alt="Comprovante" style={{ width: '100%' }} />;
   return <button className="link" onClick={abrir} title="Ver o comprovante"><img src={url} alt="Comprovante" /></button>;
+}
+
+/** Parcelas de acerto vencidas há o mínimo configurado: nada vai sozinho ao cartório, a gestão marca e aprova. */
+function ParaProtestar({ ligado }: { ligado: boolean }) {
+  const qc = useQueryClient();
+  const q = useQuery({ queryKey: ['cobranca', 'protesto-sugestoes'], queryFn: () => api<any>('/cobranca/protestos/sugestoes') });
+  const [marcados, setMarcados] = useState<string[]>([]);
+  const enviar = useMutation({
+    mutationFn: () => api<any>('/cobranca/protestos', { corpo: { tituloIds: marcados } }),
+    onSuccess: () => { setMarcados([]); qc.invalidateQueries({ queryKey: ['cobranca'] }); },
+  });
+  if (q.isLoading) return <Carregando />;
+  if (q.error) return <Erro erro={q.error} />;
+  const itens: any[] = q.data?.itens ?? [];
+  const prontos = itens.filter((i) => !i.problemas.length);
+  return (
+    <div className="cartao">
+      <div className="flex" style={{ justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
+        <h3 style={{ margin: 0 }}>Para protestar · aguardando aprovação</h3>
+        <span className="muted">Acertos vencidos há {q.data?.diasMinimos ?? 30} dias ou mais (Cobrança › Configurar › Protesto)</span>
+      </div>
+      {!itens.length ? <p className="muted" style={{ marginBottom: 0 }}>Nenhuma parcela de acerto vencida para protestar agora.</p> : (
+        <>
+          <table className="tabela" style={{ marginTop: 8 }}>
+            <thead><tr><th style={{ width: 28 }}><input type="checkbox" aria-label="Marcar todas as prontas" checked={prontos.length > 0 && prontos.every((i) => marcados.includes(i.tituloId))} onChange={(e) => setMarcados(e.target.checked ? prontos.map((i) => i.tituloId) : [])} /></th><th>Devedor e título</th><th>Venceu</th><th className="num">Valor</th><th>Conferência</th></tr></thead>
+            <tbody>
+              {itens.map((i) => (
+                <tr key={i.tituloId}>
+                  <td><input type="checkbox" aria-label={`Marcar ${i.devedor}`} disabled={i.problemas.length > 0} checked={marcados.includes(i.tituloId)} onChange={() => setMarcados((m) => (m.includes(i.tituloId) ? m.filter((x) => x !== i.tituloId) : [...m, i.tituloId]))} /></td>
+                  <td>{i.pessoaId ? <Link to={`/cobranca/devedor/${i.pessoaId}`}>{i.devedor}</Link> : i.devedor}<div className="muted" style={{ fontSize: 12 }}>{i.descricao}</div></td>
+                  <td>{data(i.vencimento)} <span className="muted">({i.dias} dias)</span></td>
+                  <td className="num">{reais(i.valor)}</td>
+                  <td>{i.problemas.length ? <span style={{ color: 'var(--erro)', fontSize: 13 }}>{i.problemas.join(' ')}</span> : <><span className="etiqueta ok">Pronto</span>{i.avisos?.length > 0 && <div className="muted" style={{ fontSize: 12 }}>{i.avisos.join(' ')}</div>}</>}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {enviar.error && <Erro erro={enviar.error} />}
+          {enviar.data && <div className="aviso ok">Enviado ao cartório: {enviar.data.enviados ?? marcados.length} título(s).</div>}
+          <div className="flex" style={{ gap: 8, marginTop: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            <button className="botao" disabled={!marcados.length || enviar.isPending || !ligado} onClick={() => enviar.mutate()}>{enviar.isPending ? 'Enviando…' : `Aprovar e enviar ao cartório (${marcados.length})`}</button>
+            {!ligado && <span className="muted">O envio fica liberado quando o protesto estiver ligado.</span>}
+          </div>
+        </>
+      )}
+    </div>
+  );
 }

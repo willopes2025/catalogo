@@ -14,6 +14,7 @@ import { SeletorPlano, usePlano } from './financeiro/comum';
 import './financeiro/financeiro.css';
 import { comVisao, usarVisao } from '../visao';
 import { ConversaCobranca, EmitirCobranca } from '../componentes/CobrancaPessoa';
+import { PixRecebidos } from './financeiro/PixRecebidos';
 
 /** Eventos cadastrados (cada um é um centro de custo). */
 export const usarEventos = () => useQuery({ queryKey: ['eventos'], queryFn: () => api<{ id: string; nome: string; ativo: boolean; inicio: string | null }[]>('/eventos'), staleTime: 60_000 });
@@ -33,7 +34,20 @@ export function Financeiro() {
   return <Titulos secoes={secoes} />;
 }
 
-type Aba = 'abertos' | 'vencidos' | 'renegociados' | 'pagos' | 'cartoes';
+type Aba = 'abertos' | 'vencidos' | 'renegociados' | 'pagos' | 'protestados' | 'cartoes' | 'pix';
+
+/** Datas (AAAA-MM-DD) de um período rápido, no horário de Brasília. */
+function periodoRapido(p: string): [string, string] | null {
+  const h = new Date(Date.now() - 3 * 3600_000);
+  const y = h.getUTCFullYear(), m = h.getUTCMonth();
+  const iso = (d: Date) => d.toISOString().slice(0, 10);
+  const mes = (dy: number, dm: number) => [iso(new Date(Date.UTC(dy, dm, 1))), iso(new Date(Date.UTC(dy, dm + 1, 0)))] as [string, string];
+  if (p === 'este_mes') return mes(y, m);
+  if (p === 'mes_passado') return mes(y, m - 1);
+  if (p === 'proximo_mes') return mes(y, m + 1);
+  if (p === 'hoje') return [iso(h), iso(h)];
+  return null;
+}
 
 function Titulos({ secoes }: { secoes: React.ReactNode }) {
   const [params, setParams] = useSearchParams();
@@ -44,6 +58,10 @@ function Titulos({ secoes }: { secoes: React.ReactNode }) {
   const [situacaoReneg, setSituacaoReneg] = useState('');
   const [contaId, setContaId] = useState('');
   const [busca, setBusca] = useState('');
+  const [periodo, setPeriodo] = useState('');
+  const [deP, setDeP] = useState('');
+  const [ateP, setAteP] = useState('');
+  const datasPeriodo = periodo === 'escolher' ? (deP || ateP ? [deP, ateP] : null) : periodoRapido(periodo);
   const [semPessoa, setSemPessoa] = useState(false);
   const [semPlano, setSemPlano] = useState(params.get('semPlano') === '1');
   const [marcados, setMarcados] = useState<string[]>([]);
@@ -57,7 +75,7 @@ function Titulos({ secoes }: { secoes: React.ReactNode }) {
   const eventos = usarEventos();
   const visao = usarVisao();
   const qc = useQueryClient();
-  const filtro = `tipo=${tipo}&aba=${aba}${tipo === 'receber' ? '&separarRenegociados=1' : ''}${aba === 'renegociados' && originais ? '&originais=1' : ''}${aba === 'renegociados' && situacaoReneg && !originais ? `&situacao=${situacaoReneg}` : ''}${evento ? `&centroCustoId=${evento}` : ''}${visao ? `&empresaId=${visao}` : ''}${busca.trim() ? `&busca=${encodeURIComponent(busca.trim())}` : ''}${semPessoa ? '&semPessoa=1' : ''}${semPlano ? '&semPlano=1' : ''}${filtroPlano ? `&planoContaId=${filtroPlano}` : ''}`;
+  const filtro = `tipo=${tipo}&aba=${aba}${tipo === 'receber' ? '&separarRenegociados=1' : ''}${aba === 'renegociados' && originais ? '&originais=1' : ''}${aba === 'renegociados' && situacaoReneg && !originais ? `&situacao=${situacaoReneg}` : ''}${evento ? `&centroCustoId=${evento}` : ''}${visao ? `&empresaId=${visao}` : ''}${busca.trim() ? `&busca=${encodeURIComponent(busca.trim())}` : ''}${semPessoa ? '&semPessoa=1' : ''}${semPlano ? '&semPlano=1' : ''}${filtroPlano ? `&planoContaId=${filtroPlano}` : ''}${datasPeriodo?.[0] ? `&de=${datasPeriodo[0]}` : ''}${datasPeriodo?.[1] ? `&ate=${datasPeriodo[1]}` : ''}`;
   const q = useQuery({ queryKey: ['titulos', filtro], queryFn: () => api<{ itens: any[]; total: number; quantidade: number }>(`/financeiro/titulos?${filtro}`) });
   const contas = useQuery({ queryKey: ['contas', visao], queryFn: () => api<any[]>(comVisao('/financeiro/contas', visao)) });
   const [cobranca, setCobranca] = useState<any | null>(null);
@@ -81,7 +99,7 @@ function Titulos({ secoes }: { secoes: React.ReactNode }) {
   };
   return (
     <>
-      <Topo eb="Financeiro" titulo={tipo === 'receber' ? 'Contas a receber' : 'Contas a pagar'} acoes={<div className="flex">{pode('financeiro', 'criar') && <button className="botao" onClick={() => setNovo(true)}>+ Novo lançamento</button>}<button className={`botao ${tipo === 'receber' ? '' : 'claro'}`} onClick={() => setTipo('receber')}>A receber</button><button className={`botao ${tipo === 'pagar' ? '' : 'claro'}`} onClick={() => { setTipo('pagar'); if (aba === 'cartoes' || aba === 'renegociados') setAba('abertos'); }}>A pagar</button></div>} />
+      <Topo eb="Financeiro" titulo={tipo === 'receber' ? 'Contas a receber' : 'Contas a pagar'} acoes={<div className="flex">{pode('financeiro', 'criar') && <button className="botao" onClick={() => setNovo(true)}>+ Novo lançamento</button>}<button className={`botao ${tipo === 'receber' ? '' : 'claro'}`} onClick={() => setTipo('receber')}>A receber</button><button className={`botao ${tipo === 'pagar' ? '' : 'claro'}`} onClick={() => { setTipo('pagar'); if (['cartoes', 'renegociados', 'protestados', 'pix'].includes(aba)) setAba('abertos'); }}>A pagar</button></div>} />
       {secoes}
       {contas.data && (
         <div className="grade g4" style={{ marginBottom: 14 }}>
@@ -89,12 +107,22 @@ function Titulos({ secoes }: { secoes: React.ReactNode }) {
         </div>
       )}
       {tipo === 'receber' && aba !== 'cartoes' && <ResumoReceber visao={visao} irPara={(a, sit) => { setAba(a); if (a === 'renegociados') { setOriginais(sit === 'originais'); setSituacaoReneg(sit && sit !== 'originais' ? sit : ''); } }} />}
-      <Abas ativa={aba} mudar={setAba} abas={[['abertos', tipo === 'receber' ? 'A receber' : 'Em aberto'], ['vencidos', 'Vencidos'], ...(tipo === 'receber' ? ([['renegociados', 'Renegociado']] as [Aba, string][]) : []), ['pagos', 'Pagos'], ...(tipo === 'receber' ? ([['cartoes', 'Cartões (conciliar)']] as [Aba, string][]) : [])]} />
-      {aba === 'cartoes' ? <ConciliarCartao contas={contas.data ?? []} /> : <>
+      <Abas ativa={aba} mudar={setAba} abas={[['abertos', tipo === 'receber' ? 'A receber' : 'Em aberto'], ['vencidos', 'Vencidos'], ...(tipo === 'receber' ? ([['renegociados', 'Renegociado']] as [Aba, string][]) : []), ['pagos', 'Pagos'], ...(tipo === 'receber' ? ([['protestados', 'Protestados'], ['cartoes', 'Cartões (conciliar)'], ['pix', 'Pix recebidos']] as [Aba, string][]) : [])]} />
+      {aba === 'cartoes' ? <ConciliarCartao contas={contas.data ?? []} /> : aba === 'pix' ? <PixRecebidos contas={contas.data ?? []} /> : <>
       <div className="busca">
         <input placeholder="Buscar por descrição ou nome…" value={busca} onChange={(e) => setBusca(e.target.value)} />
         <label className="check" style={{ alignSelf: 'center' }}><input type="checkbox" checked={semPessoa} onChange={(e) => setSemPessoa(e.target.checked)} /> Só sem pessoa ligada</label>
         <label className="check" style={{ alignSelf: 'center' }}><input type="checkbox" checked={semPlano} onChange={(e) => setSemPlano(e.target.checked)} /> Só sem conta do plano</label>
+        <select value={periodo} onChange={(e) => setPeriodo(e.target.value)} aria-label="Período" style={{ maxWidth: 200 }}>
+          <option value="">{aba === 'pagos' ? 'Pago em qualquer data' : 'Qualquer vencimento'}</option>
+          <option value="hoje">Hoje</option>
+          <option value="este_mes">Este mês</option>
+          <option value="mes_passado">Mês passado</option>
+          <option value="proximo_mes">Próximo mês</option>
+          <option value="escolher">Escolher datas…</option>
+        </select>
+        {periodo === 'escolher' && <><input type="date" aria-label="De" value={deP} onChange={(e) => setDeP(e.target.value)} style={{ maxWidth: 160 }} /><input type="date" aria-label="Até" value={ateP} onChange={(e) => setAteP(e.target.value)} style={{ maxWidth: 160 }} /></>}
+        {(busca || periodo || semPessoa || semPlano || evento) && <button type="button" className="botao claro" onClick={() => { setBusca(''); setPeriodo(''); setDeP(''); setAteP(''); setSemPessoa(false); setSemPlano(false); setEvento(''); }}>Limpar filtros</button>}
         {(eventos.data?.length ?? 0) > 0 && (
           <select value={evento} onChange={(e) => setEvento(e.target.value)} aria-label="Evento (centro de custo)" style={{ maxWidth: 240 }}>
             <option value="">Todos os eventos e a operação</option>

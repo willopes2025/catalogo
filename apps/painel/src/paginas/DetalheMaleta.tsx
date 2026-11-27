@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { api, pode } from '../api';
 import { data, dataHora, reais, telefone } from '../formato';
-import { Carregando, Erro, StatusMaleta, Topo } from '../componentes/ui';
+import { Carregando, ETAPAS_MALETA, Erro, StatusMaleta, Topo } from '../componentes/ui';
 import { Leitor, type ItemLido } from '../componentes/Leitor';
 import { type PecaSugerida } from '../componentes/BuscaPeca';
 import { FotoPeca, LinhaFiltro, useFiltroColunas } from '../componentes/Peca';
@@ -54,7 +54,7 @@ export function DetalheMaleta() {
       <Topo
         eb={`Maletas · Nº ${m.numero}`}
         titulo={m.representante}
-        sub={<><StatusMaleta status={m.status} diasAtraso={m.diasAtraso} /> &nbsp; Retirada {data(m.dataRetirada)} · Acerto até <b>{data(m.dataLimite)}</b> · {telefone(m.telefone)} · {m.cidade}</>}
+        sub={<><StatusMaleta status={m.status} diasAtraso={m.diasAtraso} /> {m.status === 'aberta' && <MudarEtapa id={m.id} etapa={m.etapa} />} &nbsp; Retirada {data(m.dataRetirada)} · Acerto até <b>{data(m.dataLimite)}</b> · {telefone(m.telefone)} · {m.cidade}</>}
         acoes={(
           <>
             <button className="botao claro" onClick={() => setModo(modo === 'imprimir' ? 'ver' : 'imprimir')}>Imprimir…</button>
@@ -510,5 +510,17 @@ function PerguntarEnvio({ maletaId, momento, fechar }: { maletaId: string; momen
         </>
       )}
     </div>
+  );
+}
+
+/** Onde a maleta está: a equipe muda por aqui (a conferência da saída e da volta também muda sozinha). */
+function MudarEtapa({ id, etapa }: { id: string; etapa?: string | null }) {
+  const qc = useQueryClient();
+  const m = useMutation({ mutationFn: (e: string) => api(`/maletas/${id}/etapa`, { corpo: { etapa: e } }), onSuccess: () => qc.invalidateQueries({ queryKey: ['maleta', id] }) });
+  if (!pode('maletas', 'editar')) return <span className="etiqueta neutra">{ETAPAS_MALETA.find((e) => e[0] === etapa)?.[1] ?? 'Criada'}</span>;
+  return (
+    <select aria-label="Onde a maleta está" value={etapa ?? 'criada'} disabled={m.isPending} onChange={(e) => m.mutate(e.target.value)} style={{ width: 'auto', padding: '2px 6px', fontSize: 13 }}>
+      {ETAPAS_MALETA.map(([v, n]) => <option key={v} value={v}>{n}</option>)}
+    </select>
   );
 }

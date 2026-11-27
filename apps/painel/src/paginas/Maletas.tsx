@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { api, pode } from '../api';
 import { data, dataHora, reais } from '../formato';
-import { Abas, Carregando, Erro, StatusMaleta, Topo } from '../componentes/ui';
+import { Abas, Carregando, Erro, StatusMaleta, Topo, EtapaMaleta } from '../componentes/ui';
 import { AutorizacoesDaMaleta } from './DetalheMaleta';
 
 type Aba = 'abertas' | 'vencendo' | 'atrasadas' | 'acertadas' | 'canceladas' | 'pedidos';
@@ -28,7 +28,7 @@ export function Maletas() {
       </form>
       {q.isLoading ? <Carregando /> : q.error ? <Erro erro={q.error} /> : q.data!.length === 0 ? <div className="cartao vazio">Nenhuma maleta nesta aba.</div> : (
         <table className="tabela">
-          <thead><tr><th>Nº</th><th>Representante</th><th>Cidade</th><th className="num">Peças</th><th className="num">Valor</th><th>Retirada</th><th>Acerto até</th><th>Entrega</th><th>Pré-baixa</th><th>Situação</th></tr></thead>
+          <thead><tr><th>Nº</th><th>Representante</th><th>Cidade</th><th className="num">Peças</th><th className="num">Valor</th><th>Retirada</th><th>Acerto até</th><th>Entrega</th><th>Onde está</th><th>Pré-baixa</th><th>Situação</th></tr></thead>
           <tbody>
             {q.data!.map((m) => (
               <tr key={m.id} className="clicavel" onClick={() => navegar(`/maletas/${m.id}`)}>
@@ -40,6 +40,7 @@ export function Maletas() {
                 <td>{data(m.dataRetirada)}</td>
                 <td>{data(m.dataLimite)}</td>
                 <td>{m.entrega === 'envio' ? 'Envio' : 'Retirada'}</td>
+                <td>{m.status === 'aberta' ? <EtapaMaleta etapa={m.etapa} /> : <span className="muted">—</span>}</td>
                 <td>{m.prebaixa ? <span className="etiqueta alerta">Informada</span> : <span className="muted">—</span>}</td>
                 <td><StatusMaleta status={m.status} diasAtraso={m.diasAtraso} /></td>
               </tr>

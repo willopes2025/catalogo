@@ -10,6 +10,8 @@ import { AuditoriaService } from '../comum/auditoria.service';
 import { creditos, documentos, maletas, niveis, pessoas, referencias, titulos } from '../db/schema';
 import { gerarSlug } from '@aritana/regras';
 import { buscaNome, ordemBuscaNome } from '../comum/busca-nome';
+import { DocumentosService } from '../documentos/documentos.service';
+import type { Tx } from '../db/client';
 
 const TIPOS = ['representante', 'cliente', 'fornecedor', 'transportadora', 'assistencia'] as const;
 type TipoPessoa = (typeof TIPOS)[number];
@@ -71,7 +73,16 @@ const pessoaSchema = z
 
 @Controller('pessoas')
 export class PessoasController {
-  constructor(@Inject(DB) private readonly db: Db, private readonly auditoria: AuditoriaService) {}
+  constructor(@Inject(DB) private readonly db: Db, private readonly auditoria: AuditoriaService, private readonly documentosSvc: DocumentosService) {}
+
+  /** Consultora ativa sem contrato: o contrato já fica gerado no cadastro, pronto para mandar assinar. */
+  private async contratoDoCadastro(tx: Tx, p: { id: string; tipo: string; status: string }, usuarioId: string) {
+    if (p.tipo !== 'representante' || p.status !== 'ativo') return null;
+    const [ja] = await tx.select({ id: documentos.id }).from(documentos).where(and(eq(documentos.pessoaId, p.id), eq(documentos.tipo, 'contrato'), sql`${documentos.status} <> 'cancelado'`)).limit(1);
+    if (ja) return null;
+    const doc = await this.documentosSvc.gerar(tx, { pessoaId: p.id, tipo: 'contrato' }, usuarioId, false);
+    return doc?.id ?? null;
+  }
 
   private exigir(u: UsuarioLogado, tipo: TipoPessoa, acao: string) {
     if (!temPermissao(u.permissoes, moduloDo(tipo), acao)) throw new ForbiddenException('Você não tem permissão para esta ação.');
@@ -182,7 +193,8 @@ export class PessoasController {
       const [p] = await tx.insert(pessoas).values({ ...dados, slug }).returning();
       if (refs?.length) await tx.insert(referencias).values(refs.map((r) => ({ ...r, pessoaId: p.id })));
       await this.auditoria.registrar({ usuarioId: u.id, acao: 'criar', entidade: 'pessoa', entidadeId: p.id, dados: { tipo: p.tipo } }, tx);
-      return p;
+      const contratoId = await this.contratoDoCadastro(tx, p, u.id);
+      return { ...p, contratoId };
     });
   }
 
@@ -213,7 +225,8 @@ export class PessoasController {
       }
       const mudou = Object.keys(dados).filter((k) => JSON.stringify((atual as Record<string, unknown>)[k]) !== JSON.stringify((dados as Record<string, unknown>)[k]));
       await this.auditoria.registrar({ usuarioId: u.id, acao: 'editar', entidade: 'pessoa', entidadeId: id, dados: { campos: mudou } }, tx);
-      return p;
+      const contratoId = atual.status !== 'ativo' ? await this.contratoDoCadastro(tx, p, u.id) : null;
+      return { ...p, contratoId };
     });
   }
 

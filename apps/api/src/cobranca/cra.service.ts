@@ -45,6 +45,28 @@ const campo = (v: string | null | undefined, tam: number) =>
     .trim()
     .toUpperCase()
     .slice(0, tam);
+/** Tamanho do endereço aceito pelo cartório do ES (o layout tem 45, mas lá o campo corta em 40–42). */
+export const TAM_ENDERECO_CRA = 40;
+const ABREV: [RegExp, string][] = [
+  [/\bAVENIDA\b/g, 'AV'], [/\bRUA\b/g, 'R'], [/\bTRAVESSA\b/g, 'TV'], [/\bRODOVIA\b/g, 'ROD'], [/\bESTRADA\b/g, 'EST'], [/\bALAMEDA\b/g, 'AL'],
+  [/\bPRACA\b/g, 'PC'], [/\bLADEIRA\b/g, 'LD'], [/\bAPARTAMENTO\b/g, 'AP'], [/\bAPTO\b/g, 'AP'], [/\bBLOCO\b/g, 'BL'], [/\bCONJUNTO\b/g, 'CJ'],
+  [/\bEDIFICIO\b/g, 'ED'], [/\bLOTE\b/g, 'LT'], [/\bQUADRA\b/g, 'QD'], [/\bCASA\b/g, 'CS'], [/\bSALA\b/g, 'SL'], [/\bNUMERO\b/g, 'N'], [/\bSEM NUMERO\b/g, 'SN'],
+  [/\bDOUTOR\b/g, 'DR'], [/\bPROFESSOR(A)?\b/g, 'PROF'], [/\bGOVERNADOR\b/g, 'GOV'], [/\bPRESIDENTE\b/g, 'PRES'], [/\bSANTA\b/g, 'STA'], [/\bSANTO\b/g, 'STO'], [/\bSAO\b/g, 'S'],
+];
+/**
+ * Endereço que cabe no campo do cartório: abrevia (Avenida → AV, Apartamento → AP…) e, se ainda passar, encurta o nome
+ * da rua, mas nunca corta o número nem o complemento.
+ */
+export function enderecoCra(logradouro: string | null | undefined, numero: string | null | undefined, complemento: string | null | undefined, tam = TAM_ENDERECO_CRA) {
+  const inteiro = [campo(logradouro, 200), campo(numero, 10) || 'SN', campo(complemento, 200)].filter(Boolean).join(' ');
+  if (inteiro.length <= tam) return inteiro;
+  const abrev = (t: string | null | undefined) => ABREV.reduce((a, [re, s]) => a.replace(re, s), campo(t, 200));
+  const rua = abrev(logradouro);
+  const fim = [campo(numero, 10) || 'SN', abrev(complemento)].filter(Boolean).join(' ');
+  const cabe = Math.max(8, tam - fim.length - 1);
+  return `${rua.slice(0, cabe).trim()} ${fim}`.slice(0, tam).trim();
+}
+
 const num = (v: string | number | null | undefined, tam: number) => String(v ?? '').replace(/\D/g, '').slice(-tam).padStart(tam, '0');
 const valorCra = (c: number) => (c / 100).toFixed(2);
 const ddmmaaaa = (d: string) => `${d.slice(8, 10)}${d.slice(5, 7)}${d.slice(0, 4)}`;
@@ -147,6 +169,7 @@ export class CraService implements OnModuleInit, OnModuleDestroy {
     const itens = [];
     for (const { t, p } of linhas) {
       const problemas: string[] = [];
+      const avisos: string[] = [];
       const dias = Math.round((Date.parse(h) - Date.parse(t.vencimento)) / 86400_000);
       if (t.tipo !== 'receber' || t.status !== 'aberto') problemas.push(`O título está ${t.status}.`);
       if (dias < cfg.protesto.diasMinimos) problemas.push(`Venceu há ${Math.max(0, dias)} dias; o mínimo configurado é ${cfg.protesto.diasMinimos}.`);
@@ -156,12 +179,30 @@ export class CraService implements OnModuleInit, OnModuleDestroy {
         const doc = (p.documento ?? '').replace(/\D/g, '');
         if (doc.length !== 11 && doc.length !== 14) problemas.push('O devedor está sem CPF ou CNPJ.');
         if (!p.logradouro?.trim()) problemas.push('Falta o endereço (rua) do devedor.');
+        else if ([p.logradouro, p.numero, p.complemento].filter(Boolean).join(' ').length > TAM_ENDERECO_CRA) avisos.push(`Endereço abreviado para caber no cartório: "${enderecoCra(p.logradouro, p.numero, p.complemento)}".`);
         if (!p.cidade?.trim() || !p.uf?.trim()) problemas.push('Falta a cidade ou a UF do devedor.');
         if ((p.cep ?? '').replace(/\D/g, '').length !== 8) problemas.push('Falta o CEP do devedor.');
       }
-      itens.push({ tituloId: t.id, descricao: t.descricao, valor: t.valor, vencimento: t.vencimento, dias, devedor: p?.nome ?? null, pessoaId: p?.id ?? null, problemas });
+      itens.push({ tituloId: t.id, descricao: t.descricao, valor: t.valor, vencimento: t.vencimento, dias, devedor: p?.nome ?? null, pessoaId: p?.id ?? null, problemas, avisos });
     }
     return { itens, prontos: itens.filter((i) => !i.problemas.length).length, configurado: this.configurado, especie: cfg.protesto.especie };
+  }
+
+  /**
+   * Para protestar: parcelas de acerto de maleta vencidas há pelo menos o mínimo configurado, ainda em aberto e fora
+   * de protesto. Nada vai sozinho ao cartório: a gestão confere a lista e aprova o envio.
+   */
+  async sugestoes() {
+    const cfg = await this.config.obter();
+    const limite = new Date(Date.parse(`${hoje()}T12:00:00Z`) - cfg.protesto.diasMinimos * 86400_000).toISOString().slice(0, 10);
+    const ts = await this.db
+      .select({ id: titulos.id })
+      .from(titulos)
+      .where(and(eq(titulos.tipo, 'receber'), eq(titulos.status, 'aberto'), eq(titulos.origemTipo, 'acerto'), sql`${titulos.vencimento} <= ${limite}`, sql`not exists (select 1 from cobranca_protestos cp where cp.titulo_id = ${titulos.id} and cp.status in ('enviado', 'em_cartorio', 'protestado'))`))
+      .orderBy(titulos.vencimento)
+      .limit(300);
+    if (!ts.length) return { itens: [], prontos: 0, configurado: this.configurado, especie: cfg.protesto.especie, diasMinimos: cfg.protesto.diasMinimos };
+    return { ...(await this.conferir(ts.map((t) => t.id))), diasMinimos: cfg.protesto.diasMinimos };
   }
 
   /** Monta a remessa (layout de remessa da CRA, em XML) com os títulos prontos e envia. */
@@ -201,13 +242,13 @@ export class CraService implements OnModuleInit, OnModuleDestroy {
           const [pr] = await tx.insert(cobrancaProtestos).values({ tituloId: t.id, pessoaId: p.id, valor: t.valor, especie: esp, codMunicipio: ibge, remessaId: arq.id, usuarioId, historico: [{ em: new Date().toISOString(), texto: `Enviado à CRA no arquivo ${nome}.` }] }).returning();
           criados.push(pr);
           const doc = (p.documento ?? '').replace(/\D/g, '');
-          const endereco = [p.logradouro, p.numero, p.complemento].filter(Boolean).join(' ');
+          const endereco = enderecoCra(p.logradouro, p.numero, p.complemento);
           soma += t.valor;
           trs.push(
             `<tr ${Object.entries({
               t01: '1', t02: cod3, t03: campo(num(e.cnpj, 14), 15), t04: campo(e.razaoSocial ?? e.nome, 45), t05: campo(e.razaoSocial ?? e.nome, 45), t06: num(e.cnpj, 14), t07: '', t08: '00000000', t09: campo(e.cidade, 20), t10: campo(e.uf, 2),
               t11: num(pr.numero, 15), t12: esp, t13: num(pr.numero, 11), t14: ddmmaaaa((t.criadoEm ?? new Date()).toISOString().slice(0, 10)), t15: ddmmaaaa(t.vencimento), t16: '001', t17: valorCra(t.valor), t18: valorCra(t.valor), t19: campo(p.cidade, 20), t20: '', t21: 'N', t22: '1',
-              t23: campo(p.nome, 45), t24: doc.length === 14 ? '001' : '002', t25: num(doc, 14), t26: '', t27: campo(endereco, 45), t28: num(p.cep, 8), t29: campo(p.cidade, 20), t30: campo(p.uf, 2),
+              t23: campo(p.nome, 45), t24: doc.length === 14 ? '001' : '002', t25: num(doc, 14), t26: '', t27: endereco, t28: num(p.cep, 8), t29: campo(p.cidade, 20), t30: campo(p.uf, 2),
               t31: '00', t32: '', t33: '', t34: '00000000', t35: '0.00', t36: '', t37: '00000000', t38: '', t39: campo(p.bairro, 20), t40: '0.00', t41: '000000', t42: '0.00', t43: '0', t44: '0', t45: '0', t46: '0', t47: '', t48: '', t49: '', t50: '0.00', t52: num(seq++, 4),
               ...(p.telefone1 ? { t53: (p.telefone1 ?? '').replace(/\D/g, '') } : {}),
               ...(p.email ? { t54: campo(p.email, 60).toLowerCase() } : {}),

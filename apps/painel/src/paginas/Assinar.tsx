@@ -15,7 +15,8 @@ export function Assinar() {
   const [cpf, setCpf] = useState('');
   const [aceite, setAceite] = useState(false);
   const [envio, setEnvio] = useState<{ enviadoPara: string; codigoDev?: string } | null>(null);
-  const pedir = useMutation({ mutationFn: () => api<any>(`/publico/documentos/${token}/codigo`, { corpo: {} }), onSuccess: setEnvio });
+  const [via, setVia] = useState<'whatsapp' | 'email'>('whatsapp');
+  const pedir = useMutation({ mutationFn: (v: 'whatsapp' | 'email') => { setVia(v); return api<any>(`/publico/documentos/${token}/codigo`, { corpo: { via: v } }); }, onSuccess: setEnvio });
   const assinar = useMutation({ mutationFn: () => api(`/publico/documentos/${token}/assinar`, { corpo: { codigo, nome, cpf: cpf || undefined, aceite } }), onSuccess: () => qc.invalidateQueries({ queryKey: ['assinar', token] }) });
   if (q.isLoading) return <Carregando />;
   if (q.error) return <div className="publico"><Erro erro={q.error} /></div>;
@@ -25,7 +26,7 @@ export function Assinar() {
       <div className="cab">
         <img src="/logo-creme.png" alt="Aritana Semijoias" />
         <h1 style={{ fontSize: 22 }}>{d.titulo}</h1>
-        <p style={{ color: '#d9cfc1', fontSize: 14 }}>Leia com atenção. Para assinar, você vai receber um código no seu e-mail.</p>
+        <p style={{ color: '#d9cfc1', fontSize: 14 }}>Leia com atenção. Para assinar, você recebe um código no WhatsApp ou no e-mail.</p>
       </div>
       <div className="cartao" style={{ marginTop: 14, whiteSpace: 'pre-wrap', lineHeight: 1.6, fontSize: 15 }}>{d.conteudo}</div>
       {d.status === 'assinado' ? (
@@ -40,9 +41,13 @@ export function Assinar() {
           <h2>Assinar</h2>
           {!envio ? (
             <>
-              <p>Vamos enviar um código de 6 números para {d.emailMascarado ?? 'o seu e-mail'}.</p>
+              <p>Vamos enviar um código de 6 números. Onde você prefere receber?</p>
               {pedir.error && <Erro erro={pedir.error} />}
-              <button className="botao" onClick={() => pedir.mutate()} disabled={pedir.isPending || !d.emailMascarado}>{pedir.isPending ? 'Enviando…' : 'Receber código por e-mail'}</button>
+              <div className="flex" style={{ gap: 8, flexWrap: 'wrap' }}>
+                {d.telefoneMascarado && <button className="botao" onClick={() => pedir.mutate('whatsapp')} disabled={pedir.isPending}>{pedir.isPending && via === 'whatsapp' ? 'Enviando…' : `Receber no WhatsApp ${d.telefoneMascarado}`}</button>}
+                {d.emailMascarado && <button className={d.telefoneMascarado ? 'botao claro' : 'botao'} onClick={() => pedir.mutate('email')} disabled={pedir.isPending}>{pedir.isPending && via === 'email' ? 'Enviando…' : `Receber no e-mail ${d.emailMascarado}`}</button>}
+                {!d.telefoneMascarado && !d.emailMascarado && <span className="muted">Seu cadastro está sem telefone e sem e-mail. Fale com a Aritana.</span>}
+              </div>
             </>
           ) : (
             <>
@@ -55,7 +60,7 @@ export function Assinar() {
               {assinar.error && <Erro erro={assinar.error} />}
               <div className="flex">
                 <button className="botao" disabled={codigo.length !== 6 || nome.length < 3 || !aceite || assinar.isPending} onClick={() => assinar.mutate()}>{assinar.isPending ? 'Assinando…' : 'Assinar documento'}</button>
-                <button className="botao claro" onClick={() => pedir.mutate()} disabled={pedir.isPending}>Enviar outro código</button>
+                <button className="botao claro" onClick={() => pedir.mutate(via)} disabled={pedir.isPending}>Enviar outro código</button>
               </div>
               <p className="muted" style={{ fontSize: 12 }}>Ao assinar, registramos a data, a hora, o endereço de internet e o aparelho usado, junto com o código de verificação do documento.</p>
             </>

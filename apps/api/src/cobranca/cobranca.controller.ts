@@ -374,6 +374,14 @@ export class CobrancaController {
 
   // ───── Protesto ─────
 
+  /** Parcelas de acerto vencidas que já podem ir a protesto, esperando a aprovação da gestão. */
+  @Get('protestos/sugestoes')
+  @Permissao('cobranca', 'excluir')
+  async sugestoesProtesto(@Usuario() u: UsuarioLogado) {
+    this.cobranca.exigirGestor(await this.cobranca.escopo(u));
+    return this.cra.sugestoes();
+  }
+
   @Post('protestos/conferir')
   @Permissao('cobranca', 'excluir')
   async conferir(@Usuario() u: UsuarioLogado, @Body() body: unknown) {

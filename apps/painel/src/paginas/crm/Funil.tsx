@@ -203,11 +203,11 @@ export function Aprovar({ leadId, nome, fechar }: { leadId: string; nome: string
   const [modelo, setModelo] = useState('consignado');
   const lead = useQuery({ queryKey: ['crm', 'lead', leadId], queryFn: () => api<any>(`/crm/leads/${leadId}`) });
   const m = useMutation({
-    mutationFn: () => api<{ pessoaId: string }>(`/crm/candidaturas/${lead.data.candidaturaId}/aprovar`, { corpo: { modeloTrabalho: modelo } }),
+    mutationFn: () => api<{ pessoaId: string; contratoId?: string | null }>(`/crm/candidaturas/${lead.data.candidaturaId}/aprovar`, { corpo: { modeloTrabalho: modelo } }),
     onSuccess: (r) => {
       qc.invalidateQueries({ queryKey: ['crm'] });
       fechar();
-      navegar(`/rede/${r.pessoaId}`);
+      navegar(r.contratoId ? `/rede/${r.pessoaId}?aba=documentos&contrato=novo` : `/rede/${r.pessoaId}`);
     },
   });
   return (

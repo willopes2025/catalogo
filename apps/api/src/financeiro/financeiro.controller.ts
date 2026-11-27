@@ -11,6 +11,7 @@ import { hoje } from '../maletas/maletas.service';
 import { AsaasService } from '../integracoes/asaas.service';
 import { PlanoContasService } from './plano.service';
 import { LancamentosService, tituloSchema } from './lancamentos.service';
+import { baixarTitulo } from './baixa';
 import { buscaNome } from '../comum/busca-nome';
 
 
@@ -73,8 +74,10 @@ export class FinanceiroController {
     if (aba === 'pagos') f.push(eq(titulos.status, 'pago'));
     if (aba === 'protestados') f.push(eq(titulos.status, 'protestado'));
     if (pessoaId) f.push(eq(titulos.pessoaId, pessoaId));
-    if (de) f.push(gte(titulos.vencimento, de));
-    if (ate) f.push(lte(titulos.vencimento, ate));
+    // Período: pelo vencimento; na aba Pagos, pela data do pagamento.
+    const colPeriodo = aba === 'pagos' ? titulos.pagoEm : titulos.vencimento;
+    if (de && /^\d{4}-\d{2}-\d{2}$/.test(de)) f.push(gte(colPeriodo, de));
+    if (ate && /^\d{4}-\d{2}-\d{2}$/.test(ate)) f.push(lte(colPeriodo, ate));
     const itens = await this.db
       .select({
         id: titulos.id,
@@ -205,27 +208,7 @@ export class FinanceiroController {
   async baixar(@Usuario() u: UsuarioLogado, @Param('id', ParseUUIDPipe) id: string, @Body() body: unknown) {
     const d = validar(baixaSchema, body);
     const pagoEm = d.pagoEm ?? hoje();
-    const r = await this.db.transaction(async (tx) => {
-      const [t] = await tx.select().from(titulos).where(eq(titulos.id, id)).for('update');
-      if (!t) throw new NotFoundException('Título não encontrado.');
-      if (t.status !== 'aberto' && t.status !== 'protestado') throw new BadRequestException(`Título está ${t.status}.`);
-      const valorPago = d.valorPago ?? t.valor;
-      if (valorPago <= 0) throw new BadRequestException('Informe o valor pago.');
-      // Pagamento parcial: baixa o que foi pago e abre um título com o saldo, no mesmo vencimento.
-      const parcial = !d.quitarComDesconto && valorPago < t.valor;
-      const [baixado] = await tx
-        .update(titulos)
-        .set({ status: 'pago', pagoEm, valor: parcial ? valorPago : t.valor, valorPago, contaId: d.contaId ?? null, formaPagamento: d.formaPagamento ?? t.formaPagamento })
-        .where(eq(titulos.id, id))
-        .returning();
-      let saldo = null;
-      if (parcial) {
-        const { id: _i, criadoEm: _c, cobrancaExternaId: _e, cobrancaUrl: _u, pixCopiaCola: _p, cobrancaTipo: _t, cobrancaValor: _v, cobrancaVencimento: _cv, ...resto } = t;
-        [saldo] = await tx.insert(titulos).values({ ...resto, valor: t.valor - valorPago, descricao: `${t.descricao} · saldo`, status: t.status, pagoEm: null, valorPago: null, contaId: null }).returning();
-      }
-      await this.auditoria.registrar({ usuarioId: u.id, acao: 'baixar', entidade: 'titulo', entidadeId: id, dados: { ...d, parcial, saldoId: saldo?.id } }, tx);
-      return { ...baixado, saldo, cobrancaAnterior: t.cobrancaExternaId };
-    });
+    const r = await this.db.transaction((tx) => baixarTitulo(tx, id, { ...d, pagoEm }, u.id, this.auditoria));
     // Se havia boleto/Pix no Asaas, avisa que foi pago por fora (ou, no parcial, apaga a cobrança do valor cheio).
     if (r.cobrancaAnterior) {
       if (r.saldo) await this.asaas.cancelarCobranca(r.cobrancaAnterior);

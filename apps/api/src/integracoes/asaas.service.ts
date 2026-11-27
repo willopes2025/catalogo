@@ -168,6 +168,7 @@ export class AsaasService implements OnApplicationBootstrap {
     if (t.tipo !== 'receber' || (t.status !== 'aberto' && t.status !== 'protestado')) throw new BadRequestException('Só títulos a receber em aberto podem ser cobrados.');
     if (!t.pessoaId) throw new BadRequestException('O título não tem pagador.');
     if (t.formaPagamento === 'debito' || t.formaPagamento === 'credito') throw new BadRequestException('Título de cartão é pago pela maquininha; não gera boleto nem Pix.');
+    if (opcoes?.vencimento && opcoes.vencimento < hoje()) throw new BadRequestException('O vencimento não pode ser antes de hoje.');
     if (t.cobrancaExternaId && !nova)
       return {
         id: t.cobrancaExternaId,
@@ -180,7 +181,6 @@ export class AsaasService implements OnApplicationBootstrap {
     // Multa e juros da configuração de cobrança: o Asaas calcula se a pessoa pagar depois do vencimento.
     const cfg = await this.config.obter();
     const encargos = cfg.multaPb > 0 || cfg.jurosMesPb > 0 ? cfg : null;
-    if (opcoes?.vencimento && opcoes.vencimento < hoje()) throw new BadRequestException('O vencimento não pode ser antes de hoje.');
     const venc = nova ? nova.vencimento : opcoes?.vencimento ?? (t.vencimento < hoje() ? hoje() : t.vencimento);
     const valor = nova ? nova.valor : t.valor;
     const pg = await this.chamar<{

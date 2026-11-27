@@ -345,6 +345,11 @@ export const maletas = pgTable(
     garantiaValor: integer('garantia_valor'),
     garantiaVencimento: date('garantia_vencimento', { mode: 'string' }),
     garantiaPagaEm: date('garantia_paga_em', { mode: 'string' }),
+    /** Contrato da consultora a que esta maleta está ligada (assinado no cadastro). */
+    contratoId: uuid('contrato_id'),
+    /** Onde a maleta está: criada | aguardando_retirada | em_transito | entregue | voltando | em_conferencia. */
+    etapa: text('etapa').notNull().default('criada'),
+    etapaEm: timestamp('etapa_em', { withTimezone: true }),
     usuarioId: uuid('usuario_id').references(() => usuarios.id),
     /** Pedido de origem no Jueri (maletas migradas). */
     idJueri: text('id_jueri'),
@@ -2076,6 +2081,35 @@ export const cobrancaComprovantes = pgTable(
     criadoEm: criadoEm(),
   },
   (t) => ({ porStatus: index('cobranca_comprovantes_status_idx').on(t.status, t.criadoEm) }),
+);
+
+/** Pix que entraram na conta (Asaas pela API, Sicoob pelo extrato OFX), para dar baixa e achar o que ficou sem baixa. */
+export const pixRecebidos = pgTable(
+  'pix_recebidos',
+  {
+    id: id(),
+    /** asaas | sicoob */
+    origem: text('origem').notNull(),
+    /** Id do pagamento no Asaas ou FITID da linha do extrato. */
+    externoId: text('externo_id').notNull(),
+    data: date('data', { mode: 'string' }).notNull(),
+    valor: integer('valor').notNull(),
+    pagadorNome: text('pagador_nome'),
+    pagadorDocumento: text('pagador_documento'),
+    descricao: text('descricao'),
+    contaId: uuid('conta_id').references(() => contas.id, { onDelete: 'set null' }),
+    /** Cadastro que bate com o CPF/CNPJ de quem pagou. */
+    pessoaId: uuid('pessoa_id').references(() => pessoas.id, { onDelete: 'set null' }),
+    /** pendente | baixado | ignorado */
+    status: text('status').notNull().default('pendente'),
+    tituloIds: jsonb('titulo_ids').$type<string[]>().notNull().default([]),
+    comprovanteId: uuid('comprovante_id').references(() => cobrancaComprovantes.id, { onDelete: 'set null' }),
+    resolvidoPor: uuid('resolvido_por').references(() => usuarios.id, { onDelete: 'set null' }),
+    resolvidoEm: timestamp('resolvido_em', { withTimezone: true }),
+    observacao: text('observacao'),
+    criadoEm: criadoEm(),
+  },
+  (t) => ({ unico: uniqueIndex('pix_recebidos_origem_uq').on(t.origem, t.externoId), porStatus: index('pix_recebidos_status_idx').on(t.status, t.data) }),
 );
 
 /** Arquivos trocados com a CRA (remessa, desistência, autorização de cancelamento, confirmação, retorno). */

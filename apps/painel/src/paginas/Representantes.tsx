@@ -128,10 +128,12 @@ export function FichaRepresentante() {
       corpo.referencias = (f.referencias ?? []).filter((r: any) => r.nome?.trim()).map(({ nome, telefone, relacao }: any) => ({ nome, telefone, relacao }));
       return nova ? api<Pessoa>('/pessoas', { corpo }) : api<Pessoa>(`/pessoas/${id}`, { metodo: 'PATCH', corpo });
     },
-    onSuccess: (p) => {
+    onSuccess: (p: any) => {
       qc.invalidateQueries({ queryKey: ['representantes'] });
       qc.invalidateQueries({ queryKey: ['pessoa', p.id] });
-      if (nova) navegar(`/rede/${p.id}`, { replace: true });
+      // Contrato gerado no cadastro: abre a aba Documentos para mandar assinar.
+      if (p.contratoId) { setAba('documentos'); navegar(`/rede/${p.id}?aba=documentos&contrato=novo`, { replace: true }); }
+      else if (nova) navegar(`/rede/${p.id}`, { replace: true });
     },
   });
   const campos = salvar.error instanceof ErroApi ? salvar.error.dados.campos ?? {} : {};
@@ -268,6 +270,7 @@ export function FichaRepresentante() {
             </table>
           ) : <p className="muted">Nenhuma maleta ainda.</p>
         )}
+        {aba === 'documentos' && !nova && busca.get('contrato') === 'novo' && <div className="aviso ok" style={{ marginBottom: 10 }}>Contrato gerado. Clique em <b>Enviar pelo WhatsApp</b> para a consultora assinar pelo celular. Ele vale para todas as próximas maletas.</div>}
         {aba === 'documentos' && !nova && <DocumentosPessoa pessoa={f} />}
         {aba === 'financeiro' && (
           f.titulos?.length ? (

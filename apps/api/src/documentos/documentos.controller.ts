@@ -10,6 +10,7 @@ import { validar } from '../comum/validacao';
 import { AuditoriaService } from '../comum/auditoria.service';
 import { documentos, modelosDocumento } from '../db/schema';
 import { DocumentosService, VARIAVEIS } from './documentos.service';
+import { EnvioDocumentoService } from './envio-documento.service';
 import { BoasVindasAppService } from './boas-vindas-app.service';
 
 const TIPOS = ['contrato', 'promissoria', 'aditivo'] as const;
@@ -30,7 +31,7 @@ const modeloSchema = z
 
 @Controller('documentos')
 export class DocumentosController {
-  constructor(@Inject(DB) private readonly db: Db, private readonly svc: DocumentosService, private readonly auditoria: AuditoriaService) {}
+  constructor(@Inject(DB) private readonly db: Db, private readonly svc: DocumentosService, private readonly auditoria: AuditoriaService, private readonly envio: EnvioDocumentoService) {}
 
   @Get('variaveis')
   variaveis() {
@@ -75,6 +76,14 @@ export class DocumentosController {
     return this.svc.gerar(this.db, d, u.id);
   }
 
+  /** Manda o link de assinatura pelo WhatsApp do sistema e/ou por e-mail. */
+  @Post(':id/enviar')
+  @Permissao('rede', 'editar')
+  enviar(@Usuario() u: UsuarioLogado, @Param('id', ParseUUIDPipe) id: string, @Body() body: unknown) {
+    const d = validar(z.object({ whatsapp: z.boolean().default(true), email: z.boolean().default(false) }), body);
+    return this.envio.enviarLink(id, d, u.id);
+  }
+
   @Get(':id')
   @Permissao('rede', 'ver')
   obter(@Param('id', ParseUUIDPipe) id: string) {
@@ -96,7 +105,7 @@ const pedidosCodigo = new Limitador(10, 60 * 60_000, 'Muitos pedidos de código.
 /** Páginas que a representante abre pelo link, sem login. */
 @Controller('publico/documentos')
 export class DocumentoPublicoController {
-  constructor(private readonly svc: DocumentosService, private readonly boasVindas: BoasVindasAppService) {}
+  constructor(private readonly svc: DocumentosService, private readonly boasVindas: BoasVindasAppService, private readonly envio: EnvioDocumentoService) {}
 
   @Publico()
   @Get(':token')
@@ -106,9 +115,10 @@ export class DocumentoPublicoController {
 
   @Publico()
   @Post(':token/codigo')
-  codigo(@Param('token') token: string, @Req() req: Request) {
+  codigo(@Param('token') token: string, @Body() body: unknown, @Req() req: Request) {
     pedidosCodigo.usar(req.ip ?? '?');
-    return this.svc.enviarCodigo(token);
+    const { via } = validar(z.object({ via: z.enum(['email', 'whatsapp']).default('email') }), body ?? {});
+    return this.svc.enviarCodigo(token, via, (p, t, n, x) => this.envio.whatsapp(p, t, n, x));
   }
 
   @Publico()

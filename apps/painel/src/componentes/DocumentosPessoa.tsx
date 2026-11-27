@@ -15,18 +15,19 @@ export function DocumentosPessoa({ pessoa }: { pessoa: any }) {
   const gerar = useMutation({ mutationFn: (tipo: string) => api('/documentos', { corpo: { pessoaId: pessoa.id, tipo } }), onSuccess: atualizar });
   const cancelar = useMutation({ mutationFn: (id: string) => api(`/documentos/${id}/cancelar`, { corpo: {} }), onSuccess: atualizar });
   const link = (token: string) => `${window.location.origin}/assinar/${token}`;
-  const zap = (d: any) => {
-    const num = (pessoa.telefone1 ?? '').replace(/\D/g, '');
-    return num ? `https://wa.me/55${num}?text=${encodeURIComponent(`Oi, ${pessoa.nome.split(' ')[0]}! Segue o ${TIPO[d.tipo].toLowerCase()} da Aritana para você ler e assinar pelo celular: ${link(d.token)}`)}` : null;
-  };
+  const [enviado, setEnviado] = useState<Record<string, string>>({});
+  const enviar = useMutation({
+    mutationFn: ({ id, via }: { id: string; via: 'whatsapp' | 'email' }) => api<{ whatsapp?: string; email?: string }>(`/documentos/${id}/enviar`, { corpo: { whatsapp: via === 'whatsapp', email: via === 'email' } }),
+    onSuccess: (r, v) => setEnviado((e) => ({ ...e, [v.id]: v.via === 'whatsapp' ? `WhatsApp: ${r.whatsapp}` : `E-mail: ${r.email}` })),
+  });
   const editavel = pode('rede', 'editar');
   return (
     <div className="coluna">
       <div className="flex entre">
-        <p className="muted">O código de assinatura vai para o e-mail do cadastro{pessoa.email ? ` (${pessoa.email})` : ''}.{!pessoa.email && <b style={{ color: 'var(--erro)' }}> Cadastre um e-mail antes de enviar.</b>}</p>
+        <p className="muted">O contrato é assinado uma vez e vale para as próximas maletas. Na página de assinatura, a consultora pede o código pelo WhatsApp ou pelo e-mail do cadastro.</p>
         {editavel && <button className="botao" onClick={() => gerar.mutate('contrato')} disabled={gerar.isPending}>Gerar contrato</button>}
       </div>
-      {(gerar.error || cancelar.error) && <Erro erro={gerar.error ?? cancelar.error} />}
+      {(gerar.error || cancelar.error || enviar.error) && <Erro erro={gerar.error ?? cancelar.error ?? enviar.error} />}
       {pessoa.documentos?.length ? (
         <table className="tabela">
           <thead><tr><th>Documento</th><th>Gerado</th><th>Visto pela representante</th><th>Situação</th><th></th></tr></thead>
@@ -45,7 +46,9 @@ export function DocumentosPessoa({ pessoa }: { pessoa: any }) {
                       {d.status === 'pendente' && (
                         <>
                           <button className="botao claro pequeno" onClick={async () => { try { await navigator.clipboard.writeText(link(d.token)); setCopiado(d.id); } catch { window.prompt('Copie o link:', link(d.token)); } }}>{copiado === d.id ? 'Copiado' : 'Copiar link'}</button>
-                          {zap(d) && <a className="botao pequeno" href={zap(d)!} target="_blank" rel="noreferrer">WhatsApp</a>}
+                          {editavel && <button className="botao pequeno" disabled={enviar.isPending || !pessoa.telefone1} title={pessoa.telefone1 ? '' : 'Sem telefone no cadastro'} onClick={() => enviar.mutate({ id: d.id, via: 'whatsapp' })}>Enviar pelo WhatsApp</button>}
+                          {editavel && pessoa.email && <button className="botao claro pequeno" disabled={enviar.isPending} onClick={() => enviar.mutate({ id: d.id, via: 'email' })}>Por e-mail</button>}
+                          {enviado[d.id] && <span className="muted" style={{ fontSize: 12 }}>{enviado[d.id]}</span>}
                           {editavel && <button className="botao perigo pequeno" onClick={() => cancelar.mutate(d.id)}>Cancelar</button>}
                         </>
                       )}

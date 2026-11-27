@@ -14,6 +14,7 @@ import { ConfiguracoesService } from '../configuracoes/configuracoes.service';
 import { EmailService } from '../integracoes/email.service';
 import { SegredosService } from '../segredos/segredos.service';
 import { candidaturaNotas, candidaturas, crmLeads, pessoas, usuarios } from '../db/schema';
+import { DocumentosService } from '../documentos/documentos.service';
 import { CrmService } from './crm.service';
 import { buscaNome } from '../comum/busca-nome';
 
@@ -50,6 +51,7 @@ export class CrmController {
     private readonly segredos: SegredosService,
     private readonly crmSvc: CrmService,
     private readonly indicacoesSvc: IndicacoesService,
+    private readonly documentosSvc: DocumentosService,
   ) {}
 
   /** Toda candidatura vira (ou atualiza) um card no funil de recrutamento. */
@@ -277,7 +279,9 @@ export class CrmController {
         await tx.execute(sql`update crm_contatos set pessoa_id = ${p.id} where id = ${card.contatoId} and pessoa_id is null`);
         await this.crmSvc.moverLead(card.id, alvo.etapaId, { usuarioId: u.id, origem: 'automatico' }, tx);
       }
-      return { pessoaId: p.id };
+      // O contrato já fica gerado no cadastro, pronto para mandar assinar.
+      const contrato = await this.documentosSvc.gerar(tx, { pessoaId: p.id, tipo: 'contrato' }, u.id, false);
+      return { pessoaId: p.id, contratoId: contrato?.id ?? null };
     });
   }
 

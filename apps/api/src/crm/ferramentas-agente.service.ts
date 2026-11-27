@@ -5,6 +5,7 @@ import { AuditoriaService } from '../comum/auditoria.service';
 import { candidaturaNotas, candidaturas, cobrancaComprovantes, cobrancaContatos, crmContatos, crmLeads, crmMensagens, locaisEstoque, pessoas, produtos, saldos, titulos } from '../db/schema';
 import { calcularEncargos } from '@aritana/regras';
 import { CobrancaService, type Escopo } from '../cobranca/cobranca.service';
+import { PixRecebidosService } from '../financeiro/pix-recebidos.service';
 import { CobrancaConfigService } from '../cobranca/cobranca-config.service';
 import { AsaasService } from '../integracoes/asaas.service';
 import { CrmService } from './crm.service';
@@ -60,6 +61,7 @@ export class FerramentasAgenteService {
     private readonly auditoria: AuditoriaService,
     private readonly cobranca: CobrancaService,
     private readonly cobrancaConfig: CobrancaConfigService,
+    private readonly pix: PixRecebidosService,
   ) {}
 
   /** A IA cobra como um cobrador da casa: sem carteira restrita e com o limite de desconto do cobrador. */
@@ -88,7 +90,7 @@ export class FerramentasAgenteService {
     if (contato.pessoaId && (cfg.segundaVia || cfg.promessa)) f.push('- {"ferramenta": "consultar_parcelas"}: lista as parcelas em aberto desta pessoa (número, vencimento, valor). Use antes de falar de valor ou de mandar 2ª via.');
     if (contato.pessoaId && cfg.segundaVia && this.asaas.configurado) f.push('- {"ferramenta": "segunda_via", "parcela": número da lista, "forma": "pix" ou "boleto"}: gera o link de pagamento da parcela. Mande o link na resposta, exatamente como veio.');
     if (contato.pessoaId && cfg.promessa) f.push(`- {"ferramenta": "registrar_promessa", "data": "AAAA-MM-DD", "valor": valor em reais ou null}: anota que a pessoa prometeu pagar nessa data (no máximo ${cfg.promessaMaxDias} dias à frente). Só use quando ela disser a data com clareza.`);
-    if (contato.pessoaId && cfg.comprovante) f.push('- {"ferramenta": "registrar_comprovante", "valor": valor pago em reais ou null, "data": "AAAA-MM-DD" ou null, "pagador": "nome de quem pagou" ou null}: quando a pessoa mandar foto do comprovante (Pix, boleto, transferência), leia valor, data e nome na imagem e registre. O sistema confere e a equipe dá a baixa. Nunca diga que a baixa já foi feita.');
+    if (contato.pessoaId && cfg.comprovante) f.push('- {"ferramenta": "registrar_comprovante", "valor": valor pago em reais ou null, "data": "AAAA-MM-DD" ou null, "pagador": "nome de quem pagou" ou null}: quando a pessoa mandar foto do comprovante (Pix, boleto, transferência), leia valor, data e nome na imagem. ANTES de registrar, confirme com a pessoa: "Recebi seu comprovante de R$ X do dia DD/MM, é isso mesmo?". Só use a ferramenta depois que ela confirmar. O sistema confere com o Pix na conta e dá a baixa (ou amortiza) sozinho; só diga que foi baixado se a ferramenta disser.');
     if (contato.pessoaId && cfg.acordo) f.push('- {"ferramenta": "simular_acordo", "parcelas": número de parcelas (1 = à vista), "entrada": valor da entrada em reais ou null}: calcula uma proposta dentro das regras da empresa (à vista sai com o desconto máximo permitido; parcelado, sem desconto). Use quando a pessoa pedir para negociar, parcelar ou pagar com desconto. Só ofereça o que a ferramenta devolver.');
     if (contato.pessoaId && cfg.acordo) f.push(`- {"ferramenta": "aceitar_acordo", "parcelas": mesmo número da simulação aceita, "entrada": mesma entrada ou null, "forma": "pix" ou "boleto"}: a pessoa disse com clareza que aceita a proposta simulada. ${cfg.fecharAcordo ? 'O acordo é fechado e os links de pagamento são gerados.' : 'A proposta fica anotada e a equipe fecha o acordo: depois de usar, avise que a equipe vai confirmar e passe a conversa (passar = true).'}`);
     if (cfg.estoque) f.push('- {"ferramenta": "consultar_estoque", "busca": "o que a pessoa procura"}: diz se a peça existe, o preço e se há em estoque. Só fale de preço e disponibilidade com o que esta ferramenta devolver.');
@@ -177,22 +179,37 @@ export class FerramentasAgenteService {
         if (vencidas.length && (perto(valor, soma) || perto(valor, somaAtual))) tituloIds = vencidas.map((t) => t.id);
       }
     }
+    // Pagou menos que a parcela mais antiga: amortiza nela (o resto fica em aberto).
+    let amortiza = false;
+    if (valor && !tituloIds.length && lista.length && valor < lista[0].valor) {
+      tituloIds = [lista[0].id];
+      amortiza = true;
+    }
     const norm = (t: string) => t.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().split(/\s+/).filter((x) => x.length > 2);
     const nomeCad = norm(p?.nome ?? '');
     const nomePag = pagador ? norm(pagador) : [];
     const conferencia = {
-      valor: tituloIds.length > 0,
+      valor: tituloIds.length > 0 && !amortiza,
       data: !!data && data <= h && data >= new Date(Date.parse(`${h}T12:00:00Z`) - 5 * 86400_000).toISOString().slice(0, 10),
       nome: nomePag.length > 0 && nomePag[0] === nomeCad[0] && nomePag.filter((x) => nomeCad.includes(x)).length >= Math.min(2, nomeCad.length),
-      observacao: [!valor ? 'valor não lido' : !tituloIds.length ? 'o valor não bate com nenhuma parcela' : '', !data ? 'data não lida' : '', pagador && nomePag[0] !== nomeCad[0] ? 'pago por outra pessoa' : ''].filter(Boolean).join('; ') || undefined,
+      observacao: [!valor ? 'valor não lido' : amortiza ? 'valor menor que a parcela: amortiza a mais antiga' : !tituloIds.length ? 'o valor não bate com nenhuma parcela' : '', !data ? 'data não lida' : '', pagador && nomePag[0] !== nomeCad[0] ? 'pago por outra pessoa' : ''].filter(Boolean).join('; ') || undefined,
     };
-    await this.db.insert(cobrancaComprovantes).values({ pessoaId: contato.pessoaId, conversaId, midia: foto?.midia ?? null, valor, data, pagador, tituloIds, conferencia });
+    const [comp] = await this.db.insert(cobrancaComprovantes).values({ pessoaId: contato.pessoaId, conversaId, midia: foto?.midia ?? null, valor, data, pagador, tituloIds, conferencia }).returning({ id: cobrancaComprovantes.id });
     const tudoCerto = conferencia.valor && conferencia.data && conferencia.nome;
+    // O Pix já entrou no Asaas ou no extrato do Sicoob com o mesmo valor: a baixa (ou amortização) sai agora.
+    const casou = tituloIds.length ? await this.pix.casarComprovante(comp.id).catch(() => ({ baixado: false })) : { baixado: false };
+    if (casou.baixado) {
+      await this.auditoria.registrar({ acao: 'comprovante_ia', entidade: 'pessoa', entidadeId: contato.pessoaId, dados: { valor, data, conferencia, baixado: true } });
+      return {
+        texto: `O Pix de ${valor ? reais(valor) : ''} foi encontrado na conta e a ${amortiza ? 'parcela foi amortizada (o restante continua em aberto)' : 'baixa foi feita'}. Agradeça e confirme para a pessoa que o pagamento foi recebido${amortiza ? ' e diga quanto ainda falta, usando "consultar_parcelas" se ela perguntar' : ''}.`,
+        nota: `🤖 Comprovante de ${valor ? reais(valor) : 'pagamento'} conferido com o Pix na conta: ${amortiza ? 'amortizado' : 'baixado'} sozinho.`,
+      };
+    }
     await this.db.insert(cobrancaContatos).values({ pessoaId: contato.pessoaId, tipo: 'whatsapp', texto: `Comprovante recebido pela IA no WhatsApp: ${valor ? reais(valor) : 'valor não lido'}${data ? ` em ${dataBR(data)}` : ''}${pagador ? `, pago por ${pagador}` : ''}. ${tudoCerto ? 'Valor, data e nome conferem.' : `Conferir: ${conferencia.observacao ?? 'nome diferente do cadastro'}.`} Aguardando a baixa da equipe.` });
     await this.auditoria.registrar({ acao: 'comprovante_ia', entidade: 'pessoa', entidadeId: contato.pessoaId, dados: { valor, data, conferencia } });
     return {
       texto: tudoCerto
-        ? 'Comprovante registrado e conferido (valor, data e nome batem). Agradeça e diga que a equipe dá a baixa no sistema em até 1 dia útil. Não diga que já foi baixado.'
+        ? 'Comprovante registrado e conferido (valor, data e nome batem). O Pix ainda não apareceu na conta: a baixa sai sozinha assim que ele aparecer. Agradeça e diga que a confirmação chega em breve. Não diga que já foi baixado.'
         : `Comprovante registrado, mas precisa de conferência da equipe (${conferencia.observacao ?? 'o nome é diferente do cadastro'}). Agradeça, diga que a equipe vai conferir e dar a baixa, e não discuta valores.`,
       nota: `🤖 Comprovante registrado para conferência: ${valor ? reais(valor) : 'valor não lido'}${data ? ` em ${dataBR(data)}` : ''}${pagador ? ` (${pagador})` : ''}. Veja em Cobrança › Comprovantes.`,
     };

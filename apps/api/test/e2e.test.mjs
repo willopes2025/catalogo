@@ -497,8 +497,8 @@ test('sangria e fechamento do caixa batem forma por forma', async () => {
 });
 
 test('Asaas: Pix gerado para o título e baixa automática pelo aviso de pagamento', async () => {
-  const tit = await ok('GET', `/financeiro/titulos?pessoaId=${ctx.rep.id}`);
-  const t = tit.itens[0];
+  const emp0 = (await ok('GET', '/empresas'))[0];
+  const [t] = await ok('POST', '/financeiro/titulos', { empresaId: emp0.id, tipo: 'receber', pessoaId: ctx.rep.id, descricao: 'Parcela para Pix E2E', valor: 4321, vencimento: new Date(Date.now() - 3 * 3600_000).toISOString().slice(0, 10) });
   const vencEscolhido = new Date(Date.now() + 10 * 86400_000 - 3 * 3600_000).toISOString().slice(0, 10);
   assert.equal((await chamar('POST', `/financeiro/titulos/${t.id}/cobranca`, { tipo: 'PIX', vencimento: '2020-01-01' })).status, 400, 'vencimento no passado não');
   const c = await ok('POST', `/financeiro/titulos/${t.id}/cobranca`, { tipo: 'PIX', vencimento: vencEscolhido });
@@ -4858,4 +4858,95 @@ test('contrato assinado: a consultora recebe no WhatsApp como instalar o app (um
   assert.ok(msg, 'mensagem do app enviada');
   assert.match(msg.texto, /releases\/download\/app-representante\/aritana\.apk/);
   assert.match(msg.texto, /Consultora|Oi, Consultora!/);
+});
+
+test('itens 14–21: contrato no cadastro com código no WhatsApp, etapa da maleta, Pix recebidos com baixa pelo comprovante, período e endereço da CRA', async () => {
+  const cpf = (base) => { const d = String(base).padStart(9, '0').slice(0, 9).split('').map(Number); for (const n of [9, 10]) { let s = 0; for (let i = 0; i < n; i++) s += d[i] * (n + 1 - i); const r = (s * 10) % 11; d.push(r === 10 ? 0 : r); } return d.join(''); };
+  const hojeBR = () => new Date(Date.now() - 3 * 3600_000).toISOString().slice(0, 10);
+  const canais = await ok('GET', '/crm/canais');
+  if (!canais.some((c) => c.ativo)) await ok('POST', '/crm/canais', { nome: 'Celular itens 14', tipo: 'evolution' });
+
+  // 14. Contrato gerado no cadastro, link e código pelo WhatsApp.
+  const rep = await ok('POST', '/pessoas', { tipo: 'representante', nome: 'Consultora Contrato Cadastro', documento: cpf(314159265), telefone1: '27999994141', cidade: 'Serra', uf: 'ES', modeloTrabalho: 'consignado', status: 'ativo' });
+  assert.ok(rep.contratoId, 'contrato gerado no cadastro');
+  const ficha = await ok('GET', `/pessoas/${rep.id}`);
+  const contrato = ficha.documentos.find((d) => d.id === rep.contratoId);
+  assert.equal(contrato.status, 'pendente');
+  const env = await ok('POST', `/documentos/${rep.contratoId}/enviar`, { whatsapp: true });
+  assert.equal(env.whatsapp, 'enviado');
+  const salvo = token;
+  token = '';
+  const pub = await ok('GET', `/publico/documentos/${contrato.token}`);
+  assert.match(pub.telefoneMascarado, /4141$/);
+  const c = await ok('POST', `/publico/documentos/${contrato.token}/codigo`, { via: 'whatsapp' });
+  assert.match(c.enviadoPara, /^WhatsApp/);
+  token = salvo;
+  let codigo = null;
+  for (let i = 0; i < 20 && !codigo; i++) {
+    await new Promise((r) => setTimeout(r, 300));
+    const cv = (await ok('GET', '/crm/conversas?aba=todas')).find((x) => x.telefone === '5527999994141');
+    if (cv) codigo = (await ok('GET', `/crm/conversas/${cv.id}/mensagens`)).mensagens.map((m) => (m.texto ?? '').match(/\*(\d{6})\*/)?.[1]).find(Boolean) ?? null;
+  }
+  assert.ok(codigo, 'código chegou no WhatsApp');
+  token = '';
+  await ok('POST', `/publico/documentos/${contrato.token}/assinar`, { codigo, nome: 'Consultora Contrato Cadastro', cpf: rep.documento, aceite: true });
+  token = salvo;
+  assert.equal((await ok('GET', `/pessoas/${rep.id}`)).documentos.find((d) => d.id === rep.contratoId).status, 'assinado');
+
+  // 16. Etapa da maleta.
+  const aberta = (await ok('GET', '/maletas?aba=abertas'))[0];
+  if (aberta) {
+    await ok('POST', `/maletas/${aberta.id}/etapa`, { etapa: 'em_transito' });
+    assert.equal((await ok('GET', `/maletas/${aberta.id}`)).etapa, 'em_transito');
+    assert.equal((await ok('GET', '/maletas?aba=abertas')).find((m) => m.id === aberta.id).etapa, 'em_transito');
+    assert.equal((await chamar('POST', `/maletas/${aberta.id}/etapa`, { etapa: 'sumiu' })).status, 400);
+  }
+
+  // 17/18. Pix recebidos.
+  const emp = (await ok('GET', '/empresas'))[0];
+  const cli = await ok('POST', '/pessoas', { tipo: 'cliente', nome: 'Paula Pix Comprovante', documento: cpf(271000111), telefone1: '27988881212', cidade: 'Vitória', uf: 'ES' });
+  const [t1] = [await ok('POST', '/financeiro/titulos', { empresaId: emp.id, tipo: 'receber', pessoaId: cli.id, descricao: 'Parcela Paula 1', valor: 7300, vencimento: hojeBR(), formaPagamento: 'pix' })].flat();
+  const pg = createRequire(import.meta.url)('pg');
+  const banco = new pg.Client({ connectionString: process.env.DATABASE_URL ?? 'postgres://aritana:aritana@localhost:5432/aritana_teste' });
+  await banco.connect();
+  // A IA registrou o comprovante (valor bate com a parcela); o Pix ainda não tinha entrado.
+  const comp = await banco.query(`insert into cobranca_comprovantes (pessoa_id, valor, data, pagador, titulo_ids, conferencia) values ($1, 7300, $2, 'Paula Pix', $3::jsonb, '{"valor":true,"data":true,"nome":true}'::jsonb) returning id`, [cli.id, hojeBR(), JSON.stringify([t1.id])]);
+  // Pix direto na chave do Asaas: o aviso chega, entra na lista e casa com o comprovante.
+  const ev = { id: 'evt_pix_direto_1', event: 'PAYMENT_RECEIVED', payment: { id: 'pay_pix_direto_1', billingType: 'PIX', value: 73, paymentDate: hojeBR(), customer: 'cus_pix_direto' } };
+  await ok('PUT', '/integracoes/asaas', { valores: { ASAAS_WEBHOOK_TOKEN: 'token-itens-14-21' } });
+  const wh = await fetch(API + '/webhooks/asaas', { method: 'POST', headers: { 'content-type': 'application/json', 'asaas-access-token': 'token-itens-14-21' }, body: JSON.stringify(ev) });
+  assert.equal(wh.status, 200, 'aviso do Asaas aceito');
+  await ok('PUT', '/integracoes/asaas', { valores: { ASAAS_WEBHOOK_TOKEN: '' } });
+  const baixado = (await ok('GET', '/financeiro/pix?status=baixado')).find((p) => p.externoId === 'pay_pix_direto_1');
+  assert.ok(baixado, 'Pix entrou e foi baixado sozinho');
+  const t1d = (await ok('GET', `/financeiro/titulos?tipo=receber&aba=pagos&busca=${encodeURIComponent('Parcela Paula 1')}`)).itens.find((x) => x.id === t1.id);
+  assert.equal(t1d.status, 'pago');
+  const compDepois = await banco.query('select status from cobranca_comprovantes where id = $1', [comp.rows[0].id]);
+  assert.equal(compDepois.rows[0].status, 'baixado');
+  // Extrato do Sicoob (OFX): Pix menor que a parcela, do mesmo CPF → sugestão; a baixa amortiza.
+  const [t2] = await ok('POST', '/financeiro/titulos', { empresaId: emp.id, tipo: 'receber', pessoaId: cli.id, descricao: 'Parcela Paula 2', valor: 10000, vencimento: hojeBR() });
+  const d8 = hojeBR().replace(/-/g, '');
+  const ofx = `OFXHEADER:100\n<OFX><BANKMSGSRSV1><STMTTRNRS><STMTRS><BANKTRANLIST>\n<STMTTRN><TRNTYPE>CREDIT<DTPOSTED>${d8}120000<TRNAMT>40.00<FITID>SIC-1<MEMO>PIX RECEBIDO ${cli.documento} PAULA PIX COMPROVANTE</STMTTRN>\n<STMTTRN><TRNTYPE>DEBIT<DTPOSTED>${d8}<TRNAMT>-15.00<FITID>SIC-2<MEMO>TARIFA</STMTTRN>\n</BANKTRANLIST></STMTRS></STMTTRNRS></BANKMSGSRSV1></OFX>`;
+  const imp = await ok('POST', '/financeiro/pix/importar-ofx', { texto: ofx });
+  assert.equal(imp.lidos, 1, 'só o crédito entra');
+  assert.equal((await ok('POST', '/financeiro/pix/importar-ofx', { texto: ofx })).novos, 0, 'importar de novo não duplica');
+  const pend = (await ok('GET', '/financeiro/pix?status=pendente')).find((p) => p.externoId === 'SIC-1');
+  assert.equal(pend.pessoaId, cli.id, 'reconheceu o CPF de quem pagou');
+  assert.ok(pend.sugestoes.some((s) => s.id === t2.id && s.motivo === 'mesmo CPF'));
+  const bx = await ok('POST', `/financeiro/pix/${pend.id}/baixar`, { tituloIds: [t2.id] });
+  assert.equal(bx.baixados[0].parcial, true, 'amortizou');
+  const saldo = (await ok('GET', `/financeiro/titulos?tipo=receber&aba=abertos&pessoaId=${cli.id}`)).itens.find((x) => x.descricao === 'Parcela Paula 2 · saldo');
+  assert.equal(saldo.valor, 6000);
+  await banco.end();
+
+  // 19. Período: este mês pelo vencimento; mês que vem não traz a parcela de hoje.
+  const m0 = hojeBR().slice(0, 8) + '01';
+  assert.ok((await ok('GET', `/financeiro/titulos?tipo=receber&aba=abertos&pessoaId=${cli.id}&de=${m0}&ate=${hojeBR()}`)).itens.some((x) => x.id === saldo.id));
+  const prox = new Date(Date.parse(m0 + 'T12:00:00Z') + 40 * 86400_000).toISOString().slice(0, 8) + '01';
+  assert.equal((await ok('GET', `/financeiro/titulos?tipo=receber&aba=abertos&pessoaId=${cli.id}&de=${prox}`)).itens.length, 0);
+  // 20. Aba Protestados responde.
+  await ok('GET', '/financeiro/titulos?tipo=receber&aba=protestados');
+  // 15. Para protestar (aprovação).
+  const sug = await ok('GET', '/cobranca/protestos/sugestoes');
+  assert.ok(Array.isArray(sug.itens));
 });

@@ -4,8 +4,8 @@ import { z } from 'zod';
 import { DB, type Db } from '../comum/db.module';
 import { Permissao, Publico, Usuario, temPermissao, type UsuarioLogado } from '../comum/auth';
 import { dataISO, validar } from '../comum/validacao';
-import { contas, maletaItens, maletas, pessoas, produtos } from '../db/schema';
-import { MaletasService, hoje, type DadosAcerto } from './maletas.service';
+import { contas, maletaItens, maletas, pessoas, produtos, titulos } from '../db/schema';
+import { ETAPAS_MALETA, MaletasService, hoje, type DadosAcerto } from './maletas.service';
 import { AvisarMaletaService } from './avisar-maleta.service';
 import { AsaasService } from '../integracoes/asaas.service';
 import { AuditoriaService } from '../comum/auditoria.service';
@@ -75,6 +75,7 @@ export class MaletasController {
         dataLimite: maletas.dataLimite,
         entrega: maletas.entrega,
         conferida: maletas.conferida,
+        etapa: maletas.etapa,
         prebaixa: sql<boolean>`${maletas.prebaixaEm} is not null`,
         pecas: sql<number>`coalesce(sum(${maletaItens.enviada} - ${maletaItens.vendida} - ${maletaItens.devolvida} - ${maletaItens.perdida}),0)::int`,
         valor: sql<number>`coalesce(sum(${maletaItens.preco} * (${maletaItens.enviada} - ${maletaItens.vendida} - ${maletaItens.devolvida} - ${maletaItens.perdida})),0)::int`,
@@ -145,7 +146,7 @@ export class MaletasController {
   /** Conferência peça por peça, na saída ou na volta (opcional). Fica no nome de quem está logado. */
   @Post(':id/conferencia')
   @Permissao('maletas', 'editar')
-  conferir(@Usuario() u: UsuarioLogado, @Param('id', ParseUUIDPipe) id: string, @Body() body: unknown) {
+  async conferir(@Usuario() u: UsuarioLogado, @Param('id', ParseUUIDPipe) id: string, @Body() body: unknown) {
     const d = validar(
       z.object({
         tipo: z.enum(['saida', 'volta']),
@@ -156,7 +157,18 @@ export class MaletasController {
       }),
       body,
     );
-    return this.svc.conferir(id, d, u.id);
+    const r = await this.svc.conferir(id, d, u.id);
+    // Conferiu a saída: espera a retirada. Conferiu a volta: está em conferência.
+    await this.svc.mudarEtapa(id, d.tipo === 'saida' ? 'aguardando_retirada' : 'em_conferencia', u.id, true);
+    return r;
+  }
+
+  /** Onde a maleta está (criada, aguardando retirada, em trânsito, entregue, voltando, em conferência). */
+  @Post(':id/etapa')
+  @Permissao('maletas', 'editar')
+  etapa(@Usuario() u: UsuarioLogado, @Param('id', ParseUUIDPipe) id: string, @Body() body: unknown) {
+    const { etapa } = validar(z.object({ etapa: z.enum(ETAPAS_MALETA) }), body);
+    return this.svc.mudarEtapa(id, etapa, u.id);
   }
 
   @Post(':id/simular-acerto')
@@ -168,10 +180,23 @@ export class MaletasController {
   @Post(':id/acerto')
   @Permissao('maletas', 'editar')
   async acertar(@Usuario() u: UsuarioLogado, @Param('id', ParseUUIDPipe) id: string, @Body() body: unknown) {
-    const r = await this.svc.acertar(id, validar(acertoSchema, body) as DadosAcerto, u.id);
+    const d = validar(acertoSchema, body) as DadosAcerto;
+    const r = await this.svc.acertar(id, d, u.id);
     // O boleto de garantia deixa de valer no acerto (no parcial, o valor da maleta mudou).
     await this.asaas.cancelarGarantiaMaleta(id).catch(() => undefined);
-    return r;
+    // Acerto a pagar no boleto: já emite o boleto de cada parcela pela diferença (se o Asaas estiver ligado).
+    const boletos: { tituloId: string; url?: string | null; erro?: string }[] = [];
+    if (d.formaPagamento === 'boleto' && !d.pagoAgora && this.asaas.configurado) {
+      const abertos = await this.db.select({ id: titulos.id }).from(titulos).where(and(eq(titulos.origemTipo, 'acerto'), eq(titulos.origemId, r.acerto.id), eq(titulos.status, 'aberto'))).orderBy(asc(titulos.vencimento));
+      for (const t of abertos)
+        try {
+          const b = await this.asaas.cobrar(t.id, 'BOLETO', u.id);
+          boletos.push({ tituloId: t.id, url: b.url });
+        } catch (e) {
+          boletos.push({ tituloId: t.id, erro: (e as Error).message });
+        }
+    }
+    return { ...r, boletos };
   }
 
   /** Passa a maleta para outra consignatária (crédito conferido; promissória nova). */

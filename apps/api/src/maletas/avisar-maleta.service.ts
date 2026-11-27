@@ -59,6 +59,8 @@ export class AvisarMaletaService {
       linhas.push(`• Peças: ${m.totais.pecas}`, `• Valor: ${reais(m.totais.valor)}`, `• Acerto até: ${br(m.dataLimite)}`, '');
       linhas.push(`Veja o pedido com as fotos das peças: ${base}/pedido/${m.linkToken}`);
       const prom = m.documentos.filter((d) => d.tipo === 'promissoria').at(-1);
+      const contrato = m.documentos.find((d) => d.tipo === 'contrato');
+      if (contrato?.status === 'pendente') linhas.push(`Assine o seu contrato (uma vez só, vale para as próximas maletas): ${base}/assinar/${contrato.token}`);
       if (prom?.status === 'pendente') linhas.push(`Assine a nota promissória: ${base}/assinar/${prom.token}`);
       else if (prom?.status === 'assinado') linhas.push('Nota promissória: assinada ✔');
       if (m.garantiaUrl && !m.garantiaPagaEm) linhas.push(`Boleto de garantia (${reais(m.garantiaValor ?? 0)}, vence ${br(m.garantiaVencimento)}; cancelado no acerto): ${m.garantiaUrl}`);

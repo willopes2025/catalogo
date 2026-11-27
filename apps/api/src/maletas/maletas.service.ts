@@ -27,6 +27,9 @@ export interface ItemCodigo {
   quantidade: number;
 }
 
+export const ETAPAS_MALETA = ['criada', 'aguardando_retirada', 'em_transito', 'entregue', 'voltando', 'em_conferencia'] as const;
+export type EtapaMaleta = (typeof ETAPAS_MALETA)[number];
+
 export interface DadosAcerto {
   forma: FormaAcerto;
   modalidade: 'presencial' | 'video' | 'envio';
@@ -152,8 +155,38 @@ export class MaletasService {
       await this.auditoria.registrar({ usuarioId, acao: 'criar', entidade: 'maleta', entidadeId: maleta.id, dados: { valor, pecas: itens.reduce((a, i) => a + i.quantidade, 0), excecao: !lib.pode ? lib.motivos : undefined } }, tx);
       // Promissória da maleta, se houver modelo cadastrado (sem modelo, a maleta é criada assim mesmo).
       const promissoria = await this.documentos.gerar(tx, { pessoaId: d.representanteId, tipo: 'promissoria', maletaId: maleta.id }, usuarioId, false);
-      return { ...maleta, promissoriaId: promissoria?.id ?? null };
+      // A maleta fica ligada ao contrato da consultora (o assinado; senão o que espera assinatura; senão gera um).
+      const contratoId = await this.contratoVigente(tx, d.representanteId, usuarioId);
+      if (contratoId) await tx.update(maletas).set({ contratoId }).where(eq(maletas.id, maleta.id));
+      return { ...maleta, contratoId, promissoriaId: promissoria?.id ?? null };
     });
+  }
+
+  /** Muda onde a maleta está. `auto` = mudança feita pelo sistema (não volta uma etapa já mais adiante para trás). */
+  async mudarEtapa(id: string, etapa: EtapaMaleta, usuarioId: string, auto = false) {
+    const [m] = await this.db.select({ status: maletas.status, etapa: maletas.etapa }).from(maletas).where(eq(maletas.id, id));
+    if (!m) throw new BadRequestException('Maleta não encontrada.');
+    if (m.status !== 'aberta') {
+      if (auto) return { etapa: m.etapa };
+      throw new BadRequestException(`Esta maleta está ${m.status === 'acertada' ? 'baixada' : m.status}.`);
+    }
+    if (auto && ETAPAS_MALETA.indexOf(m.etapa as EtapaMaleta) >= ETAPAS_MALETA.indexOf(etapa)) return { etapa: m.etapa };
+    await this.db.update(maletas).set({ etapa, etapaEm: new Date() }).where(eq(maletas.id, id));
+    await this.auditoria.registrar({ usuarioId, acao: 'etapa', entidade: 'maleta', entidadeId: id, dados: { de: m.etapa, para: etapa, auto } });
+    return { etapa };
+  }
+
+  /** Contrato que vale para as próximas maletas: o assinado mais recente, senão o pendente; sem nenhum, gera (se houver modelo). */
+  async contratoVigente(tx: Tx, pessoaId: string, usuarioId: string | null) {
+    const [c] = await tx
+      .select({ id: documentos.id })
+      .from(documentos)
+      .where(and(eq(documentos.pessoaId, pessoaId), eq(documentos.tipo, 'contrato'), inArray(documentos.status, ['assinado', 'pendente'])))
+      .orderBy(sql`${documentos.status} = 'assinado' desc`, sql`${documentos.criadoEm} desc`)
+      .limit(1);
+    if (c) return c.id;
+    const novo = await this.documentos.gerar(tx, { pessoaId, tipo: 'contrato' }, usuarioId, false);
+    return novo?.id ?? null;
   }
 
   private async maletaAberta(tx: Tx, id: string) {
@@ -252,7 +285,7 @@ export class MaletasService {
     const [contrato] = await this.db
       .select({ id: documentos.id, tipo: documentos.tipo, status: documentos.status, token: documentos.token, assinadoEm: documentos.assinadoEm })
       .from(documentos)
-      .where(and(eq(documentos.pessoaId, m.maleta.representanteId), eq(documentos.tipo, 'contrato'), sql`${documentos.status} <> 'cancelado'`))
+      .where(and(eq(documentos.pessoaId, m.maleta.representanteId), eq(documentos.tipo, 'contrato'), m.maleta.contratoId ? eq(documentos.id, m.maleta.contratoId) : sql`${documentos.status} <> 'cancelado'`))
       .orderBy(sql`${documentos.criadoEm} desc`)
       .limit(1);
     if (contrato && !docs.some((d) => d.id === contrato.id)) docs.push(contrato);

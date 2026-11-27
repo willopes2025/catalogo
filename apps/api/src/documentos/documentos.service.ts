@@ -21,6 +21,7 @@ const dataBR = (d: string | Date) => {
 };
 const MESES = ['janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho', 'julho', 'agosto', 'setembro', 'outubro', 'novembro', 'dezembro'];
 const mascararEmail = (e: string) => e.replace(/^(.{2}).*(@.*)$/, '$1***$2');
+const mascararTelefone = (t: string) => { const d = t.replace(/\D/g, ''); return d.length >= 4 ? `(**) *****-${d.slice(-4)}` : '***'; };
 
 export const VARIAVEIS = [
   ['nome', 'Nome completo'], ['cpf', 'CPF'], ['rg', 'RG'], ['endereco', 'Endereço (rua, número, bairro)'], ['cidade', 'Cidade'], ['uf', 'UF'], ['cep', 'CEP'],
@@ -156,13 +157,13 @@ export class DocumentosService {
 
   private async porToken(token: string) {
     if (!/^[A-Za-z0-9_-]{30,40}$/.test(token)) throw new NotFoundException('Link inválido.');
-    const [d] = await this.db.select({ d: documentos, nome: pessoas.nome, email: pessoas.email, cpf: pessoas.documento }).from(documentos).innerJoin(pessoas, eq(pessoas.id, documentos.pessoaId)).where(eq(documentos.token, token));
+    const [d] = await this.db.select({ d: documentos, nome: pessoas.nome, email: pessoas.email, cpf: pessoas.documento, telefone: pessoas.telefone1 }).from(documentos).innerJoin(pessoas, eq(pessoas.id, documentos.pessoaId)).where(eq(documentos.token, token));
     if (!d) throw new NotFoundException('Link inválido ou expirado.');
     return d;
   }
 
   async verPublico(token: string) {
-    const { d, nome, email, cpf } = await this.porToken(token);
+    const { d, nome, email, cpf, telefone } = await this.porToken(token);
     if (d.status === 'pendente' && !d.visualizadoEm) await this.db.update(documentos).set({ visualizadoEm: new Date() }).where(eq(documentos.id, d.id));
     return {
       titulo: d.titulo,
@@ -172,16 +173,29 @@ export class DocumentosService {
       hash: d.hash,
       nome,
       emailMascarado: email ? mascararEmail(email) : null,
+      telefoneMascarado: telefone ? mascararTelefone(telefone) : null,
       pedeCpf: !!cpf,
       assinadoEm: d.assinadoEm,
       assinaturaNome: d.assinaturaNome,
     };
   }
 
-  async enviarCodigo(token: string) {
-    const { d, email, nome } = await this.porToken(token);
+  /**
+   * Código de 6 números para assinar, por e-mail ou pelo WhatsApp do cadastro.
+   * `whatsapp` é quem entrega a mensagem no WhatsApp (o controller passa o serviço de envio).
+   */
+  async enviarCodigo(token: string, via: 'email' | 'whatsapp' = 'email', whatsapp?: (pessoaId: string, telefone: string, nome: string, texto: string) => Promise<void>) {
+    const { d, email, nome, telefone } = await this.porToken(token);
     if (d.status !== 'pendente') throw new BadRequestException(`Este documento está ${d.status}.`);
-    if (!email) throw new BadRequestException('Não há e-mail no cadastro. Peça à Aritana para atualizar o seu e-mail.');
+    if (via === 'whatsapp') {
+      if (!telefone || !whatsapp) throw new BadRequestException('Não há telefone no cadastro. Peça o código por e-mail ou fale com a Aritana.');
+      if (d.codigoExpiraEm && d.codigoExpiraEm.getTime() - 14 * 60_000 > Date.now()) throw new BadRequestException('Aguarde um minuto para pedir um novo código.');
+      const codigo = String(randomInt(0, 1_000_000)).padStart(6, '0');
+      await this.db.update(documentos).set({ codigoHash: sha256(`${d.token}:${codigo}`), codigoExpiraEm: new Date(Date.now() + 15 * 60_000), tentativas: 0 }).where(eq(documentos.id, d.id));
+      await whatsapp(d.pessoaId, telefone, nome, `Seu código para assinar "${d.titulo}" é: *${codigo}*\n\nEle vale por 15 minutos. Não passe este código para ninguém.\n\nAritana Semijoias`);
+      return { enviadoPara: `WhatsApp ${mascararTelefone(telefone)}` };
+    }
+    if (!email) throw new BadRequestException('Não há e-mail no cadastro. Peça o código pelo WhatsApp ou fale com a Aritana.');
     if (d.codigoExpiraEm && d.codigoExpiraEm.getTime() - 14 * 60_000 > Date.now()) throw new BadRequestException('Aguarde um minuto para pedir um novo código.');
     const codigo = String(randomInt(0, 1_000_000)).padStart(6, '0');
     await this.db.update(documentos).set({ codigoHash: sha256(`${d.token}:${codigo}`), codigoExpiraEm: new Date(Date.now() + 15 * 60_000), tentativas: 0 }).where(eq(documentos.id, d.id));

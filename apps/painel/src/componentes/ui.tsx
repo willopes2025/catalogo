@@ -123,3 +123,11 @@ export function useConfirmar() {
   const [msg, setMsg] = useState<string | null>(null);
   return { msg, setMsg };
 }
+
+/** Onde a maleta está (logística). */
+export const ETAPAS_MALETA: [string, string][] = [['criada', 'Criada'], ['aguardando_retirada', 'Aguardando retirada'], ['em_transito', 'Em trânsito'], ['entregue', 'Entregue'], ['voltando', 'Voltando'], ['em_conferencia', 'Em conferência']];
+export function EtapaMaleta({ etapa }: { etapa?: string | null }) {
+  const n = ETAPAS_MALETA.find((e) => e[0] === etapa)?.[1] ?? 'Criada';
+  const cls = etapa === 'entregue' ? 'ok' : etapa === 'em_transito' || etapa === 'voltando' ? 'alerta' : 'neutra';
+  return <span className={`etiqueta ${cls}`}>{n}</span>;
+}
