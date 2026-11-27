@@ -229,8 +229,9 @@ export class DocumentosService {
       .set({ status: 'assinado', assinadoEm, assinaturaNome: dados.nome.trim(), assinaturaDocumento: cpf ?? null, ip, userAgent: userAgent?.slice(0, 300) ?? null, codigoHash: null })
       .where(eq(documentos.id, d.id));
     await this.auditoria.registrar({ usuarioId: null, acao: 'assinar', entidade: 'documento', entidadeId: d.id, dados: { ip, hash: d.hash } });
+    // Cópia por e-mail em segundo plano: a assinatura já está gravada e a tela não fica esperando o e-mail.
     if (email) {
-      await this.email
+      void this.email
         .enviar(email, `Documento assinado: ${d.titulo}`, `Olá, ${nome.split(' ')[0]}!\n\nVocê assinou "${d.titulo}" em ${assinadoEm.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })}.\nCódigo de verificação do documento (SHA-256): ${d.hash}\n\nAritana Semijoias`)
         .catch(() => undefined);
     }

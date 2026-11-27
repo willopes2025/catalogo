@@ -23,7 +23,8 @@ export class EmailService {
     if (host) {
       const port = Number(this.segredos.v('SMTP_PORTA') ?? 465);
       const user = this.segredos.v('SMTP_USUARIO');
-      this.transporte = nodemailer.createTransport({ host, port, secure: port === 465, auth: user ? { user, pass: this.segredos.v('SMTP_SENHA') ?? '' } : undefined });
+      // Prazos curtos: servidor de e-mail lento não pode travar a tela (o padrão do nodemailer espera até 10 min).
+      this.transporte = nodemailer.createTransport({ host, port, secure: port === 465, auth: user ? { user, pass: this.segredos.v('SMTP_SENHA') ?? '' } : undefined, connectionTimeout: 15_000, greetingTimeout: 15_000, socketTimeout: 30_000 });
     } else if (process.env.SMTP_URL) this.transporte = nodemailer.createTransport(process.env.SMTP_URL);
     else this.transporte = null;
     return this.transporte;
