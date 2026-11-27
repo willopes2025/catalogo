@@ -1,4 +1,4 @@
-import { Body, Controller, Headers, HttpCode, Param, ParseUUIDPipe, Post } from '@nestjs/common';
+import { Body, Controller, Headers, Get, HttpCode, Param, ParseUUIDPipe, Post } from '@nestjs/common';
 import { z } from 'zod';
 import { Permissao, Publico, Usuario, type UsuarioLogado } from '../comum/auth';
 import { validar } from '../comum/validacao';
@@ -20,7 +20,14 @@ export class WebhooksController {
   @Post('financeiro/titulos/:id/cobranca')
   @Permissao('financeiro', 'editar')
   cobrar(@Usuario() u: UsuarioLogado, @Param('id', ParseUUIDPipe) id: string, @Body() body: unknown) {
-    const { tipo } = validar(z.object({ tipo: z.enum(['BOLETO', 'PIX']) }), body);
-    return this.asaas.cobrar(id, tipo, u.id);
+    const { tipo, vencimento } = validar(z.object({ tipo: z.enum(['BOLETO', 'PIX']), vencimento: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Data de vencimento inválida').optional() }), body);
+    return this.asaas.cobrar(id, tipo, u.id, undefined, { vencimento });
+  }
+
+  /** Situação do boleto/Pix no Asaas agora. */
+  @Get('financeiro/titulos/:id/cobranca')
+  @Permissao('financeiro', 'ver')
+  situacao(@Param('id', ParseUUIDPipe) id: string) {
+    return this.asaas.situacaoCobranca(id);
   }
 }

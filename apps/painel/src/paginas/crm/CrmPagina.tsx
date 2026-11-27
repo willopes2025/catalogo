@@ -41,7 +41,7 @@ export function CrmPagina() {
         ))}
       </div>
       {aba === 'funil' && <Funil />}
-      {aba === 'conversas' && <Conversas inicial={params.get('conversa')} />}
+      {aba === 'conversas' && <Conversas inicial={params.get('conversa')} rascunho={params.get('texto')} />}
       {aba === 'tarefas' && <Tarefas />}
       {aba === 'gatilhos' && <Gatilhos />}
       {aba === 'disparos' && <Disparos />}

@@ -162,7 +162,7 @@ export class AsaasService implements OnApplicationBootstrap {
    * `nova`: emite outra (segunda via, novo vencimento, valor com encargos) e apaga a anterior no Asaas.
    * O título passa a apontar só para a cobrança nova: é ela que aparece na ficha, no portal e nas mensagens.
    */
-  async cobrar(tituloId: string, tipo: 'BOLETO' | 'PIX', usuarioId: string | null, nova?: { valor: number; vencimento: string }) {
+  async cobrar(tituloId: string, tipo: 'BOLETO' | 'PIX', usuarioId: string | null, nova?: { valor: number; vencimento: string }, opcoes?: { vencimento?: string }) {
     const [t] = await this.db.select().from(titulos).where(eq(titulos.id, tituloId));
     if (!t) throw new BadRequestException('Título não encontrado.');
     if (t.tipo !== 'receber' || (t.status !== 'aberto' && t.status !== 'protestado')) throw new BadRequestException('Só títulos a receber em aberto podem ser cobrados.');
@@ -174,12 +174,14 @@ export class AsaasService implements OnApplicationBootstrap {
         url: t.cobrancaUrl,
         pixCopiaCola: t.pixCopiaCola,
         jaExistia: true,
+        vencimento: t.cobrancaVencimento ?? t.vencimento,
       };
     const customer = await this.clienteAsaas(t.pessoaId, !!nova);
     // Multa e juros da configuração de cobrança: o Asaas calcula se a pessoa pagar depois do vencimento.
     const cfg = await this.config.obter();
     const encargos = cfg.multaPb > 0 || cfg.jurosMesPb > 0 ? cfg : null;
-    const venc = nova ? nova.vencimento : t.vencimento < hoje() ? hoje() : t.vencimento;
+    if (opcoes?.vencimento && opcoes.vencimento < hoje()) throw new BadRequestException('O vencimento não pode ser antes de hoje.');
+    const venc = nova ? nova.vencimento : opcoes?.vencimento ?? (t.vencimento < hoje() ? hoje() : t.vencimento);
     const valor = nova ? nova.valor : t.valor;
     const pg = await this.chamar<{
       id: string;
@@ -225,7 +227,28 @@ export class AsaasService implements OnApplicationBootstrap {
       entidadeId: t.id,
       dados: { asaas: pg.id, tipo, ...(nova ? { segundaVia: true, anterior: t.cobrancaExternaId, valor, vencimento: venc } : {}) },
     });
-    return { id: pg.id, url, pixCopiaCola: pix, jaExistia: false };
+    return { id: pg.id, url, pixCopiaCola: pix, jaExistia: false, vencimento: venc };
+  }
+
+  /** Situação atual do boleto/Pix do título, perguntada ao Asaas na hora. */
+  async situacaoCobranca(tituloId: string) {
+    const [t] = await this.db.select().from(titulos).where(eq(titulos.id, tituloId));
+    if (!t) throw new BadRequestException('Título não encontrado.');
+    if (!t.cobrancaExternaId) return { situacao: 'sem_boleto', texto: 'Sem boleto emitido' };
+    const pg = await this.chamar<{ status?: string; deleted?: boolean; dueDate?: string; value?: number; paymentDate?: string | null; invoiceUrl?: string }>('GET', `/payments/${t.cobrancaExternaId}`);
+    const MAPA: Record<string, string> = {
+      PENDING: 'Aguardando pagamento',
+      OVERDUE: 'Vencido',
+      RECEIVED: 'Pago',
+      CONFIRMED: 'Pago (confirmado)',
+      RECEIVED_IN_CASH: 'Pago em dinheiro',
+      REFUNDED: 'Estornado',
+      REFUND_REQUESTED: 'Estorno pedido',
+      CHARGEBACK_REQUESTED: 'Contestação no cartão',
+      AWAITING_RISK_ANALYSIS: 'Em análise',
+    };
+    const status = pg.deleted ? 'DELETED' : (pg.status ?? 'PENDING');
+    return { situacao: status, texto: pg.deleted ? 'Cancelado no Asaas' : MAPA[status] ?? status, vencimento: pg.dueDate ?? t.cobrancaVencimento, pagoEm: pg.paymentDate ?? null, url: pg.invoiceUrl ?? t.cobrancaUrl };
   }
 
   /**

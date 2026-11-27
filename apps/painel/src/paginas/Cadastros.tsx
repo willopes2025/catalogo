@@ -6,6 +6,7 @@ import { documento, telefone } from '../formato';
 import { Abas, Campo, Carregando, Erro, StatusPessoa, Topo } from '../componentes/ui';
 import { soVazios, useConsulta } from '../componentes/consultas';
 import { BotaoAssertiva } from '../componentes/BotaoAssertiva';
+import { BoletosPessoa } from '../componentes/CobrancaPessoa';
 
 type Tipo = 'cliente' | 'fornecedor' | 'transportadora' | 'assistencia';
 const NOMES: Record<Tipo, [string, string]> = {
@@ -120,6 +121,7 @@ export function FichaCadastro() {
         <Campo rotulo="Situação"><select value={f.status} onChange={set('status')} disabled={!editavel}><option value="ativo">Ativo</option><option value="inativo">Inativo</option></select></Campo>
         <Campo rotulo="Observação" className="l2"><input value={f.observacao ?? ''} onChange={set('observacao')} disabled={!editavel} /></Campo>
       </div>
+      {!novo && id && q.data?.titulos?.some((t: any) => t.cobrancaUrl) && <div className="cartao"><BoletosPessoa pessoaId={id} titulos={q.data.titulos} /></div>}
     </>
   );
 }

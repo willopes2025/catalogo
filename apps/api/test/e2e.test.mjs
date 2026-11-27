@@ -499,12 +499,20 @@ test('sangria e fechamento do caixa batem forma por forma', async () => {
 test('Asaas: Pix gerado para o título e baixa automática pelo aviso de pagamento', async () => {
   const tit = await ok('GET', `/financeiro/titulos?pessoaId=${ctx.rep.id}`);
   const t = tit.itens[0];
-  const c = await ok('POST', `/financeiro/titulos/${t.id}/cobranca`, { tipo: 'PIX' });
+  const vencEscolhido = new Date(Date.now() + 10 * 86400_000 - 3 * 3600_000).toISOString().slice(0, 10);
+  assert.equal((await chamar('POST', `/financeiro/titulos/${t.id}/cobranca`, { tipo: 'PIX', vencimento: '2020-01-01' })).status, 400, 'vencimento no passado não');
+  const c = await ok('POST', `/financeiro/titulos/${t.id}/cobranca`, { tipo: 'PIX', vencimento: vencEscolhido });
   assert.match(c.url, /asaas\.com/);
+  assert.equal(c.vencimento, vencEscolhido, 'emitido com o vencimento escolhido na tela');
   assert.match(c.pixCopiaCola, /^00020126/);
   const env = (await recebidos()).filter((r) => r.caminho === '/asaas/payments').pop().corpo;
   assert.equal(env.value, t.valor / 100);
   assert.equal(env.externalReference, t.id);
+  assert.equal(env.dueDate, vencEscolhido);
+  const sit = await ok('GET', `/financeiro/titulos/${t.id}/cobranca`);
+  assert.equal(sit.texto, 'Aguardando pagamento', 'situação perguntada ao Asaas na hora');
+  const ficha = await ok('GET', `/pessoas/${ctx.rep.id}`);
+  assert.equal(ficha.titulos.find((x) => x.id === t.id).cobrancaUrl, c.url, 'o link fica na ficha da pessoa');
   const de_novo = await ok('POST', `/financeiro/titulos/${t.id}/cobranca`, { tipo: 'PIX' });
   assert.equal(de_novo.jaExistia, true, 'não cria cobrança duplicada');
 

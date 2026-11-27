@@ -158,7 +158,7 @@ function exportar(contato: { nome: string; telefone: string }, mensagens: Mensag
 }
 
 /** Chat de uma conversa: fila, atendimento, mensagens, conversa interna, templates e respostas rápidas. */
-export function Chat({ conversaId, leadId, aoMudar, abas, aoSair }: { conversaId: string; leadId?: string | null; aoMudar?: () => void; /** Mostra as abas Notas e Tarefas (caixa de entrada). */ abas?: boolean; /** A conversa deixou de existir (excluída). */ aoSair?: () => void }) {
+export function Chat({ conversaId, leadId, aoMudar, abas, aoSair, rascunho }: { conversaId: string; leadId?: string | null; aoMudar?: () => void; /** Mostra as abas Notas e Tarefas (caixa de entrada). */ abas?: boolean; /** A conversa deixou de existir (excluída). */ aoSair?: () => void; /** Texto que já vem escrito na caixa (a pessoa confere e envia). */ rascunho?: string | null }) {
   const qc = useQueryClient();
   useRelogio(30);
   const eu = meuId();
@@ -169,7 +169,7 @@ export function Chat({ conversaId, leadId, aoMudar, abas, aoSair }: { conversaId
   const canalId = q.data?.conversa.canalId;
   const templates = useQuery({ queryKey: ['crm', 'templates', canalId], queryFn: () => api<Template[]>(`/crm/templates?canalId=${canalId}`), enabled: !!canalId, staleTime: 60_000 });
   const atendentes = usarAtendentes();
-  const [texto, setTexto] = useState('');
+  const [texto, setTexto] = useState(rascunho ?? '');
   const [interna, setInterna] = useState(false);
   const [verTemplates, setVerTemplates] = useState(false);
   // Template da Meta escolhido: espera o "Enviar" (não vai sozinho).

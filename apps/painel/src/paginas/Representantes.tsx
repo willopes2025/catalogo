@@ -9,6 +9,7 @@ import { Abas, Campo, Carregando, Erro, StatusMaleta, StatusPessoa, Topo } from 
 import { useConsulta } from '../componentes/consultas';
 import { BotaoAssertiva } from '../componentes/BotaoAssertiva';
 import { DocumentosPessoa } from '../componentes/DocumentosPessoa';
+import { BoletosPessoa } from '../componentes/CobrancaPessoa';
 
 interface Linha {
   id: string; nome: string; documento: string | null; telefone1: string | null; cidade: string | null; uf: string | null;
@@ -276,6 +277,7 @@ export function FichaRepresentante() {
             </table>
           ) : <p className="muted">Nenhum título.</p>
         )}
+        {aba === 'financeiro' && f.id && <BoletosPessoa pessoaId={f.id} titulos={f.titulos} />}
       </div>
     </>
   );

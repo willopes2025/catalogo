@@ -13,6 +13,7 @@ import { Asaas } from './financeiro/Asaas';
 import { SeletorPlano, usePlano } from './financeiro/comum';
 import './financeiro/financeiro.css';
 import { comVisao, usarVisao } from '../visao';
+import { ConversaCobranca, EmitirCobranca } from '../componentes/CobrancaPessoa';
 
 /** Eventos cadastrados (cada um é um centro de custo). */
 export const usarEventos = () => useQuery({ queryKey: ['eventos'], queryFn: () => api<{ id: string; nome: string; ativo: boolean; inicio: string | null }[]>('/eventos'), staleTime: 60_000 });
@@ -60,10 +61,7 @@ function Titulos({ secoes }: { secoes: React.ReactNode }) {
   const q = useQuery({ queryKey: ['titulos', filtro], queryFn: () => api<{ itens: any[]; total: number; quantidade: number }>(`/financeiro/titulos?${filtro}`) });
   const contas = useQuery({ queryKey: ['contas', visao], queryFn: () => api<any[]>(comVisao('/financeiro/contas', visao)) });
   const [cobranca, setCobranca] = useState<any | null>(null);
-  const cobrar = useMutation({
-    mutationFn: ({ id, tipo }: { id: string; tipo: 'PIX' | 'BOLETO' }) => api<any>(`/financeiro/titulos/${id}/cobranca`, { corpo: { tipo } }),
-    onSuccess: (r) => { setCobranca(r); qc.invalidateQueries({ queryKey: ['titulos'] }); },
-  });
+  const [emitindo, setEmitindo] = useState<{ t: any; tipo: 'PIX' | 'BOLETO' } | null>(null);
   const [baixa, setBaixa] = useState<{ id: string; valor: string; pagoEm: string; desconto: boolean; total: number } | null>(null);
   const baixar = useMutation({
     mutationFn: () => api(`/financeiro/titulos/${baixa!.id}/baixar`, { corpo: { contaId: contaId || null, valorPago: baixa!.valor ? paraCentavos(baixa!.valor) : undefined, pagoEm: baixa!.pagoEm || undefined, quitarComDesconto: baixa!.desconto } }),
@@ -133,7 +131,7 @@ function Titulos({ secoes }: { secoes: React.ReactNode }) {
           <span className="muted" style={{ alignSelf: 'center' }}>Boleto e Pix são gerados no Asaas; quando a pessoa paga, o título baixa sozinho.</span>
         </div>
       )}
-      {(baixar.error || cobrar.error || acao.error) && <Erro erro={baixar.error ?? cobrar.error ?? acao.error} />}
+      {(baixar.error || acao.error) && <Erro erro={baixar.error ?? acao.error} />}
       {baixa && (
         <div className="cartao form" style={{ marginBottom: 14 }}>
           <div className="secao">Baixar título de {reais(baixa.total)}</div>
@@ -147,8 +145,13 @@ function Titulos({ secoes }: { secoes: React.ReactNode }) {
       )}
       {cobranca && (
         <div className="aviso ok" style={{ marginBottom: 12 }}>
-          Cobrança gerada. <a href={cobranca.url} target="_blank" rel="noreferrer">Abrir link de pagamento</a>
+          {cobranca.tipo === 'PIX' ? 'Pix' : 'Boleto'} emitido para <b>{cobranca.t.pessoa}</b>, vencimento {data(cobranca.vencimento)}. <a href={cobranca.url} target="_blank" rel="noreferrer">Abrir link de pagamento</a>
           {cobranca.pixCopiaCola && <> · <button className="botao claro pequeno" onClick={async () => { try { await navigator.clipboard.writeText(cobranca.pixCopiaCola); } catch { window.prompt('Pix copia e cola:', cobranca.pixCopiaCola); } }}>Copiar Pix copia e cola</button></>}
+          <div className="flex" style={{ gap: 6, marginTop: 8, flexWrap: 'wrap' }}>
+            {cobranca.url && <ConversaCobranca pessoaId={cobranca.t.pessoaId} url={cobranca.url} valor={cobranca.t.valor} vencimento={cobranca.vencimento} tipo={cobranca.tipo} />}
+            <button className="botao claro pequeno" onClick={() => setCobranca(null)}>Fechar</button>
+          </div>
+          <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>O link fica guardado na ficha da pessoa (aba Financeiro), com a situação.</div>
         </div>
       )}
       {q.isLoading ? <Carregando /> : q.error ? <Erro erro={q.error} /> : q.data!.itens.length === 0 ? <div className="cartao vazio">Nada nesta aba.</div> : (
@@ -178,8 +181,14 @@ function Titulos({ secoes }: { secoes: React.ReactNode }) {
                     {t.cobrancaUrl && <a className="botao claro pequeno" href={t.cobrancaUrl} target="_blank" rel="noreferrer">{t.cobrancaTipo === 'PIX' ? 'Pix' : 'Boleto'}</a>}
                     {t.status === 'aberto' && tipo === 'receber' && t.pessoaId && !t.cobrancaUrl && !['debito', 'credito'].includes(t.formaPagamento) && pode('financeiro', 'editar') && (
                       <>
-                        <button className="botao claro pequeno" disabled={cobrar.isPending} onClick={() => cobrar.mutate({ id: t.id, tipo: 'PIX' })}>Gerar Pix</button>
-                        <button className="botao claro pequeno" disabled={cobrar.isPending} onClick={() => cobrar.mutate({ id: t.id, tipo: 'BOLETO' })}>Gerar boleto</button>
+                        {emitindo?.t.id === t.id ? (
+                          <EmitirCobranca titulo={t} tipo={emitindo!.tipo} fechar={() => setEmitindo(null)} aoEmitir={(r) => { const tipoE = emitindo!.tipo; setEmitindo(null); setCobranca({ ...r, t, tipo: tipoE, vencimento: r.vencimento }); window.scrollTo(0, 0); }} />
+                        ) : (
+                          <>
+                            <button className="botao claro pequeno" onClick={() => setEmitindo({ t, tipo: 'PIX' })}>Gerar Pix</button>
+                            <button className="botao claro pequeno" onClick={() => setEmitindo({ t, tipo: 'BOLETO' })}>Gerar boleto</button>
+                          </>
+                        )}
                       </>
                     )}
                     {t.status === 'aberto' && pode('financeiro', 'editar') && <button className="botao claro pequeno" onClick={() => { setBaixa({ id: t.id, valor: '', pagoEm: '', desconto: false, total: t.valor }); window.scrollTo(0, 0); }}>Baixar</button>}

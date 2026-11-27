@@ -10,7 +10,7 @@ interface Conversa { id: string; status: string; naoLidas: number; fixada: boole
 type Aba = 'fila' | 'minhas' | 'atendimento' | 'resolvidas';
 
 /** Caixa de entrada: fila de espera, minhas conversas, em atendimento (gestão) e resolvidas. */
-export function Conversas({ inicial }: { inicial?: string | null }) {
+export function Conversas({ inicial, rascunho }: { inicial?: string | null; /** Texto já escrito na caixa da conversa inicial (ex.: link do boleto). */ rascunho?: string | null }) {
   useRelogio(30);
   const gestor = pode('crm', 'excluir');
   const cont = usarContadores();
@@ -203,7 +203,7 @@ export function Conversas({ inicial }: { inicial?: string | null }) {
         </div>
       </div>
       <div style={{ minWidth: 0, minHeight: 0 }}>
-        {aberta ? <Chat key={aberta} conversaId={aberta} leadId={atual?.lead?.id} abas aoSair={() => setAberta(null)} /> : <div className="chat"><div className="chat-msgs muted" style={{ justifyContent: 'center', alignItems: 'center' }}>Escolha uma conversa.</div></div>}
+        {aberta ? <Chat key={aberta} conversaId={aberta} leadId={atual?.lead?.id} abas aoSair={() => setAberta(null)} rascunho={aberta === inicial ? rascunho : null} /> : <div className="chat"><div className="chat-msgs muted" style={{ justifyContent: 'center', alignItems: 'center' }}>Escolha uma conversa.</div></div>}
       </div>
       {semCard ? (
         <button type="button" className="inbox-mostrar-card" onClick={() => mostrarCard(true)} title="Mostrar o card do lead" aria-label="Mostrar o card do lead">
