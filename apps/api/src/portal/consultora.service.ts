@@ -200,7 +200,14 @@ export class ConsultoraService {
 
   async marcarPago(rep: string, id: string, numero: number, pago: boolean) {
     const v = await this.vendaDela(rep, id);
-    if (v.status === 'em_cobranca') throw new ForbiddenException('Esta venda está com a Aritana para cobrança: você não pode mais receber da cliente.');
+    // Em cobrança pela Aritana ela ainda pode receber da cliente: o boleto é cancelado e a taxa da cobrança sai da comissão.
+    if (v.status === 'em_cobranca') {
+      const p = v.parcelas.find((x) => x.numero === numero);
+      if (!p) throw new NotFoundException('Parcela não encontrada.');
+      if (!pago || p.pagoEm) throw new BadRequestException('Esta parcela já foi registrada como paga.');
+      if (!p.tituloId) throw new BadRequestException('Parcela sem boleto da Aritana.');
+      return this.recebidoPorFora(p.tituloId, null);
+    }
     if (v.status === 'cancelada') throw new BadRequestException('Venda cancelada.');
     const parcelas = v.parcelas.map((p) => (p.numero === numero ? { ...p, pagoEm: pago ? hoje() : null } : p));
     const quitada = parcelas.every((p) => p.pagoEm);
@@ -316,18 +323,21 @@ export class ConsultoraService {
   }
 
   /** A matriz descobre que a consultora recebeu por fora uma parcela em cobrança: cancela o boleto e desconta dela. */
-  async recebidoPorFora(tituloId: string, usuarioId: string) {
+  async recebidoPorFora(tituloId: string, usuarioId: string | null) {
     const [t] = await this.db.select().from(titulos).where(eq(titulos.id, tituloId));
     if (!t || t.origemTipo !== 'cobranca_consultora' || !t.origemId) throw new NotFoundException('Título de cobrança de consultora não encontrado.');
     if (t.status !== 'aberto') throw new BadRequestException(`O título está ${t.status}.`);
     const [v] = await this.db.select().from(consultoraVendas).where(eq(consultoraVendas.id, t.origemId));
     await this.db.update(titulos).set({ status: 'cancelado' }).where(eq(titulos.id, t.id));
     await this.asaas.cancelarCobranca(t.cobrancaExternaId);
-    await this.db.insert(creditos).values({ pessoaId: v.consultoraId, valor: -t.valor, descricao: `Recebeu da cliente por fora a parcela em cobrança (venda nº ${v.numero}): descontado da comissão`, origemTipo: 'cobranca_consultora', origemId: t.id, usuarioId });
+    // A taxa do serviço de cobrança continua devida: sai da comissão no acerto.
+    const cfg = await this.config.ler('portal_consultora');
+    const taxa = Math.round((t.valor * cfg.taxaCobrancaPb) / 10000);
+    if (taxa > 0) await this.db.insert(creditos).values({ pessoaId: v.consultoraId, valor: -taxa, descricao: `Taxa da cobrança (${cfg.taxaCobrancaPb / 100}%) da parcela recebida direto da cliente (venda nº ${v.numero}): descontada da comissão no acerto`, origemTipo: 'cobranca_consultora', origemId: t.id, usuarioId });
     const parcelas = v.parcelas.map((x) => (x.tituloId === t.id ? { ...x, pagoEm: hoje() } : x));
     await this.db.update(consultoraVendas).set({ parcelas, status: parcelas.every((x) => x.pagoEm) ? 'quitada' : v.status }).where(eq(consultoraVendas.id, v.id));
-    await this.auditoria.registrar({ usuarioId, acao: 'recebido_por_fora', entidade: 'titulo', entidadeId: t.id, dados: { venda: v.numero, valor: t.valor } });
-    return { ok: true };
+    await this.auditoria.registrar({ usuarioId, acao: 'recebido_por_fora', entidade: 'titulo', entidadeId: t.id, dados: { venda: v.numero, valor: t.valor, taxa, pelaConsultora: !usuarioId } });
+    return { ok: true, taxa };
   }
 
   // ───── Garantia ─────

@@ -292,8 +292,9 @@ export function DetalheVenda() {
           <div className="p-rotulo">Parcelas</div>
           {v.parcelas.map((p: any) => (
             <div key={p.numero} className="p-linha">
-              <span>{p.numero}ª · {data(p.vencimento)} · {reais(p.valor)}<br /><span className={p.pagoEm ? 'p-suave' : p.vencimento < hoje() ? 'p-erro' : 'p-suave'}>{p.pagoEm ? `Recebida ${data(p.pagoEm)}` : v.status === 'em_cobranca' ? 'Boleto com a Aritana' : p.vencimento < hoje() ? 'Vencida' : 'Em aberto'}</span></span>
+              <span>{p.numero}ª · {data(p.vencimento)} · {reais(p.valor)}<br /><span className={p.pagoEm ? 'p-suave' : p.vencimento < hoje() ? 'p-erro' : 'p-suave'}>{p.pagoEm ? `Recebida ${data(p.pagoEm)}` : v.status === 'em_cobranca' ? 'Boleto com a Aritana (você ainda pode receber)' : p.vencimento < hoje() ? 'Vencida' : 'Em aberto'}</span></span>
               {v.status === 'aberta' && <button className="p-link" disabled={pago.isPending} onClick={() => pago.mutate({ numero: p.numero, pago: !p.pagoEm })}>{p.pagoEm ? 'Desfazer' : 'Recebi'}</button>}
+              {v.status === 'em_cobranca' && !p.pagoEm && <button className="p-link" disabled={pago.isPending} onClick={() => window.confirm(`A cliente pagou esta parcela direto para você? O boleto da Aritana é cancelado e ${taxa}% (${reais(Math.round((p.valor * taxa) / 100))}) da cobrança será descontado das suas comissões no acerto.`) && pago.mutate({ numero: p.numero, pago: true })}>Recebi</button>}
             </div>
           ))}
           <Aviso erro={pago.error} />
@@ -315,7 +316,7 @@ export function DetalheVenda() {
       {v.status === 'aberta' && abertas.length > 0 && v.forma === 'prazo' && (
         <div className="p-cartao p-col">
           <div className="p-rotulo">Passar a cobrança para a Aritana</div>
-          <span className="p-suave">A Aritana emite o boleto para a cliente e cobra. Quando ela pagar, você recebe {100 - taxa}% ({perfil.data?.asaasWalletId ? 'direto na sua conta Asaas' : 'como crédito no fechamento'}). Depois disso você não pode mais receber da cliente.</span>
+          <span className="p-suave">A Aritana emite o boleto para a cliente e cobra. Quando ela pagar, você recebe {100 - taxa}% ({perfil.data?.asaasWalletId ? 'direto na sua conta Asaas' : 'como crédito no fechamento'}). Você pode continuar cobrando a cliente: se ela pagar direto para você, toque em "Recebi" na parcela e o percentual da cobrança ({taxa}%) será descontado das suas comissões no acerto.</span>
           {!perfil.data?.aceiteCobrancaEm ? (
             !termo ? <button className="p-botao claro" onClick={() => setTermo(true)}>Acionar cobrança</button> : (
               <>

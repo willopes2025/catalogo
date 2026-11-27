@@ -138,7 +138,7 @@ function VendasEmCobranca() {
   return (
     <div className="cartao coluna">
       <div className="secao" style={{ marginTop: 0 }}>Cobranças passadas pelas consultoras</div>
-      <p className="muted" style={{ margin: 0 }}>Os boletos estão no Financeiro (categoria "Cobrança para consultora"). Se a consultora receber por fora uma parcela que está com a Aritana, use "Recebeu por fora": o boleto é cancelado e o valor é descontado dela.</p>
+      <p className="muted" style={{ margin: 0 }}>Os boletos estão no Financeiro (categoria "Cobrança para consultora"). A consultora pode continuar cobrando: se ela receber direto (ela mesma registra no app, ou a equipe usa "Recebeu por fora"), o boleto é cancelado e o percentual da cobrança é descontado das comissões dela no acerto.</p>
       {porFora.error && <Erro erro={porFora.error} />}
       {q.isLoading ? <Carregando /> : !q.data?.length ? <p className="muted">Nenhuma.</p> : (
         <table className="tabela">
@@ -153,7 +153,7 @@ function VendasEmCobranca() {
                   {v.parcelas.map((p: any) => (
                     <div key={p.numero} className="flex" style={{ gap: 6, alignItems: 'center' }}>
                       <span>{p.numero}ª {reais(p.valor)} · {data(p.vencimento)} · {p.pagoEm ? <span className="etiqueta ok">Paga</span> : <span className="etiqueta alerta">Em aberto</span>}{p.split ? ' · split' : ' · crédito'}</span>
-                      {!p.pagoEm && p.tituloId && pode('cobranca', 'excluir') && <button className="botao claro pequeno" disabled={porFora.isPending} onClick={() => window.confirm('A consultora recebeu esta parcela por fora? O boleto é cancelado e o valor é descontado dela.') && porFora.mutate(p.tituloId)}>Recebeu por fora</button>}
+                      {!p.pagoEm && p.tituloId && pode('cobranca', 'excluir') && <button className="botao claro pequeno" disabled={porFora.isPending} onClick={() => window.confirm('A consultora recebeu esta parcela direto da cliente? O boleto é cancelado e a taxa da cobrança é descontada das comissões dela.') && porFora.mutate(p.tituloId)}>Recebeu por fora</button>}
                     </div>
                   ))}
                 </td>

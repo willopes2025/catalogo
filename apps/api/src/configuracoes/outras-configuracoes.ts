@@ -76,7 +76,7 @@ export const CONFIGS = {
       /** Serviço de cobrança: a Aritana fica com esta parte (pontos-base) do que receber da cliente da consultora. */
       taxaCobrancaPb: 1000,
       termoCobranca:
-        'Ao acionar a cobrança, você passa para a Aritana Semijoias a cobrança desta venda. A Aritana emite o boleto para a sua cliente, cobra e, quando ela pagar, você recebe a sua parte (o valor menos a taxa do serviço) na sua carteira Asaas ou como crédito no fechamento. A partir daí você não pode mais cobrar nem receber da cliente: se receber, o valor será descontado da sua comissão ou cobrado de você.',
+        'Ao acionar a cobrança, a Aritana Semijoias passa a cobrar esta venda: emite o boleto para a sua cliente e, quando ela pagar, você recebe a sua parte (o valor menos a taxa do serviço) na sua carteira Asaas ou como crédito no fechamento. Você pode continuar cobrando a sua cliente. Se ela pagar direto para você, registre a parcela como recebida no app: o boleto é cancelado e o percentual da cobrança será descontado das suas comissões no acerto.',
     },
     schema: z.object({
       whatsappMatriz: z.string().trim().max(20),

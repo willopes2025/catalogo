@@ -5076,7 +5076,6 @@ test('app da consultora: clientes, venda (maleta e catálogo), promissória, cob
   const cob = await ok('POST', `/portal/vendas/${v.id}/cobranca`);
   assert.equal(cob.parcelas, 2);
   assert.equal(cob.split, false, 'sem Wallet ID: vai como crédito');
-  assert.equal((await chamar('POST', `/portal/vendas/${v.id}/parcelas/1`, { pago: true })).status, 403, 'depois de passar a cobrança, ela não recebe mais');
   const venda = (await ok('GET', '/portal/vendas')).find((x) => x.id === v.id);
   assert.equal(venda.status, 'em_cobranca');
   const garantia = await ok('POST', '/portal/garantias', { referencia: 'peça-sem-cadastro-123', defeito: 'A pedra soltou com uma semana de uso', clienteId: cli.id, fotos: [Buffer.from('ffd8ffe000104a46494600010100000100010000ffd9', 'hex').toString('base64')] });
@@ -5091,13 +5090,14 @@ test('app da consultora: clientes, venda (maleta e catálogo), promissória, cob
   await ok('PUT', '/integracoes/asaas', { valores: { ASAAS_WEBHOOK_TOKEN: '' } });
   const emCob = (await ok('GET', '/consultoras/vendas?status=em_cobranca')).find((x) => x.id === v.id);
   assert.ok(emCob.parcelas.find((p) => p.numero === 1).pagoEm, '1ª parcela paga');
-  // A consultora recebeu a 2ª por fora: boleto cancelado e desconto dela.
-  const t2 = emCob.parcelas.find((p) => p.numero === 2);
-  await ok('POST', `/consultoras/cobranca/${t2.tituloId}/recebido-por-fora`);
+  // A consultora continua podendo cobrar: recebeu a 2ª direto da cliente e registra no app.
   token = (await (async () => { const l = await ok('POST', `/portal/gerar-link/${rep.id}`); token = ''; return (await ok('POST', `/portal/link/${l.token}`)).token; })());
+  const rec = await ok('POST', `/portal/vendas/${v.id}/parcelas/2`, { pago: true });
+  assert.equal(rec.taxa, Math.round((total - p1) * 0.1), 'só a taxa da cobrança sai da comissão');
   const ext = await ok('GET', '/portal/extrato');
   assert.ok(ext.creditos.some((c) => c.valor === Math.round(p1 * 0.9)), 'crédito da 1ª parcela (90%)');
-  assert.ok(ext.creditos.some((c) => c.valor === -(total - p1)), 'desconto da 2ª recebida por fora');
+  assert.ok(ext.creditos.some((c) => c.valor === -Math.round((total - p1) * 0.1)), 'taxa da 2ª recebida direto descontada');
+  assert.equal((await ok('GET', '/portal/vendas')).find((x) => x.id === v.id).status, 'quitada');
   token = gestor;
   const os = (await ok('GET', '/garantia/ordens?status=abertas')).find((o) => o.numero === garantia.numero);
   assert.equal(os.origem, 'portal');
