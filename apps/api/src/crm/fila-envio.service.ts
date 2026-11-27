@@ -172,9 +172,9 @@ export class FilaEnvioService implements OnModuleInit, OnModuleDestroy {
     const [l] = await this.db.update(envioLotes).set({ status: 'cancelado', concluidoEm: new Date() }).where(and(eq(envioLotes.id, id), inArray(envioLotes.status, ['ativo', 'pausado']))).returning();
     if (!l) throw new BadRequestException('Este envio já terminou.');
     const canceladas = await this.db.update(envioItens).set({ status: 'cancelado' }).where(and(eq(envioItens.loteId, id), eq(envioItens.status, 'pendente'))).returning({ dados: envioItens.dados });
-    // Etapa da trilha que não saiu: libera para sair de novo numa próxima rodada.
+    // Etapa da trilha cancelada fica marcada como cancelada: não volta a sair sozinha numa próxima rodada.
     const titulosIds = canceladas.flatMap((c) => (c.dados.passo !== undefined ? (c.dados.tituloIds ?? []).map((t) => ({ t, p: c.dados.passo! })) : []));
-    for (const x of titulosIds) await this.db.delete(cobrancaEnvios).where(and(eq(cobrancaEnvios.tituloId, x.t), eq(cobrancaEnvios.passo, x.p), eq(cobrancaEnvios.resultado, 'na_fila')));
+    for (const x of titulosIds) await this.db.update(cobrancaEnvios).set({ resultado: 'cancelado', detalhe: 'Envio cancelado' }).where(and(eq(cobrancaEnvios.tituloId, x.t), eq(cobrancaEnvios.passo, x.p), eq(cobrancaEnvios.resultado, 'na_fila')));
     await this.terminar(l);
     return this.obter(id);
   }

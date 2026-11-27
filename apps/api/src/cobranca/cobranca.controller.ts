@@ -256,6 +256,8 @@ export class CobrancaController {
         regua: z.object({
           ativa: z.boolean(),
           canalId: uuid.nullable(),
+          gerarBoleto: z.boolean().default(false),
+          aprovarAntes: z.boolean().default(true),
           passos: z
             .array(
               z.object({

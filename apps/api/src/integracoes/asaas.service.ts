@@ -1,11 +1,11 @@
-import { BadRequestException, Inject, Injectable, Logger, ServiceUnavailableException, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, Inject, Injectable, Logger, type OnApplicationBootstrap, ServiceUnavailableException, UnauthorizedException } from '@nestjs/common';
 import { timingSafeEqual } from 'node:crypto';
 import { and, eq, ilike, inArray, or, sql } from 'drizzle-orm';
 import { DB, type Db } from '../comum/db.module';
 import { AuditoriaService } from '../comum/auditoria.service';
 import { CobrancaConfigService } from '../cobranca/cobranca-config.service';
 import { SegredosService } from '../segredos/segredos.service';
-import { contas, creditos, eventosIntegracao, maletas, pessoas, titulos } from '../db/schema';
+import { configuracoes, contas, creditos, eventosIntegracao, maletas, pessoas, titulos } from '../db/schema';
 import { hoje } from '../maletas/maletas.service';
 
 /**
@@ -16,7 +16,7 @@ import { hoje } from '../maletas/maletas.service';
  * O webhook deve apontar para https://<domínio>/api/webhooks/asaas com os eventos de cobrança.
  */
 @Injectable()
-export class AsaasService {
+export class AsaasService implements OnApplicationBootstrap {
   private readonly log = new Logger('Asaas');
   constructor(
     @Inject(DB) private readonly db: Db,
@@ -24,6 +24,39 @@ export class AsaasService {
     private readonly config: CobrancaConfigService,
     private readonly segredos: SegredosService,
   ) {}
+
+  onApplicationBootstrap() {
+    setTimeout(() => void this.desligarNotificacoesDosClientes().catch((e) => this.log.warn(`Notificações do Asaas: ${(e as Error).message}`)), 20_000).unref();
+  }
+
+  /**
+   * Desliga (uma vez) as notificações automáticas do Asaas (SMS, e-mail, WhatsApp) de todos os clientes já
+   * cadastrados lá. Os novos já nascem com elas desligadas.
+   */
+  async desligarNotificacoesDosClientes(forcar = false) {
+    if (!this.configurado) return { atualizados: 0, falhas: 0 };
+    const chave = `asaas_notificacoes_desligadas:${this.ambiente}`;
+    if (!forcar) {
+      const [c] = await this.db.select().from(configuracoes).where(eq(configuracoes.chave, chave));
+      if (c) return { atualizados: 0, falhas: 0 };
+    }
+    const lista = await this.db.select({ id: pessoas.asaasClienteId }).from(pessoas).where(sql`${pessoas.asaasClienteId} is not null`);
+    let atualizados = 0;
+    let falhas = 0;
+    for (const p of lista) {
+      try {
+        await this.chamar('PUT', `/customers/${p.id}`, { notificationDisabled: true });
+        atualizados++;
+      } catch (e) {
+        falhas++;
+        this.log.warn(`Cliente ${p.id}: notificações não desligadas: ${(e as Error).message}`);
+      }
+      await new Promise((r) => setTimeout(r, 150));
+    }
+    await this.db.insert(configuracoes).values({ chave, valor: { em: new Date().toISOString(), atualizados, falhas } }).onConflictDoUpdate({ target: configuracoes.chave, set: { valor: { em: new Date().toISOString(), atualizados, falhas }, atualizadoEm: new Date() } });
+    this.log.log(`Notificações automáticas do Asaas desligadas em ${atualizados} cliente(s) (${falhas} falha(s)).`);
+    return { atualizados, falhas };
+  }
 
   get configurado() {
     return !!this.segredos.v('ASAAS_API_KEY');
@@ -83,12 +116,14 @@ export class AsaasService {
       addressNumber: p.numero ?? undefined,
       province: p.bairro ?? undefined,
       externalReference: p.id,
+      // Sem SMS/e-mail/WhatsApp automáticos do Asaas: quem avisa a cliente é a Aritana.
+      notificationDisabled: true,
     };
     if (p.asaasClienteId) {
       if (atualizar) await this.chamar('PUT', `/customers/${p.asaasClienteId}`, dados).catch((e) => this.log.warn(`Cadastro do cliente ${p.asaasClienteId} não atualizado no Asaas: ${(e as Error).message}`));
       return p.asaasClienteId;
     }
-    const c = await this.chamar<{ id: string }>('POST', '/customers', { ...dados, notificationDisabled: false });
+    const c = await this.chamar<{ id: string }>('POST', '/customers', dados);
     await this.db.update(pessoas).set({ asaasClienteId: c.id }).where(eq(pessoas.id, p.id));
     return c.id;
   }

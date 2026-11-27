@@ -2890,6 +2890,8 @@ test('cobrança: carteira, terceirizada vê só a dela, contato e promessa, 2ª 
   };
   const emp = (await ok('GET', '/empresas'))[0];
   const cfg0 = await ok('GET', '/cobranca/config');
+  assert.equal(cfg0.regua.gerarBoleto, false, 'a trilha não gera boleto sozinha, a menos que alguém ligue');
+  assert.equal(cfg0.regua.aprovarAntes, true, 'a fila da trilha espera aprovação');
   assert.deepEqual(cfg0.regua.passos.map((p) => [p.dias, p.acao]), [[1, 'mensagem'], [15, 'mensagem'], [30, 'mensagem'], [60, 'tarefa'], [90, 'tarefa']], 'trilha padrão: lembrete, 2º aviso, acordo, tarefa do Financeiro e decisão da gestão');
   await ok('PUT', '/cobranca/config', { ...cfg0, multaPb: 200, jurosMesPb: 100, diasCarencia: 0, descontoMaxPb: 1000, descontoMaxGestorPb: 5000, parcelasMax: 6, regua: { ...cfg0.regua, ativa: false } });
   assert.equal((await chamar('PUT', '/cobranca/config', { ...cfg0, multaPb: 5000 })).status, 400, 'multa acima de 10% é recusada');
@@ -3008,7 +3010,7 @@ test('cobrança: carteira, terceirizada vê só a dela, contato e promessa, 2ª 
   assert.equal((await chamar('PUT', '/cobranca/config', { ...cfg0, regua: { ativa: true, canalId: null, passos } })).status, 400, 'trilha por WhatsApp sem número');
   assert.equal((await chamar('PUT', '/cobranca/config', { ...cfg0, regua: { ativa: true, canalId: canal.id, passos: [...passos, { dias: 60, acao: 'tarefa', texto: 'Ligar para {nome}' }] } })).status, 400, 'tarefa sem quem recebe');
   // Etapa de 38 dias: a Ana (40 dias) acabou de chegar nela; sem essa etapa, o atraso antigo dela não seria cobrado pela trilha.
-  await ok('PUT', '/cobranca/config', { ...cfg0, multaPb: 200, jurosMesPb: 100, diasCarencia: 0, regua: { ativa: true, canalId: canal.id, passos: [...passos, { dias: 38, canal: 'whatsapp', texto: 'Oi {primeiro_nome}, {dias} dias.' }] } });
+  await ok('PUT', '/cobranca/config', { ...cfg0, multaPb: 200, jurosMesPb: 100, diasCarencia: 0, regua: { ativa: true, canalId: canal.id, gerarBoleto: true, passos: [...passos, { dias: 38, canal: 'whatsapp', texto: 'Oi {primeiro_nome}, {dias} dias.' }] } });
   const previa = (await ok('GET', '/cobranca/regua/previa')).previa.find((p) => p.pessoaId === b.id);
   assert.equal(previa.texto.split(' Hoje')[0], 'Oi Bruna, a parcela de R$ 100,00 venceu há 5 dias.');
   assert.match(previa.texto, /R\$ 102,17/);
@@ -3017,14 +3019,16 @@ test('cobrança: carteira, terceirizada vê só a dela, contato e promessa, 2ª 
   assert.ok(r1.naFila >= 1);
   assert.equal(r1.foraDaTrilha['cobrança pausada'], 1, 'a Ana (pausada) ficou fora');
   const loteR = (await ok('GET', '/envios?status=andamento')).find((l) => l.origem === 'trilha' && l.canalId === canal.id);
+  assert.equal(loteR.status, 'pausado', 'a fila da trilha espera aprovação antes de sair');
+  assert.match(loteR.aviso, /Aguardando aprovação/);
   const itemB = (await ok('GET', `/envios/${loteR.id}`)).itens.find((i) => i.pessoaId === b.id);
   assert.match(itemB.texto, /^Oi Bruna/);
   assert.match(itemB.texto, /asaas\.com/, 'o boleto foi emitido antes e vai junto');
   const r2 = await ok('POST', '/cobranca/regua/rodar');
   assert.ok(!r2.previa.some((p) => p.pessoaId === b.id), 'não põe a mesma etapa duas vezes');
-  // Cancelado o envio, a etapa fica livre para sair numa próxima rodada.
+  // Cancelado o envio, a etapa não volta a sair sozinha numa próxima rodada.
   await ok('POST', `/envios/${loteR.id}/cancelar`);
-  assert.ok((await ok('GET', '/cobranca/regua/previa')).previa.some((p) => p.pessoaId === b.id));
+  assert.ok(!(await ok('GET', '/cobranca/regua/previa')).previa.some((p) => p.pessoaId === b.id), 'etapa cancelada não sai de novo');
   await ok('PUT', '/cobranca/config', { ...cfg0, multaPb: 200, jurosMesPb: 100, diasCarencia: 0, regua: { ...cfg0.regua, ativa: false } });
   ctx.cobranca = { a, b, tb, terc };
 });
@@ -4538,7 +4542,7 @@ test('cobrança pelo WhatsApp: fila com intervalo e horário do número, trilha 
 
   const cfg0 = await ok('GET', '/cobranca/config');
   const passos = cfg0.regua.passos.map((p) => (p.acao === 'tarefa' ? { ...p, responsavelId: eu.id } : p));
-  await ok('PUT', '/cobranca/config', { ...cfg0, regua: { ativa: true, canalId: fin.id, passos } });
+  await ok('PUT', '/cobranca/config', { ...cfg0, regua: { ativa: true, canalId: fin.id, passos, aprovarAntes: false } });
   const r = await ok('POST', '/cobranca/regua/rodar');
   assert.ok(r.foraDaTrilha['tem processo judicial ativo'] >= 1, 'quem tem processo ativo fica fora');
   assert.ok(!r.previa.some((x) => x.pessoaId === antigo.p.id), 'atraso antigo (200 dias) não entra de uma vez na trilha');

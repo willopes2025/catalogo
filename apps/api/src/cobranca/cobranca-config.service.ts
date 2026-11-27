@@ -33,7 +33,16 @@ export interface ConfigCobranca extends RegrasEncargos {
   /** Parcela do acordo atrasada há mais que isto: o acordo quebra e a dívida original volta. */
   diasQuebraAcordo: number;
   /** Trilha de cobrança (versao 2: cada pessoa segue as etapas pelo maior atraso). */
-  regua: { ativa: boolean; canalId: string | null; passos: PassoRegua[]; versao?: number };
+  regua: {
+    ativa: boolean;
+    canalId: string | null;
+    passos: PassoRegua[];
+    versao?: number;
+    /** Emite boleto/Pix no Asaas automaticamente antes da mensagem (padrão: não). */
+    gerarBoleto?: boolean;
+    /** A fila do dia fica pausada até alguém conferir e clicar em Retomar (padrão: sim). */
+    aprovarAntes?: boolean;
+  };
   protesto: { diasMinimos: number; especie: string };
 }
 
@@ -80,7 +89,7 @@ export class CobrancaConfigService {
       descontoMaxGestorPb: 5000,
       parcelasMax: 12,
       diasQuebraAcordo: 15,
-      regua: { ativa: false, canalId: null, passos: ETAPAS_PADRAO, versao: 2 },
+      regua: { ativa: false, canalId: null, passos: ETAPAS_PADRAO, versao: 2, gerarBoleto: false, aprovarAntes: true },
       protesto: { diasMinimos: 30, especie: 'DMI' },
     };
   }
@@ -94,6 +103,8 @@ export class CobrancaConfigService {
     if (v.regua && v.regua.versao !== 2 && !v.regua.ativa) regua.passos = ETAPAS_PADRAO;
     regua.passos = regua.passos.map((x) => ({ ...x, acao: x.acao ?? 'mensagem' }));
     regua.versao = 2;
+    regua.gerarBoleto = regua.gerarBoleto === true;
+    regua.aprovarAntes = regua.aprovarAntes !== false;
     return { ...p, ...v, regua, protesto: { ...p.protesto, ...(v.protesto ?? {}) } };
   }
 

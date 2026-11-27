@@ -4,7 +4,7 @@ import { calcularAcordo, calcularEncargos, formatarReais, preencherTexto, type R
 import { temPermissao, type UsuarioLogado } from '../comum/auth';
 import { DB, type Db } from '../comum/db.module';
 import { AuditoriaService } from '../comum/auditoria.service';
-import { auditoria as auditoriaTb, cobradores, cobrancaAcordos, cobrancaCarteira, cobrancaComprovantes, cobrancaContatos, cobrancaEnvios, cobrancaProtestos, crmCanais, empresas, mesaTarefas, pessoas, processosJudiciais, titulos, usuarios } from '../db/schema';
+import { auditoria as auditoriaTb, cobradores, cobrancaAcordos, cobrancaCarteira, cobrancaComprovantes, cobrancaContatos, cobrancaEnvios, configuracoes, cobrancaProtestos, crmCanais, empresas, mesaTarefas, pessoas, processosJudiciais, titulos, usuarios } from '../db/schema';
 import { AsaasService } from '../integracoes/asaas.service';
 import { EmailService } from '../integracoes/email.service';
 import { CanaisService } from '../crm/canais.service';
@@ -59,14 +59,20 @@ export class CobrancaService implements OnModuleInit, OnModuleDestroy {
     if (this.timer) clearInterval(this.timer);
   }
 
-  private reguaRodadaEm: string | null = null;
+  /** Guarda no banco o dia em que a trilha rodou, para não rodar de novo quando o servidor reinicia. */
+  private async marcarReguaHoje(): Promise<boolean> {
+    const dia = hoje();
+    const [c] = await this.db.select().from(configuracoes).where(eq(configuracoes.chave, 'cobranca_regua_rodada'));
+    if ((c?.valor as { dia?: string } | undefined)?.dia === dia) return false;
+    await this.db.insert(configuracoes).values({ chave: 'cobranca_regua_rodada', valor: { dia } }).onConflictDoUpdate({ target: configuracoes.chave, set: { valor: { dia }, atualizadoEm: new Date() } });
+    return true;
+  }
   async rotina() {
     await this.verificarAcordos();
     await this.verificarPromessas();
     const hora = Number(new Date().toLocaleString('en-US', { timeZone: 'America/Sao_Paulo', hour: 'numeric', hour12: false }));
     // A trilha monta a fila do dia cedo; as mensagens saem no horário configurado no número.
-    if (hora >= 7 && hora < 20 && this.reguaRodadaEm !== hoje()) {
-      this.reguaRodadaEm = hoje();
+    if (hora >= 7 && hora < 20 && (await this.config.obter()).regua.ativa && (await this.marcarReguaHoje())) {
       const r = await this.rodarRegua(false);
       if (r.naFila || r.tarefas || r.falhas) this.log.log(`Trilha: ${r.naFila} mensagem(ns) na fila, ${r.tarefas} tarefa(s), ${r.falhas} com problema.`);
     }
@@ -561,7 +567,7 @@ export class CobrancaService implements OnModuleInit, OnModuleDestroy {
       else if (passo.canal === 'whatsapp' && (!canal || !canal.ativo || canal.excluidoEm)) problema = 'Escolha o número de WhatsApp da trilha em Cobrança › Configurar.';
       else if (passo.canal === 'whatsapp' && canal?.tipo === 'oficial' && !passo.templateId) problema = 'No WhatsApp oficial, cada etapa precisa de um template aprovado.';
       // Boleto/Pix antes de mandar, para a mensagem já ir com o link.
-      if (!simular && !tarefa && !problema && this.asaas.configurado && p.documento)
+      if (!simular && cfg.regua.gerarBoleto && !tarefa && !problema && this.asaas.configurado && p.documento)
         for (const g of grupo)
           if (!g.t.cobrancaExternaId) {
             try {
@@ -634,7 +640,9 @@ export class CobrancaService implements OnModuleInit, OnModuleDestroy {
       const titulo = `Trilha de cobrança ${dataBR(h)}`;
       const aberto = await this.fila.aberto(canal.id, 'trilha', titulo);
       if (aberto) await this.fila.acrescentar(aberto.id, itensFila);
-      // Trava de segurança: muita mensagem de uma vez fica pausada até alguém conferir e retomar.
+      // Trava de segurança: a fila do dia espera aprovação; e muita mensagem de uma vez sempre espera.
+      else if (cfg.regua.aprovarAntes)
+        await this.fila.criarLote({ canalId: canal.id, origem: 'trilha', titulo, itens: itensFila, pausado: true, aviso: `Aguardando aprovação: ${itensFila.length} mensagem(ns) de cobrança. Confira a lista e clique em Retomar para enviar.` });
       else if (itensFila.length > LIMITE_TRILHA_SEM_CONFERIR)
         await this.fila.criarLote({ canalId: canal.id, origem: 'trilha', titulo, itens: itensFila, pausado: true, aviso: `${itensFila.length} mensagens de uma vez: confira a lista e clique em Retomar para enviar.` });
       else await this.fila.criarLote({ canalId: canal.id, origem: 'trilha', titulo, itens: itensFila });

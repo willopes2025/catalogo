@@ -481,7 +481,7 @@ function Configurar() {
   const canal = canais.data?.find((x) => x.id === cfg?.regua.canalId);
   const templates = useQuery({ queryKey: ['crm', 'templates', canal?.id], queryFn: () => api<any[]>(`/crm/templates?canalId=${canal!.id}`), enabled: !!canal && canal.tipo === 'oficial' });
   const salvar = useMutation({
-    mutationFn: () => api('/cobranca/config', { metodo: 'PUT', corpo: { multaPb: textoParaPb(cfg.multa), jurosMesPb: textoParaPb(cfg.juros), diasCarencia: Number(cfg.diasCarencia) || 0, descontoMaxPb: textoParaPb(cfg.desc), descontoMaxGestorPb: textoParaPb(cfg.descG), parcelasMax: Number(cfg.parcelasMax), diasQuebraAcordo: Number(cfg.diasQuebraAcordo), regua: { ativa: cfg.regua.ativa, canalId: cfg.regua.canalId || null, passos: cfg.regua.passos.map((p: any) => ({ dias: Number(p.dias), acao: p.acao ?? 'mensagem', nome: p.nome ?? '', canal: p.canal ?? 'whatsapp', texto: p.texto, templateId: p.templateId || null, responsavelId: p.responsavelId || null })) }, protesto: { diasMinimos: Number(cfg.protesto.diasMinimos), especie: cfg.protesto.especie } } }),
+    mutationFn: () => api('/cobranca/config', { metodo: 'PUT', corpo: { multaPb: textoParaPb(cfg.multa), jurosMesPb: textoParaPb(cfg.juros), diasCarencia: Number(cfg.diasCarencia) || 0, descontoMaxPb: textoParaPb(cfg.desc), descontoMaxGestorPb: textoParaPb(cfg.descG), parcelasMax: Number(cfg.parcelasMax), diasQuebraAcordo: Number(cfg.diasQuebraAcordo), regua: { ativa: cfg.regua.ativa, canalId: cfg.regua.canalId || null, gerarBoleto: !!cfg.regua.gerarBoleto, aprovarAntes: cfg.regua.aprovarAntes !== false, passos: cfg.regua.passos.map((p: any) => ({ dias: Number(p.dias), acao: p.acao ?? 'mensagem', nome: p.nome ?? '', canal: p.canal ?? 'whatsapp', texto: p.texto, templateId: p.templateId || null, responsavelId: p.responsavelId || null })) }, protesto: { diasMinimos: Number(cfg.protesto.diasMinimos), especie: cfg.protesto.especie } } }),
     onSuccess: () => { setC(null); qc.invalidateQueries({ queryKey: ['cobranca'] }); },
   });
   const verPrevia = useMutation({ mutationFn: () => api<any>('/cobranca/regua/previa'), onSuccess: (r) => setPrevia({ lista: r.previa, fora: r.foraDaTrilha ?? {} }) });
@@ -523,6 +523,12 @@ function Configurar() {
             {canais.data?.filter((x) => x.ativo && !x.excluidoEm).map((x) => <option key={x.id} value={x.id}>{x.nome}{x.tipo === 'oficial' ? ' (oficial: precisa de template)' : ''}</option>)}
           </select>
         </Campo>
+        <label className="check" style={{ display: 'block', marginBottom: 6 }}>
+          <input type="checkbox" checked={cfg.regua.aprovarAntes !== false} onChange={(e) => muda({ regua: { ...cfg.regua, aprovarAntes: e.target.checked } })} /> A fila do dia espera minha aprovação (nada sai até alguém conferir e clicar em Retomar em CRM › Envios)
+        </label>
+        <label className="check" style={{ display: 'block', marginBottom: 10 }}>
+          <input type="checkbox" checked={!!cfg.regua.gerarBoleto} onChange={(e) => muda({ regua: { ...cfg.regua, gerarBoleto: e.target.checked } })} /> Gerar boleto/Pix no Asaas automaticamente antes de cada mensagem
+        </label>
         {canal && <p className="muted" style={{ fontSize: 13 }}>Pelo "{canal.nome}": uma mensagem a cada {(canal.envioIntervaloMinS ?? 180) / 60} a {(canal.envioIntervaloMaxS ?? 360) / 60} min, das {canal.envioInicio ?? '08:00'} às {canal.envioFim ?? '18:00'}. Para mudar: CRM › Configurar › Números › Editar.</p>}
         {cfg.regua.passos.map((p: any, i: number) => (
           <div key={i} className="cob-etapa">
