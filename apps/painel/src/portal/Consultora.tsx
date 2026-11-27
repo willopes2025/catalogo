@@ -9,6 +9,7 @@ const Aviso = ({ erro }: { erro: unknown }) => (erro ? <div className="p-aviso e
 const Carregando = () => <div className="p-suave p-centro" style={{ padding: 40 }}>Carregando…</div>;
 const hoje = () => new Date(Date.now() - 3 * 3600_000).toISOString().slice(0, 10);
 const somarDias = (d: string, n: number) => new Date(Date.parse(`${d}T12:00:00Z`) + n * 86400_000).toISOString().slice(0, 10);
+const somarMeses = (d: string, n: number) => { const [a, m, dia] = d.split('-').map(Number); const ult = new Date(Date.UTC(a, m - 1 + n + 1, 0)).getUTCDate(); return new Date(Date.UTC(a, m - 1 + n, Math.min(dia, ult))).toISOString().slice(0, 10); };
 const paraCentavos = (t: string) => Math.round(Number((t || '0').replace(/\./g, '').replace(',', '.')) * 100) || 0;
 const so = (t?: string | null) => (t ?? '').replace(/\D/g, '');
 const zap = (tel: string | null | undefined, texto: string) => {
@@ -166,6 +167,7 @@ export function NovaVenda() {
   const [formaPagamento, setFormaPagamento] = useState('pix');
   const [nParcelas, setNParcelas] = useState(2);
   const [primeiro, setPrimeiro] = useState(somarDias(hoje(), 30));
+  const [intervalo, setIntervalo] = useState(30);
   const [entrega, setEntrega] = useState<'frete' | 'retirar'>('retirar');
   const [endereco, setEndereco] = useState('');
   const bruto = itens.reduce((a, i) => a + i.preco * i.quantidade, 0);
@@ -173,8 +175,8 @@ export function NovaVenda() {
   const parcelas = useMemo(() => {
     if (forma !== 'prazo' || !total) return [];
     const base = Math.floor(total / nParcelas);
-    return Array.from({ length: nParcelas }, (_, k) => ({ valor: k === nParcelas - 1 ? total - base * (nParcelas - 1) : base, vencimento: somarDias(primeiro, 30 * k) }));
-  }, [forma, total, nParcelas, primeiro]);
+    return Array.from({ length: nParcelas }, (_, k) => ({ valor: k === nParcelas - 1 ? total - base * (nParcelas - 1) : base, vencimento: intervalo === 30 ? somarMeses(primeiro, k) : somarDias(primeiro, intervalo * k) }));
+  }, [forma, total, nParcelas, primeiro, intervalo]);
   const temMatriz = itens.some((i) => i.origem === 'matriz');
   const add = (p: any, origem: 'maleta' | 'matriz') => setItens((l) => {
     const ja = l.find((x) => x.produtoId === p.produtoId && x.origem === origem);
@@ -247,6 +249,7 @@ export function NovaVenda() {
               <label>Parcelas<select value={nParcelas} onChange={(e) => setNParcelas(Number(e.target.value))}>{[1, 2, 3, 4, 5, 6].map((n) => <option key={n} value={n}>{n}x</option>)}</select></label>
               <label>1º vencimento<input type="date" value={primeiro} onChange={(e) => setPrimeiro(e.target.value)} /></label>
             </div>
+            <label>Parcelas a cada<select value={intervalo} onChange={(e) => setIntervalo(Number(e.target.value))}><option value={30}>1 mês</option><option value={15}>15 dias</option><option value={7}>1 semana</option></select></label>
             {parcelas.map((p, k) => <div key={k} className="p-linha p-suave"><span>{k + 1}ª · {data(p.vencimento)}</span><span>{reais(p.valor)}</span></div>)}
             <span className="p-suave">Depois de lançar, você pode mandar a promissória para a cliente assinar pelo celular.</span>
           </>

@@ -104,6 +104,7 @@ export class CobrancaController {
     vencimentoEntrada: dataISO.optional(),
     parcelas: z.number().int().min(1).max(60),
     primeiroVencimento: dataISO,
+    intervalo: z.enum(['mensal', 'quinzenal', 'semanal']).default('mensal'),
   });
 
   @Post('devedores/:pessoaId/acordos/simular')

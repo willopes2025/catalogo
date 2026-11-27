@@ -2984,6 +2984,8 @@ test('cobrança: carteira, terceirizada vê só a dela, contato e promessa, 2ª 
   // Acordo: entrada + 2 parcelas, com desconto (gestor pode até 50%).
   const corpo = { tituloIds: [ta1.id, ta2.id], desconto: 473, entrada: 5000, vencimentoEntrada: dia(0), parcelas: 2, primeiroVencimento: dia(30) };
   const s = await ok('POST', `/cobranca/devedores/${a.id}/acordos/simular`, corpo);
+  const quinz = await ok('POST', `/cobranca/devedores/${a.id}/acordos/simular`, { ...corpo, parcelas: 3, intervalo: 'quinzenal' });
+  assert.deepEqual(quinz.parcelas.map((p) => p.vencimento), [corpo.primeiroVencimento, ...[15, 30].map((n) => new Date(Date.parse(corpo.primeiroVencimento + 'T12:00:00Z') + n * 86400e3).toISOString().slice(0, 10))], 'parcelas de 15 em 15 dias');
   assert.equal(s.total, 16000, 'atualizado de R$ 164,73 com R$ 4,73 de desconto');
   assert.deepEqual(s.parcelas.map((p) => p.valor), [5500, 5500]);
   assert.equal((await chamar('POST', `/cobranca/devedores/${a.id}/acordos/simular`, { ...corpo, parcelas: 12 })).status, 400, 'passa do máximo de parcelas');

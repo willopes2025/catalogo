@@ -60,7 +60,7 @@ export function Devedor() {
                 </div>
               </div>
               <table className="tabela">
-                <thead><tr><th style={{ width: 28 }}></th><th>Título</th><th>Vencimento</th><th className="num">Valor</th><th className="num">Hoje</th><th>Boleto/Pix</th><th></th></tr></thead>
+                <thead><tr><th style={{ width: 28 }}><input type="checkbox" aria-label="Marcar todos" title="Marcar todos" checked={f.titulos.length > 0 && f.titulos.every((t: any) => marcados.includes(t.id))} onChange={(ev) => setMarcados(ev.target.checked ? f.titulos.map((t: any) => t.id) : [])} /></th><th>Título</th><th>Vencimento</th><th className="num">Valor</th><th className="num">Hoje</th><th>Boleto/Pix</th><th></th></tr></thead>
                 <tbody>
                   {f.titulos.map((t: any) => (
                     <tr key={t.id}>
@@ -223,8 +223,8 @@ function SegundaVia({ titulo, fechar }: { titulo: any; fechar: () => void }) {
 
 function NovoAcordo({ pessoaId, titulos, regras, asaas, fechar, feito }: { pessoaId: string; titulos: any[]; regras: any; asaas: boolean; fechar: () => void; feito: () => void }) {
   const qc = useQueryClient();
-  const [f, setF] = useState({ desconto: '', entrada: '', vencimentoEntrada: hoje(), parcelas: '3', primeiroVencimento: somarDias(30), cobranca: asaas ? 'BOLETO' : 'nenhuma', observacao: '' });
-  const corpo = () => ({ tituloIds: titulos.map((t) => t.id), desconto: f.desconto ? paraCentavos(f.desconto) : 0, entrada: f.entrada ? paraCentavos(f.entrada) : 0, vencimentoEntrada: f.entrada ? f.vencimentoEntrada : undefined, parcelas: Number(f.parcelas) || 1, primeiroVencimento: f.primeiroVencimento });
+  const [f, setF] = useState({ desconto: '', entrada: '', vencimentoEntrada: hoje(), parcelas: '3', primeiroVencimento: somarDias(30), intervalo: 'mensal', cobranca: asaas ? 'BOLETO' : 'nenhuma', observacao: '' });
+  const corpo = () => ({ tituloIds: titulos.map((t) => t.id), desconto: f.desconto ? paraCentavos(f.desconto) : 0, entrada: f.entrada ? paraCentavos(f.entrada) : 0, vencimentoEntrada: f.entrada ? f.vencimentoEntrada : undefined, parcelas: Number(f.parcelas) || 1, primeiroVencimento: f.primeiroVencimento, intervalo: f.intervalo });
   const chave = JSON.stringify(corpo());
   const sim = useQuery({ queryKey: ['cobranca', 'simular', pessoaId, chave], queryFn: () => api<any>(`/cobranca/devedores/${pessoaId}/acordos/simular`, { corpo: corpo() }), retry: false, staleTime: 0 });
   const criar = useMutation({ mutationFn: () => api<any>(`/cobranca/devedores/${pessoaId}/acordos`, { corpo: { ...corpo(), cobranca: f.cobranca, observacao: f.observacao || null } }), onSuccess: () => qc.invalidateQueries({ queryKey: ['cobranca'] }) });
@@ -250,6 +250,7 @@ function NovoAcordo({ pessoaId, titulos, regras, asaas, fechar, feito }: { pesso
           <Campo rotulo="Vencimento da entrada"><input type="date" min={hoje()} disabled={!f.entrada} value={f.vencimentoEntrada} onChange={(e) => setF({ ...f, vencimentoEntrada: e.target.value })} /></Campo>
           <Campo rotulo="Parcelas" ajuda={`Até ${regras.parcelasMax}`}><input type="number" min={1} max={regras.parcelasMax} value={f.parcelas} onChange={(e) => setF({ ...f, parcelas: e.target.value })} /></Campo>
           <Campo rotulo="1ª parcela em"><input type="date" min={hoje()} value={f.primeiroVencimento} onChange={(e) => setF({ ...f, primeiroVencimento: e.target.value })} /></Campo>
+          <Campo rotulo="Parcelas a cada"><select value={f.intervalo} onChange={(e) => setF({ ...f, intervalo: e.target.value })}><option value="mensal">1 mês</option><option value="quinzenal">15 dias</option><option value="semanal">1 semana</option></select></Campo>
           <Campo rotulo="Cobrar por" className="l2"><select value={f.cobranca} onChange={(e) => setF({ ...f, cobranca: e.target.value })}>{asaas && <option value="BOLETO">Boleto (com Pix)</option>}{asaas && <option value="PIX">Pix</option>}<option value="nenhuma">Sem boleto (recebe por fora)</option></select></Campo>
           <Campo rotulo="Observação" className="l4"><input value={f.observacao} onChange={(e) => setF({ ...f, observacao: e.target.value })} /></Campo>
         </div>

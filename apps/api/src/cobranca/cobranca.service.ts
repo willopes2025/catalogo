@@ -315,7 +315,7 @@ export class CobrancaService implements OnModuleInit, OnModuleDestroy {
     return ts;
   }
 
-  async simularAcordo(e: Escopo, pessoaId: string, d: { tituloIds: string[]; desconto: number; entrada: number; vencimentoEntrada?: string; parcelas: number; primeiroVencimento: string }): Promise<ResultadoAcordo & { descontoMaxPb: number }> {
+  async simularAcordo(e: Escopo, pessoaId: string, d: { tituloIds: string[]; desconto: number; entrada: number; vencimentoEntrada?: string; parcelas: number; primeiroVencimento: string; intervalo?: 'mensal' | 'quinzenal' | 'semanal' }): Promise<ResultadoAcordo & { descontoMaxPb: number }> {
     await this.exigirAcesso(e, pessoaId);
     const cfg = await this.config.obter();
     const ts = await this.titulosDoAcordo(pessoaId, d.tituloIds);
@@ -323,7 +323,7 @@ export class CobrancaService implements OnModuleInit, OnModuleDestroy {
     if (d.primeiroVencimento < hoje() || (d.vencimentoEntrada && d.vencimentoEntrada < hoje())) throw new BadRequestException('O vencimento não pode ser antes de hoje.');
     let r: ResultadoAcordo;
     try {
-      r = calcularAcordo({ itens: ts.map((t) => ({ valor: t.valor, vencimento: t.vencimento })), data: hoje(), regras: cfg, desconto: d.desconto, entrada: d.entrada, vencimentoEntrada: d.vencimentoEntrada, parcelas: d.parcelas, primeiroVencimento: d.primeiroVencimento });
+      r = calcularAcordo({ itens: ts.map((t) => ({ valor: t.valor, vencimento: t.vencimento })), data: hoje(), regras: cfg, desconto: d.desconto, entrada: d.entrada, vencimentoEntrada: d.vencimentoEntrada, parcelas: d.parcelas, primeiroVencimento: d.primeiroVencimento, intervalo: d.intervalo });
     } catch (err) {
       throw new BadRequestException((err as Error).message);
     }
@@ -332,7 +332,7 @@ export class CobrancaService implements OnModuleInit, OnModuleDestroy {
     return { ...r, descontoMaxPb };
   }
 
-  async criarAcordo(e: Escopo, u: UsuarioLogado | null, pessoaId: string, d: { tituloIds: string[]; desconto: number; entrada: number; vencimentoEntrada?: string; parcelas: number; primeiroVencimento: string; cobranca: 'BOLETO' | 'PIX' | 'nenhuma'; observacao?: string | null }) {
+  async criarAcordo(e: Escopo, u: UsuarioLogado | null, pessoaId: string, d: { tituloIds: string[]; desconto: number; entrada: number; vencimentoEntrada?: string; parcelas: number; primeiroVencimento: string; intervalo?: 'mensal' | 'quinzenal' | 'semanal'; cobranca: 'BOLETO' | 'PIX' | 'nenhuma'; observacao?: string | null }) {
     const r = await this.simularAcordo(e, pessoaId, d);
     const ts = await this.titulosDoAcordo(pessoaId, d.tituloIds);
     const empresaId = ts[0].empresaId;

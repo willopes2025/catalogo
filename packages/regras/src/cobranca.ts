@@ -1,5 +1,5 @@
 import { aplicarPercentual, type Centavos, type PontosBase } from './dinheiro';
-import { diasEntre, type DataISO } from './datas';
+import { diasEntre, somarDias, type DataISO } from './datas';
 
 export interface RegrasEncargos {
   /** Multa única por atraso (ex.: 200 = 2%). */
@@ -46,6 +46,16 @@ export interface PedidoAcordo {
   vencimentoEntrada?: DataISO;
   parcelas: number;
   primeiroVencimento: DataISO;
+  /** De quanto em quanto tempo vencem as parcelas (padrão: mensal, no mesmo dia do mês). */
+  intervalo?: IntervaloParcelas;
+}
+
+export type IntervaloParcelas = 'mensal' | 'quinzenal' | 'semanal';
+/** Vencimento da parcela n (0 = primeira) conforme o intervalo. */
+export function vencimentoParcela(primeiro: DataISO, n: number, intervalo: IntervaloParcelas = 'mensal'): DataISO {
+  if (intervalo === 'quinzenal') return somarDias(primeiro, 15 * n);
+  if (intervalo === 'semanal') return somarDias(primeiro, 7 * n);
+  return somarMeses(primeiro, n);
 }
 
 export interface ResultadoAcordo {
@@ -89,7 +99,7 @@ export function calcularAcordo(p: PedidoAcordo): ResultadoAcordo {
     const base = Math.floor(resto / p.parcelas);
     if (base < 100) throw new Error('Cada parcela precisa ser de pelo menos R$ 1,00.');
     const sobra = resto - base * p.parcelas;
-    for (let n = 0; n < p.parcelas; n++) parcelas.push({ numero: n + 1, valor: base + (n === p.parcelas - 1 ? sobra : 0), vencimento: somarMeses(p.primeiroVencimento, n) });
+    for (let n = 0; n < p.parcelas; n++) parcelas.push({ numero: n + 1, valor: base + (n === p.parcelas - 1 ? sobra : 0), vencimento: vencimentoParcela(p.primeiroVencimento, n, p.intervalo) });
   }
   return {
     original,
