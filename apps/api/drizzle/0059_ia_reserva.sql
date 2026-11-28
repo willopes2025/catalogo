@@ -1,0 +1,1 @@
+ALTER TABLE "crm_conversas" ADD COLUMN "ia_pausada_por_humano" boolean DEFAULT false NOT NULL;

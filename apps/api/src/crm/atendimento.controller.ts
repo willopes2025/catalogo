@@ -733,6 +733,8 @@ export class AtendimentoController {
         maxTransferencias: z.number().int().min(0).max(5).default(2),
         esperaMinS: z.number().int().min(0, 'A espera mínima não pode ser negativa').max(900, 'A espera máxima é de 15 minutos').default(atual.esperaMinS ?? 7),
         esperaMaxS: z.number().int().min(0).max(900, 'A espera máxima é de 15 minutos').default(atual.esperaMaxS ?? 7),
+        reserva: z.boolean().default(atual.reserva ?? false),
+        reservaMin: z.number().int().min(1, 'Pelo menos 1 minuto').max(120, 'No máximo 120 minutos').default(atual.reservaMin ?? 5),
         respostaAudio: z.enum(['nunca', 'espelhar', 'sempre']).default(atual.respostaAudio),
         vozProvedor: z.enum(['automatica', 'elevenlabs', 'openai']).default(atual.vozProvedor),
         vozElevenlabs: z.string().trim().regex(/^[A-Za-z0-9]{10,40}$/, 'Id de voz da ElevenLabs inválido').default(atual.vozElevenlabs),

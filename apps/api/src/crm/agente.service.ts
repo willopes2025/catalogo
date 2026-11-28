@@ -43,9 +43,15 @@ export interface ConfigAgente {
   /** Espera antes de responder, sorteada entre o mínimo e o máximo (segundos), contada da última mensagem da pessoa. */
   esperaMinS: number;
   esperaMaxS: number;
+  /**
+   * Modo reserva: dentro do horário da equipe, a IA só começa se a pessoa ficar X minutos sem resposta; e se alguém da
+   * equipe escrever, a IA para e só volta quando chegar mensagem que fique X minutos sem resposta.
+   */
+  reserva: boolean;
+  reservaMin: number;
 }
 
-const PADRAO: ConfigAgente = { ativo: false, canais: [], instrucoes: '', conhecimento: '', maxRespostas: 10, nome: '', maxTransferencias: 2, respostaAudio: 'nunca', vozProvedor: 'automatica', vozElevenlabs: 'ec54d9BmuMSN4IinPrjv', vozOpenai: 'ash', audioComTexto: false, ferramentas: FERRAMENTAS_PADRAO, memoriaClientes: true, esperaMinS: 7, esperaMaxS: 7 };
+const PADRAO: ConfigAgente = { ativo: false, canais: [], instrucoes: '', conhecimento: '', maxRespostas: 10, nome: '', maxTransferencias: 2, respostaAudio: 'nunca', vozProvedor: 'automatica', vozElevenlabs: 'ec54d9BmuMSN4IinPrjv', vozOpenai: 'ash', audioComTexto: false, ferramentas: FERRAMENTAS_PADRAO, memoriaClientes: true, esperaMinS: 7, esperaMaxS: 7, reserva: false, reservaMin: 5 };
 type Especialista = typeof iaAgentes.$inferSelect;
 type Resposta = { resposta?: string; passar?: boolean; motivo?: string; transferir?: string | null; acao?: Record<string, unknown> | null };
 const CHAVE = 'ia_agente';
@@ -82,8 +88,12 @@ export class AgenteService implements OnModuleInit, OnModuleDestroy {
         void this.avisarForaDoHorario(e.conversaId).catch((err) => this.log.warn(`Conversa ${e.conversaId}: aviso fora do horário não saiu (${(err as Error).message})`));
       }
     });
+    this.varredura = setInterval(() => void this.varrerReserva().catch((e) => this.log.warn(`Reserva: ${(e as Error).message}`)), Number(process.env.IA_RESERVA_VARREDURA_MS ?? 60_000));
+    this.varredura.unref();
   }
+  private varredura?: NodeJS.Timeout;
   onModuleDestroy() {
+    if (this.varredura) clearInterval(this.varredura);
     for (const t of this.esperando.values()) clearTimeout(t);
   }
 
@@ -110,12 +120,16 @@ export class AgenteService implements OnModuleInit, OnModuleDestroy {
     const vez = Symbol();
     this.vezes.set(conversaId, vez);
     void this.config()
-      .then((cfg) => {
+      .then(async (cfg) => {
         if (this.vezes.get(conversaId) !== vez) return;
         const doAmbiente = process.env.IA_AGENTE_ESPERA_MS;
         const min = Math.max(0, Math.min(cfg.esperaMinS ?? 7, cfg.esperaMaxS ?? 7));
         const max = Math.max(min, cfg.esperaMaxS ?? 7);
-        const espera = doAmbiente ? Number(doAmbiente) : Math.round((min + Math.random() * (max - min)) * 1000);
+        let espera = doAmbiente ? Number(doAmbiente) : Math.round((min + Math.random() * (max - min)) * 1000);
+        // Modo reserva: espera a equipe responder primeiro (a checagem final é na hora de responder).
+        const reserva = await this.esperaReserva(conversaId, cfg);
+        if (reserva !== null && this.vezes.get(conversaId) === vez) espera = Math.max(espera, reserva);
+        if (this.vezes.get(conversaId) !== vez) return;
         const t = setTimeout(() => {
           this.esperando.delete(conversaId);
           this.vezes.delete(conversaId);
@@ -127,11 +141,57 @@ export class AgenteService implements OnModuleInit, OnModuleDestroy {
       .catch((e) => this.log.warn(`Conversa ${conversaId}: ${(e as Error).message}`));
   }
 
+  /** Minutos do modo reserva em milissegundos (o teste encurta). */
+  private reservaMs(cfg: ConfigAgente) {
+    return process.env.IA_RESERVA_MS ? Number(process.env.IA_RESERVA_MS) : Math.max(1, cfg.reservaMin ?? 5) * 60_000;
+  }
+
+  /**
+   * No modo reserva, quanto ainda falta esperar antes de a IA responder (null = não precisa esperar a equipe).
+   * Espera quando alguém da equipe já está na conversa, ou quando é a primeira resposta dentro do horário da equipe
+   * (número sem horário configurado conta como "equipe disponível").
+   */
+  private async esperaReserva(conversaId: string, cfg: ConfigAgente): Promise<number | null> {
+    if (!cfg.reserva) return null;
+    const [cv] = await this.db.select().from(crmConversas).where(eq(crmConversas.id, conversaId));
+    if (!cv || cv.iaAtiva === true) return null;
+    let precisa = cv.iaPausadaPorHumano;
+    if (!precisa && cv.iaRespostas === 0) {
+      const [canal] = await this.db.select().from(crmCanais).where(eq(crmCanais.id, cv.canalId));
+      precisa = !canal || !foraDoHorario(canal);
+    }
+    if (!precisa) return null;
+    const [ultima] = await this.db.select({ direcao: crmMensagens.direcao, em: crmMensagens.criadoEm }).from(crmMensagens).where(eq(crmMensagens.conversaId, conversaId)).orderBy(desc(crmMensagens.criadoEm)).limit(1);
+    if (!ultima || ultima.direcao !== 'entrada') return null;
+    return Math.max(0, this.reservaMs(cfg) - (Date.now() - ultima.em.getTime()));
+  }
+
+  /**
+   * Rede de segurança do modo reserva (o relógio fica na memória e se perde se o sistema reiniciar): de minuto em
+   * minuto, pega as conversas cuja última mensagem é da pessoa, sem resposta há mais que o tempo da reserva.
+   */
+  private async varrerReserva() {
+    const cfg = await this.config();
+    if (!cfg.ativo || !cfg.reserva || !this.ia.texto) return;
+    const ms = this.reservaMs(cfg);
+    const r = await this.db.execute<{ id: string }>(sql`
+      select c.id from crm_conversas c
+      where (c.ia_ativa is null and c.status = 'fila' or c.ia_ativa = false and c.ia_pausada_por_humano)
+        ${cfg.canais.length ? sql`and c.canal_id in (${sql.join(cfg.canais.map((x) => sql`${x}::uuid`), sql`, `)})` : sql``}
+        and c.ultima_mensagem_em > now() - interval '6 hours'
+        and (select m.direcao from crm_mensagens m where m.conversa_id = c.id order by m.criado_em desc limit 1) = 'entrada'
+        and (select max(m.criado_em) from crm_mensagens m where m.conversa_id = c.id) < now() - (${ms} || ' milliseconds')::interval
+      limit 30`);
+    for (const { id } of r.rows) if (!this.esperando.has(id) && !this.respondendo.has(id)) this.agendar(id);
+  }
+
   /** A IA atende esta conversa agora? */
   private atende(cv: typeof crmConversas.$inferSelect, cfg: ConfigAgente) {
     if (cv.iaAtiva === true) return true; // ligada à mão ("Acionar IA")
-    if (cv.iaAtiva === false) return false; // alguém assumiu ou a IA passou a vez
-    return cfg.ativo && cv.status === 'fila' && (!cfg.canais.length || cfg.canais.includes(cv.canalId));
+    const noNumero = cfg.ativo && (!cfg.canais.length || cfg.canais.includes(cv.canalId));
+    // Alguém da equipe escreveu: no modo reserva ela pode voltar (depois da espera); senão, sai de vez.
+    if (cv.iaAtiva === false) return noNumero && cfg.reserva && cv.iaPausadaPorHumano;
+    return noNumero && cv.status === 'fila';
   }
 
   /** O que a IA recebe: quem é a empresa, como falar, o que sabe, e as regras de quando passar a vez. */
@@ -294,12 +354,16 @@ export class AgenteService implements OnModuleInit, OnModuleDestroy {
     if (!c?.canal?.ativo || c.canal.excluidoEm) return;
     const cfg = await this.config();
     if (!this.atende(c.cv, cfg)) return;
+    // Modo reserva: ainda dentro do prazo para a equipe responder? Volta a olhar quando o prazo vencer.
+    const falta = await this.esperaReserva(conversaId, cfg);
+    if (falta !== null && falta > 0) return this.agendar(conversaId);
     this.respondendo.add(conversaId);
     try {
       // Áudio que acabou de chegar: espera a transcrição para entender o que a pessoa falou.
       await this.transcricao.aguardar(conversaId);
       const mensagens = await this.historico(conversaId);
       if (mensagens.at(-1)?.role !== 'user') return; // alguém já respondeu
+      if (falta === 0) await this.nota(conversaId, `🤖 Ninguém da equipe respondeu em ${cfg.reservaMin ?? 5} min: a IA entrou (modo reserva).`).catch(() => undefined);
       const ultimoTexto = ((mensagens.at(-1)!.content as Bloco[]).filter((b) => b.type === 'text') as { text: string }[]).map((b) => b.text).join(' ');
       if (PEDIU_SAIR.test(ultimoTexto)) return this.passar(conversaId, 'Pediu para não receber mais mensagens.');
       // Responder em áudio? (sempre, ou espelhando quando o cliente mandou áudio)
@@ -409,7 +473,7 @@ export class AgenteService implements OnModuleInit, OnModuleDestroy {
 
   /** A IA sai da conversa e deixa um recado interno para a equipe. A conversa fica (ou volta) na fila. */
   private async passar(conversaId: string, motivo: string) {
-    await this.db.update(crmConversas).set({ iaAtiva: false }).where(eq(crmConversas.id, conversaId));
+    await this.db.update(crmConversas).set({ iaAtiva: false, iaPausadaPorHumano: false }).where(eq(crmConversas.id, conversaId));
     await this.db.execute(sql`update crm_conversas set status = 'fila', atendente_id = null, fila_desde = coalesce(fila_desde, now()) where id = ${conversaId} and status = 'resolvida'`);
     await this.db.insert(crmMensagens).values({ conversaId, direcao: 'interna', tipo: 'texto', texto: `🤖 A IA passou esta conversa para a equipe. ${motivo}`, status: 'interna', ia: true });
     if ((await this.config()).memoriaClientes) void this.aprendizado.atualizarMemoria(conversaId).catch(() => undefined);
@@ -525,7 +589,7 @@ export class AgenteService implements OnModuleInit, OnModuleDestroy {
 
   /** Liga ou desliga a IA nesta conversa (botão "Acionar IA"). Ligando, ela já responde se o cliente está esperando. */
   async acionar(conversaId: string, ativa: boolean) {
-    await this.db.update(crmConversas).set({ iaAtiva: ativa, ...(ativa ? { iaRespostas: 0, iaAgenteId: null, iaTransferencias: 0 } : {}) }).where(eq(crmConversas.id, conversaId));
+    await this.db.update(crmConversas).set({ iaAtiva: ativa, iaPausadaPorHumano: false, ...(ativa ? { iaRespostas: 0, iaAgenteId: null, iaTransferencias: 0 } : {}) }).where(eq(crmConversas.id, conversaId));
     if (ativa) void this.responder(conversaId).catch((e) => this.log.warn(`Conversa ${conversaId}: ${(e as Error).message}`));
     return { ok: true, iaAtiva: ativa };
   }

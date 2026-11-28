@@ -320,7 +320,7 @@ export class CanaisService implements OnModuleInit {
     // Só pega se ninguém pegou antes (dois atendentes clicando ao mesmo tempo).
     const [r] = await this.db
       .update(crmConversas)
-      .set({ status: 'atendimento', atendenteId: usuarioId, pegaEm: new Date(), naoLidas: 0, iaAtiva: false })
+      .set({ status: 'atendimento', atendenteId: usuarioId, pegaEm: new Date(), naoLidas: 0, iaAtiva: false, iaPausadaPorHumano: true })
       .where(and(eq(crmConversas.id, conversaId), sql`(${crmConversas.atendenteId} is null or ${crmConversas.status} <> 'atendimento' or ${crmConversas.atendenteId} = ${usuarioId})`))
       .returning();
     if (!r) throw new BadRequestException('Outra pessoa já pegou esta conversa.');
@@ -337,7 +337,7 @@ export class CanaisService implements OnModuleInit {
     const [r] = await this.db
       .update(crmConversas)
       // Devolvida para a fila: a IA volta a poder atender (se estiver ligada na configuração).
-      .set(para ? { status: 'atendimento', atendenteId: para, pegaEm: new Date(), iaAtiva: false } : { status: 'fila', atendenteId: null, filaDesde: new Date(), iaAtiva: null, iaRespostas: 0, iaAgenteId: null, iaTransferencias: 0 })
+      .set(para ? { status: 'atendimento', atendenteId: para, pegaEm: new Date(), iaAtiva: false, iaPausadaPorHumano: true } : { status: 'fila', atendenteId: null, filaDesde: new Date(), iaAtiva: null, iaPausadaPorHumano: false, iaRespostas: 0, iaAgenteId: null, iaTransferencias: 0 })
       .where(eq(crmConversas.id, conversaId))
       .returning();
     await this.notaNosLeads(cv.contatoId, para ? 'Conversa transferida.' : 'Conversa devolvida para a fila.', usuarioId, { para });
@@ -348,7 +348,7 @@ export class CanaisService implements OnModuleInit {
     const [cv] = await this.db.select().from(crmConversas).where(eq(crmConversas.id, conversaId));
     if (!cv) throw new NotFoundException('Conversa não encontrada.');
     if (!gestor && cv.atendenteId && cv.atendenteId !== usuarioId) throw new ForbiddenException('Esta conversa é de outro atendente.');
-    const [r] = await this.db.update(crmConversas).set({ status: 'resolvida', naoLidas: 0, iaAtiva: null, iaRespostas: 0, iaAgenteId: null, iaTransferencias: 0 }).where(eq(crmConversas.id, conversaId)).returning();
+    const [r] = await this.db.update(crmConversas).set({ status: 'resolvida', naoLidas: 0, iaAtiva: null, iaPausadaPorHumano: false, iaRespostas: 0, iaAgenteId: null, iaTransferencias: 0 }).where(eq(crmConversas.id, conversaId)).returning();
     await this.notaNosLeads(cv.contatoId, 'Atendimento resolvido.', usuarioId);
     return r;
   }
@@ -420,7 +420,7 @@ export class CanaisService implements OnModuleInit {
       // Atendente respondendo uma conversa da fila: ela passa a ser dele.
       const pegar = e.usuarioId && cv.status !== 'atendimento' ? { status: 'atendimento', atendenteId: e.usuarioId, pegaEm: new Date() } : {};
       // Uma pessoa da equipe escreveu: a IA sai desta conversa.
-      const semIa = e.usuarioId ? { iaAtiva: false } : {};
+      const semIa = e.usuarioId ? { iaAtiva: false, iaPausadaPorHumano: true } : {};
       await this.db.update(crmConversas).set({ ultimaMensagem: resumo.slice(0, 200), ultimaMensagemEm: new Date(), ...pegar, ...semIa }).where(eq(crmConversas.id, cv.id));
       await this.crm.tocarInteracao(cv.contatoId);
       return ok;
@@ -619,7 +619,7 @@ export class CanaisService implements OnModuleInit {
         naoLidas: sql`${crmConversas.naoLidas} + 1`,
         ...(voltaFila ? { status: 'fila', atendenteId: null, filaDesde: new Date() } : {}),
         // Atendimento novo: a IA pode atender de novo, mesmo que tenha passado a vez da outra vez.
-        ...(voltaFila && cv.iaAtiva === false ? { iaAtiva: null, iaRespostas: 0, iaAgenteId: null, iaTransferencias: 0 } : {}),
+        ...(voltaFila && cv.iaAtiva === false ? { iaAtiva: null, iaPausadaPorHumano: false, iaRespostas: 0, iaAgenteId: null, iaTransferencias: 0 } : {}),
         ...(cv.status === 'fila' && !cv.filaDesde ? { filaDesde: new Date() } : {}),
       })
       .where(eq(crmConversas.id, cv.id));

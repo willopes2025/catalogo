@@ -414,6 +414,13 @@
       "when": 1795881852291,
       "tag": "0058_boleto_prebaixa",
       "breakpoints": true
+    },
+    {
+      "idx": 59,
+      "version": "7",
+      "when": 1795897320768,
+      "tag": "0059_ia_reserva",
+      "breakpoints": true
     }
   ]
 }

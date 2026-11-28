@@ -625,7 +625,7 @@ function Ramais() {
 
 interface Especialista { id: string; funcao: string; nome: string; quando: string; instrucoes: string; conhecimento: string; ativo: boolean; ordem: number; canais?: string[] }
 interface OpcaoVoz { id: string; nome: string }
-interface ConfigAgente { ativo: boolean; canais: string[]; instrucoes: string; conhecimento: string; maxRespostas: number; nome: string; maxTransferencias: number; ligada: boolean; especialistas: Especialista[]; respostaAudio: 'nunca' | 'espelhar' | 'sempre'; vozProvedor: 'automatica' | 'elevenlabs' | 'openai'; vozElevenlabs: string; vozOpenai: string; audioComTexto: boolean; ferramentas: { segundaVia: boolean; promessa: boolean; promessaMaxDias: number; estoque: boolean; candidatura: boolean; comprovante: boolean; acordo: boolean; fecharAcordo: boolean }; memoriaClientes: boolean; esperaMinS?: number; esperaMaxS?: number; voz?: { disponivel: 'elevenlabs' | 'openai' | null; elevenlabs: boolean; openai: boolean; opcoes: { elevenlabs: OpcaoVoz[]; openai: OpcaoVoz[] } } }
+interface ConfigAgente { ativo: boolean; canais: string[]; instrucoes: string; conhecimento: string; maxRespostas: number; nome: string; maxTransferencias: number; ligada: boolean; especialistas: Especialista[]; respostaAudio: 'nunca' | 'espelhar' | 'sempre'; vozProvedor: 'automatica' | 'elevenlabs' | 'openai'; vozElevenlabs: string; vozOpenai: string; audioComTexto: boolean; ferramentas: { segundaVia: boolean; promessa: boolean; promessaMaxDias: number; estoque: boolean; candidatura: boolean; comprovante: boolean; acordo: boolean; fecharAcordo: boolean }; memoriaClientes: boolean; esperaMinS?: number; esperaMaxS?: number; reserva?: boolean; reservaMin?: number; voz?: { disponivel: 'elevenlabs' | 'openai' | null; elevenlabs: boolean; openai: boolean; opcoes: { elevenlabs: OpcaoVoz[]; openai: OpcaoVoz[] } } }
 
 /** O agente que atende no WhatsApp enquanto ninguém da equipe pegou a conversa. */
 function AgenteIa() {
@@ -635,7 +635,7 @@ function AgenteIa() {
   const canais = usarCanais();
   const [f, setF] = useState<ConfigAgente | null>(null);
   useEffect(() => { if (q.data && !f) setF(q.data); }, [q.data, f]);
-  const salvar = useMutation({ mutationFn: () => api<ConfigAgente>('/crm/ia-agente', { metodo: 'PUT', corpo: { ativo: f!.ativo, canais: f!.canais, instrucoes: f!.instrucoes, conhecimento: f!.conhecimento, maxRespostas: f!.maxRespostas, nome: f!.nome, maxTransferencias: f!.maxTransferencias, respostaAudio: f!.respostaAudio, vozProvedor: f!.vozProvedor, vozElevenlabs: f!.vozElevenlabs, vozOpenai: f!.vozOpenai, audioComTexto: f!.audioComTexto, ferramentas: f!.ferramentas, memoriaClientes: f!.memoriaClientes ?? true, esperaMinS: f!.esperaMinS ?? 7, esperaMaxS: f!.esperaMaxS ?? 7 } }), onSuccess: (r) => { setF({ ...f!, ...r }); qc.invalidateQueries({ queryKey: ['crm', 'ia-agente'] }); } });
+  const salvar = useMutation({ mutationFn: () => api<ConfigAgente>('/crm/ia-agente', { metodo: 'PUT', corpo: { ativo: f!.ativo, canais: f!.canais, instrucoes: f!.instrucoes, conhecimento: f!.conhecimento, maxRespostas: f!.maxRespostas, nome: f!.nome, maxTransferencias: f!.maxTransferencias, respostaAudio: f!.respostaAudio, vozProvedor: f!.vozProvedor, vozElevenlabs: f!.vozElevenlabs, vozOpenai: f!.vozOpenai, audioComTexto: f!.audioComTexto, ferramentas: f!.ferramentas, memoriaClientes: f!.memoriaClientes ?? true, esperaMinS: f!.esperaMinS ?? 7, esperaMaxS: f!.esperaMaxS ?? 7, reserva: f!.reserva ?? false, reservaMin: f!.reservaMin ?? 5 } }), onSuccess: (r) => { setF({ ...f!, ...r }); qc.invalidateQueries({ queryKey: ['crm', 'ia-agente'] }); } });
   if (q.isLoading || !f) return <Carregando />;
   if (q.error) return <Erro erro={q.error} />;
   return (
@@ -662,6 +662,12 @@ function AgenteIa() {
         <Campo rotulo="até (segundos)" className="l2" ajuda={`Ex.: de 20 até 180 = entre 20 segundos e 3 minutos. Agora: ${(f.esperaMinS ?? 7) === (f.esperaMaxS ?? 7) ? `sempre ${f.esperaMinS ?? 7} s` : `de ${f.esperaMinS ?? 7} a ${f.esperaMaxS ?? 7} s`}.`}>
           <input type="number" min={0} max={900} disabled={!admin} value={f.esperaMaxS ?? 7} onChange={(e) => setF({ ...f, esperaMaxS: Math.max(0, Math.min(900, Number(e.target.value) || 0)) })} />
         </Campo>
+        <label className="check l4"><input type="checkbox" disabled={!admin} checked={f.reserva ?? false} onChange={(e) => setF({ ...f, reserva: e.target.checked })} /> <span><b>Modo reserva: a equipe responde primeiro</b><br /><span className="muted" style={{ fontSize: 13 }}>Dentro do horário da equipe (configurado em cada número, mais abaixo), a IA só começa se a pessoa ficar sem resposta. Se alguém da equipe escrever ou assumir a conversa, a IA para, e só volta quando chegar uma mensagem que fique sem resposta pelo mesmo tempo. Fora do horário, ela responde normalmente.</span></span></label>
+        {f.reserva && (
+          <Campo rotulo="Minutos sem resposta para a IA entrar" className="l2">
+            <input type="number" min={1} max={120} disabled={!admin} value={f.reservaMin ?? 5} onChange={(e) => setF({ ...f, reservaMin: Math.max(1, Math.min(120, Number(e.target.value) || 5)) })} />
+          </Campo>
+        )}
         <Campo rotulo="Trocas de especialista por conversa" className="l2" ajuda="Passou disso, a conversa vai para a equipe (evita a IA ficar passando de um para o outro).">
           <input type="number" min={0} max={5} disabled={!admin} value={f.maxTransferencias ?? 2} onChange={(e) => setF({ ...f, maxTransferencias: Math.max(0, Math.min(5, Number(e.target.value) || 0)) })} />
         </Campo>

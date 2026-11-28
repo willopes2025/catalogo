@@ -1342,6 +1342,8 @@ export const crmConversas = pgTable(
     iaAgenteId: uuid('ia_agente_id').references((): AnyPgColumn => iaAgentes.id, { onDelete: 'set null' }),
     /** Quantas vezes a conversa passou de um especialista para outro neste atendimento. */
     iaTransferencias: integer('ia_transferencias').notNull().default(0),
+    /** A IA parou porque uma pessoa da equipe escreveu ou assumiu (no modo reserva, ela volta se a pessoa ficar sem resposta). */
+    iaPausadaPorHumano: boolean('ia_pausada_por_humano').notNull().default(false),
     /** Último aviso de "fora do horário" mandado nesta conversa (para não repetir no mesmo período). */
     foraHorarioAvisoEm: timestamp('fora_horario_aviso_em', { withTimezone: true }),
     criadoEm: criadoEm(),

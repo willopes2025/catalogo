@@ -5210,3 +5210,45 @@ test('agente: espera sorteada antes de responder (de X a Y segundos)', async () 
   assert.equal((await chamar('PUT', '/crm/ia-agente', { ativo: atual.ativo, esperaMinS: 200, esperaMaxS: 10 })).status, 400);
   await ok('PUT', '/crm/ia-agente', { ativo: atual.ativo, canais: atual.canais, esperaMinS: 7, esperaMaxS: 7 });
 });
+
+test('modo reserva: a equipe responde primeiro; a IA entra depois do prazo e para quando alguém da equipe escreve', async () => {
+  await ok('PUT', '/integracoes/ia', { valores: { ANTHROPIC_API_KEY: 'chave-claude-teste' } });
+  const c = await ok('POST', '/crm/canais', { nome: 'Reserva', tipo: 'evolution' });
+  await fetch(`${SIM}/__evo/conectar?i=${encodeURIComponent(c.config.instancia)}`);
+  const hook = (await recebidos()).filter((r) => r.caminho === '/evo/instance/create').pop().corpo.webhook.url.replace('http://localhost:3100', '');
+  let n = 0;
+  const chegar = (tel, texto) => fetch(API.replace(/\/api$/, '') + hook, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ event: 'messages.upsert', instance: c.config.instancia, data: { key: { remoteJid: `${tel}@s.whatsapp.net`, fromMe: false, id: `RS${++n}` }, pushName: 'Lead Reserva', message: { conversation: texto }, messageTimestamp: Math.floor(Date.now() / 1000) } }) });
+  const espera = (ms) => new Promise((r) => setTimeout(r, ms));
+  const conversa = async (tel) => (await ok('GET', `/crm/conversas?aba=todas&canalId=${c.id}`)).find((x) => x.telefone === tel);
+  // Cada vez que a IA entra pelo modo reserva fica uma nota (a resposta em si depende dos especialistas do teste).
+  const daIa = async (id) => (await ok('GET', `/crm/conversas/${id}/mensagens`)).mensagens.filter((m) => m.direcao === 'interna' && m.texto?.includes('modo reserva')).length;
+  const antes = await ok('GET', '/crm/ia-agente');
+  const r = await ok('PUT', '/crm/ia-agente', { ...antes, especialistas: undefined, ligada: undefined, ativo: true, canais: [c.id], reserva: true, reservaMin: 5 });
+  assert.deepEqual([r.reserva, r.reservaMin], [true, 5]);
+
+  // Número sem horário conta como equipe disponível: a IA espera o prazo antes de começar.
+  await chegar('5527933331111', 'Oi, quero revender');
+  await espera(600);
+  const cv = await conversa('5527933331111');
+  assert.equal(await daIa(cv.id), 0, 'dentro do prazo, a IA não responde');
+  await espera(1800);
+  assert.equal(await daIa(cv.id), 1, 'ninguém respondeu: a IA entrou');
+
+  // A equipe escreveu: a IA para; se a pessoa responder e ninguém responder no prazo, ela volta.
+  await ok('POST', `/crm/conversas/${cv.id}/mensagens`, { texto: 'Oi! Aqui é a Hemilly.' });
+  await chegar('5527933331111', 'Oi Hemilly, como funciona?');
+  await espera(600);
+  assert.equal(await daIa(cv.id), 1);
+  await espera(1800);
+  assert.equal(await daIa(cv.id), 2, 'mensagem ficou sem resposta: a IA voltou');
+
+  // A equipe respondeu dentro do prazo: a IA não entra.
+  await chegar('5527933331111', 'E a maleta?');
+  await espera(300);
+  await ok('POST', `/crm/conversas/${cv.id}/mensagens`, { texto: 'Te explico já!' });
+  await espera(2200);
+  assert.equal(await daIa(cv.id), 2, 'a equipe respondeu a tempo');
+
+  await ok('PUT', '/crm/ia-agente', { ...antes, especialistas: undefined, ligada: undefined });
+  await ok('DELETE', `/crm/canais/${c.id}`);
+});
