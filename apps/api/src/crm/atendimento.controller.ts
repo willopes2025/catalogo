@@ -731,6 +731,8 @@ export class AtendimentoController {
         maxRespostas: z.number().int().min(1).max(50).default(10),
         nome: z.string().trim().max(40).default(''),
         maxTransferencias: z.number().int().min(0).max(5).default(2),
+        esperaMinS: z.number().int().min(0, 'A espera mínima não pode ser negativa').max(900, 'A espera máxima é de 15 minutos').default(atual.esperaMinS ?? 7),
+        esperaMaxS: z.number().int().min(0).max(900, 'A espera máxima é de 15 minutos').default(atual.esperaMaxS ?? 7),
         respostaAudio: z.enum(['nunca', 'espelhar', 'sempre']).default(atual.respostaAudio),
         vozProvedor: z.enum(['automatica', 'elevenlabs', 'openai']).default(atual.vozProvedor),
         vozElevenlabs: z.string().trim().regex(/^[A-Za-z0-9]{10,40}$/, 'Id de voz da ElevenLabs inválido').default(atual.vozElevenlabs),
@@ -754,6 +756,7 @@ export class AtendimentoController {
     );
     if (d.respostaAudio !== 'nunca' && !this.ia.vozDisponivel) throw new BadRequestException('Para responder em áudio, cole a chave da ElevenLabs ou da OpenAI em Configurações › Integrações › Inteligência artificial.');
     if (d.ativo && !this.ia.texto) throw new BadRequestException('Cole a chave do Claude em Configurações › Integrações › Inteligência artificial antes de ligar o agente.');
+    if (d.esperaMaxS < d.esperaMinS) throw new BadRequestException('A espera máxima precisa ser maior ou igual à mínima.');
     await this.agente.salvarConfig(d);
     await this.auditoria.registrar({ usuarioId: u.id, acao: d.ativo ? 'ligar' : 'configurar', entidade: 'ia_agente', dados: { ativo: d.ativo, canais: d.canais.length, maxRespostas: d.maxRespostas } });
     return { ...d, ligada: this.ia.texto };

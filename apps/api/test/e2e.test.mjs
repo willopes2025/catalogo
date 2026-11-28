@@ -5200,3 +5200,13 @@ test('ambiente de teste da IA: responde sem mandar nada no WhatsApp e sem gravar
   if (antes !== null) assert.equal((await ok('GET', '/crm/conversas?status=todas')).length, antes, 'não cria conversa');
   assert.equal((await chamar('POST', '/crm/ia-agente/testar', { mensagens: [{ de: 'ia', texto: 'Olá' }] })).status, 400, 'precisa terminar com a mensagem da cliente');
 });
+
+test('agente: espera sorteada antes de responder (de X a Y segundos)', async () => {
+  const atual = await ok('GET', '/crm/ia-agente');
+  const r = await ok('PUT', '/crm/ia-agente', { ativo: atual.ativo, canais: atual.canais, esperaMinS: 20, esperaMaxS: 180 });
+  assert.equal(r.esperaMinS, 20);
+  assert.equal(r.esperaMaxS, 180);
+  assert.equal((await ok('GET', '/crm/ia-agente')).esperaMaxS, 180);
+  assert.equal((await chamar('PUT', '/crm/ia-agente', { ativo: atual.ativo, esperaMinS: 200, esperaMaxS: 10 })).status, 400);
+  await ok('PUT', '/crm/ia-agente', { ativo: atual.ativo, canais: atual.canais, esperaMinS: 7, esperaMaxS: 7 });
+});

@@ -40,9 +40,12 @@ export interface ConfigAgente {
   ferramentas: FerramentasAgente;
   /** Guardar um resumo do que foi conversado com cada cliente, para as próximas conversas. */
   memoriaClientes: boolean;
+  /** Espera antes de responder, sorteada entre o mínimo e o máximo (segundos), contada da última mensagem da pessoa. */
+  esperaMinS: number;
+  esperaMaxS: number;
 }
 
-const PADRAO: ConfigAgente = { ativo: false, canais: [], instrucoes: '', conhecimento: '', maxRespostas: 10, nome: '', maxTransferencias: 2, respostaAudio: 'nunca', vozProvedor: 'automatica', vozElevenlabs: 'ec54d9BmuMSN4IinPrjv', vozOpenai: 'ash', audioComTexto: false, ferramentas: FERRAMENTAS_PADRAO, memoriaClientes: true };
+const PADRAO: ConfigAgente = { ativo: false, canais: [], instrucoes: '', conhecimento: '', maxRespostas: 10, nome: '', maxTransferencias: 2, respostaAudio: 'nunca', vozProvedor: 'automatica', vozElevenlabs: 'ec54d9BmuMSN4IinPrjv', vozOpenai: 'ash', audioComTexto: false, ferramentas: FERRAMENTAS_PADRAO, memoriaClientes: true, esperaMinS: 7, esperaMaxS: 7 };
 type Especialista = typeof iaAgentes.$inferSelect;
 type Resposta = { resposta?: string; passar?: boolean; motivo?: string; transferir?: string | null; acao?: Record<string, unknown> | null };
 const CHAVE = 'ia_agente';
@@ -59,6 +62,7 @@ export class AgenteService implements OnModuleInit, OnModuleDestroy {
   /** Espera o contato terminar de digitar (várias mensagens seguidas viram uma resposta só). */
   private readonly esperando = new Map<string, NodeJS.Timeout>();
   private readonly respondendo = new Set<string>();
+  private readonly vezes = new Map<string, symbol>();
 
   constructor(
     @Inject(DB) private readonly db: Db,
@@ -94,17 +98,33 @@ export class AgenteService implements OnModuleInit, OnModuleDestroy {
     return d;
   }
 
+  /**
+   * Agenda a resposta: espera um tempo sorteado entre o mínimo e o máximo da configuração (parece gente digitando).
+   * Se a pessoa mandar outra mensagem nesse meio-tempo, o relógio recomeça e ela responde tudo de uma vez.
+   */
   private agendar(conversaId: string) {
     if (!this.ia.texto) return;
     const antes = this.esperando.get(conversaId);
     if (antes) clearTimeout(antes);
-    const espera = Number(process.env.IA_AGENTE_ESPERA_MS ?? 7000);
-    const t = setTimeout(() => {
-      this.esperando.delete(conversaId);
-      void this.responder(conversaId).catch((e) => this.log.warn(`Conversa ${conversaId}: ${(e as Error).message}`));
-    }, espera);
-    t.unref();
-    this.esperando.set(conversaId, t);
+    // Marca a vez antes de ler a configuração: mensagem que chega no meio cancela esta.
+    const vez = Symbol();
+    this.vezes.set(conversaId, vez);
+    void this.config()
+      .then((cfg) => {
+        if (this.vezes.get(conversaId) !== vez) return;
+        const doAmbiente = process.env.IA_AGENTE_ESPERA_MS;
+        const min = Math.max(0, Math.min(cfg.esperaMinS ?? 7, cfg.esperaMaxS ?? 7));
+        const max = Math.max(min, cfg.esperaMaxS ?? 7);
+        const espera = doAmbiente ? Number(doAmbiente) : Math.round((min + Math.random() * (max - min)) * 1000);
+        const t = setTimeout(() => {
+          this.esperando.delete(conversaId);
+          this.vezes.delete(conversaId);
+          void this.responder(conversaId).catch((e) => this.log.warn(`Conversa ${conversaId}: ${(e as Error).message}`));
+        }, espera);
+        t.unref();
+        this.esperando.set(conversaId, t);
+      })
+      .catch((e) => this.log.warn(`Conversa ${conversaId}: ${(e as Error).message}`));
   }
 
   /** A IA atende esta conversa agora? */
