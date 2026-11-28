@@ -13,7 +13,23 @@ const ACOES: Record<string, string> = { nenhuma: 'Só guardar as respostas', cli
 const linkPublico = (slug: string) => `${window.location.origin}/f/${slug}`;
 const copiar = async (t: string) => { try { await navigator.clipboard.writeText(t); } catch { window.prompt('Copie:', t); } };
 
+const fmtResp = (v: unknown) => (v === null || v === undefined ? '' : Array.isArray(v) ? v.join(', ') : String(v));
+/** Baixa as respostas em planilha (CSV com ; e acentos, abre direto no Excel). */
+function baixarCsv(f: { slug: string; campos: CampoForm[] }, linhas: any[]) {
+  const cab = ['Data', ...f.campos.map((c) => c.rotulo), 'Origem'];
+  const esc = (s: string) => `"${s.replace(/"/g, '""')}"`;
+  const csv = [cab, ...linhas.map((l: any) => [dataHora(l.criadoEm), ...f.campos.map((c) => fmtResp(l.respostas[c.id])), fmtResp(l.origem?.utm_campaign) || 'direto'])].map((r) => r.map((x: string) => esc(String(x))).join(';')).join('\n');
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8' }));
+  a.download = `${f.slug}-${new Date().toISOString().slice(0, 10)}.csv`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+}
+
 export function Formularios() {
+  const qc = useQueryClient();
+  const excluir = useMutation({ mutationFn: (id: string) => api<{ respostasApagadas: number }>(`/formularios/${id}`, { metodo: 'DELETE' }), onSuccess: () => qc.invalidateQueries({ queryKey: ['formularios'] }) });
+  const exportar = useMutation({ mutationFn: async (id: string) => { const r = await api<any>(`/formularios/${id}/respostas`); if (!r.linhas.length) throw new Error('Este formulário ainda não tem respostas para exportar.'); baixarCsv(r.formulario, r.linhas); } });
   const [aberto, setAberto] = useState<{ modo: 'editar' | 'respostas'; id: string | null; base?: Form } | null>(null);
   const q = useQuery({ queryKey: ['formularios'], queryFn: () => api<any[]>('/formularios') });
   const modelos = useQuery({ queryKey: ['formularios-modelos'], queryFn: () => api<any[]>('/formularios/modelos') });
@@ -31,6 +47,7 @@ export function Formularios() {
           </div>
         </div>
       )}
+      {(excluir.error || exportar.error) && <Erro erro={excluir.error ?? exportar.error} />}
       {q.isLoading ? <Carregando /> : q.error ? <Erro erro={q.error} /> : (
         <table className="tabela">
           <thead><tr><th>Formulário</th><th>O que faz</th><th className="num">Respostas</th><th>Última</th><th>Situação</th><th></th></tr></thead>
@@ -47,6 +64,8 @@ export function Formularios() {
                     <button className="botao claro pequeno" onClick={() => void copiar(linkPublico(f.slug))}>Copiar link</button>
                     <button className="botao claro pequeno" onClick={() => setAberto({ modo: 'respostas', id: f.id })}>Respostas</button>
                     {pode('formularios', 'editar') && <button className="botao claro pequeno" onClick={() => setAberto({ modo: 'editar', id: f.id })}>Editar</button>}
+                    {pode('formularios', 'exportar') && <button className="botao claro pequeno" disabled={!f.respostas || exportar.isPending} title={f.respostas ? 'Baixar as respostas em planilha' : 'Sem respostas ainda'} onClick={() => exportar.mutate(f.id)}>Exportar</button>}
+                    {pode('formularios', 'excluir') && <button className="botao claro pequeno" style={{ color: 'var(--erro)' }} disabled={excluir.isPending} onClick={() => { if (window.confirm(`Excluir o formulário "${f.titulo}"${f.respostas ? ` e as ${f.respostas} resposta(s) dele` : ''}? O link para de funcionar e não dá para desfazer. As candidaturas e clientes que ele abriu continuam no sistema.${f.respostas ? ' Se quiser guardar as respostas, exporte antes.' : ''}`)) excluir.mutate(f.id); }}>Excluir</button>}
                   </div>
                 </td>
               </tr>
@@ -133,20 +152,15 @@ function Editor({ id, base, voltar }: { id: string | null; base?: Form; voltar: 
 }
 
 function Respostas({ id, voltar }: { id: string; voltar: () => void }) {
+  const qc = useQueryClient();
   const q = useQuery({ queryKey: ['formulario-respostas', id], queryFn: () => api<any>(`/formularios/${id}/respostas`) });
+  const apagar = useMutation({ mutationFn: (rid: string) => api(`/formularios/${id}/respostas/${rid}`, { metodo: 'DELETE' }), onSuccess: () => { qc.invalidateQueries({ queryKey: ['formulario-respostas', id] }); qc.invalidateQueries({ queryKey: ['formularios'] }); } });
+  const podeExcluir = pode('formularios', 'excluir');
   if (q.isLoading) return <Carregando />;
   if (q.error) return <Erro erro={q.error} />;
   const { formulario: f, total, resumo, linhas } = q.data;
-  const fmt = (v: unknown) => (v === null || v === undefined ? '' : Array.isArray(v) ? v.join(', ') : String(v));
-  const exportar = () => {
-    const cab = ['Data', ...f.campos.map((c: CampoForm) => c.rotulo), 'Origem'];
-    const esc = (s: string) => `"${s.replace(/"/g, '""')}"`;
-    const csv = [cab, ...linhas.map((l: any) => [dataHora(l.criadoEm), ...f.campos.map((c: CampoForm) => fmt(l.respostas[c.id])), fmt(l.origem?.utm_campaign)])].map((r) => r.map((x: string) => esc(String(x))).join(';')).join('\n');
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8' }));
-    a.download = `${f.slug}.csv`;
-    a.click();
-  };
+  const fmt = fmtResp;
+  const exportar = () => baixarCsv(f, linhas);
   return (
     <>
       <Topo eb="Formulários" titulo={f.titulo} sub={`${total} resposta(s) · ${linkPublico(f.slug)}`} acoes={<><button className="botao claro" onClick={voltar}>← Voltar</button>{pode('formularios', 'exportar') && <button className="botao claro" disabled={!total} onClick={exportar}>Baixar planilha (CSV)</button>}</>} />
@@ -169,10 +183,11 @@ function Respostas({ id, voltar }: { id: string; voltar: () => void }) {
       </div>
       <div style={{ overflowX: 'auto' }}>
         <table className="tabela">
-          <thead><tr><th>Quando</th>{f.campos.map((c: CampoForm) => <th key={c.id}>{c.rotulo}</th>)}<th>Origem</th></tr></thead>
+          <thead><tr><th>Quando</th>{f.campos.map((c: CampoForm) => <th key={c.id}>{c.rotulo}</th>)}<th>Origem</th>{podeExcluir && <th />}</tr></thead>
           <tbody>
-            {linhas.map((l: any) => <tr key={l.id}><td style={{ whiteSpace: 'nowrap' }}>{dataHora(l.criadoEm)}</td>{f.campos.map((c: CampoForm) => <td key={c.id}>{fmt(l.respostas[c.id])}</td>)}<td className="muted">{fmt(l.origem?.utm_campaign) || 'direto'}</td></tr>)}
-            {!linhas.length && <tr><td colSpan={f.campos.length + 2} className="vazio">Nenhuma resposta ainda. Copie o link e divulgue.</td></tr>}
+            {linhas.map((l: any) => <tr key={l.id}><td style={{ whiteSpace: 'nowrap' }}>{dataHora(l.criadoEm)}</td>{f.campos.map((c: CampoForm) => <td key={c.id}>{fmt(l.respostas[c.id])}</td>)}<td className="muted">{fmt(l.origem?.utm_campaign) || 'direto'}</td>{podeExcluir && <td><button className="botao claro pequeno" style={{ color: 'var(--erro)' }} disabled={apagar.isPending} onClick={() => { if (window.confirm('Excluir esta resposta? Não dá para desfazer (a candidatura ou o cliente que ela abriu continua no sistema).')) apagar.mutate(l.id); }}>Excluir</button></td>}</tr>)}
+            {apagar.error && <tr><td colSpan={f.campos.length + 3}><Erro erro={apagar.error} /></td></tr>}
+            {!linhas.length && <tr><td colSpan={f.campos.length + 3} className="vazio">Nenhuma resposta ainda. Copie o link e divulgue.</td></tr>}
           </tbody>
         </table>
       </div>

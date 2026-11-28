@@ -5174,3 +5174,19 @@ test('número: horário da equipe e especialistas; pedidos por período; boleto 
   const fontes = (await ok('GET', '/scorecard/regras')).fontes.map((f) => f.chave);
   for (const f of ['pedidos_ativos', 'renovacoes', 'churn', 'churn_percentual']) assert.ok(fontes.includes(f), f);
 });
+
+test('formulários: excluir uma resposta e o formulário inteiro', async () => {
+  const f = await ok('POST', '/formularios', { titulo: 'Teste excluir E2E', descricao: null, campos: [{ id: 'nota', tipo: 'nota', rotulo: 'Nota', obrigatorio: true }], acao: 'nenhuma', mensagemFinal: null, consentimento: null });
+  const salvo = token;
+  token = '';
+  await ok('POST', `/publico/formularios/${f.slug}`, { respostas: { nota: 9 } });
+  await ok('POST', `/publico/formularios/${f.slug}`, { respostas: { nota: 3 } });
+  token = salvo;
+  const r = await ok('GET', `/formularios/${f.id}/respostas`);
+  assert.equal(r.total, 2);
+  await ok('DELETE', `/formularios/${f.id}/respostas/${r.linhas[0].id}`);
+  assert.equal((await ok('GET', `/formularios/${f.id}/respostas`)).total, 1);
+  assert.equal((await ok('DELETE', `/formularios/${f.id}`)).respostasApagadas, 1);
+  assert.equal((await chamar('GET', `/publico/formularios/${f.slug}`)).status, 404);
+  assert.ok(!(await ok('GET', '/formularios')).some((x) => x.id === f.id));
+});

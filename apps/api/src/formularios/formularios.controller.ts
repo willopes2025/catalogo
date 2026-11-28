@@ -1,4 +1,4 @@
-import { BadRequestException, Body, Controller, Get, Inject, Logger, NotFoundException, Param, ParseUUIDPipe, Patch, Post, Query, Req } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Delete, Get, Inject, Logger, NotFoundException, Param, ParseUUIDPipe, Patch, Post, Query, Req } from '@nestjs/common';
 import type { Request } from 'express';
 import { and, desc, eq, or, sql } from 'drizzle-orm';
 import { z } from 'zod';
@@ -112,6 +112,27 @@ export class FormulariosController {
     const [f] = await this.db.update(formularios).set({ ...d, slug, atualizadoEm: new Date() }).where(eq(formularios.id, id)).returning();
     await this.auditoria.registrar({ usuarioId: u.id, acao: 'editar', entidade: 'formulario', entidadeId: id });
     return f;
+  }
+
+  /** Exclui o formulário e as respostas dele (as candidaturas e clientes que ele abriu continuam no sistema). */
+  @Delete('formularios/:id')
+  @Permissao('formularios', 'excluir')
+  async excluir(@Usuario() u: UsuarioLogado, @Param('id', ParseUUIDPipe) id: string) {
+    const f = await this.obter(id);
+    const [{ n }] = await this.db.select({ n: sql<number>`count(*)::int` }).from(formularioRespostas).where(eq(formularioRespostas.formularioId, id));
+    await this.db.delete(formularios).where(eq(formularios.id, id));
+    await this.auditoria.registrar({ usuarioId: u.id, acao: 'excluir', entidade: 'formulario', entidadeId: id, dados: { titulo: f.titulo, slug: f.slug, respostas: n } });
+    return { ok: true, respostasApagadas: n };
+  }
+
+  /** Exclui uma resposta (ex.: teste ou duplicada). */
+  @Delete('formularios/:id/respostas/:respostaId')
+  @Permissao('formularios', 'excluir')
+  async excluirResposta(@Usuario() u: UsuarioLogado, @Param('id', ParseUUIDPipe) id: string, @Param('respostaId', ParseUUIDPipe) respostaId: string) {
+    const r = await this.db.delete(formularioRespostas).where(and(eq(formularioRespostas.id, respostaId), eq(formularioRespostas.formularioId, id))).returning({ id: formularioRespostas.id });
+    if (!r.length) throw new NotFoundException('Resposta não encontrada.');
+    await this.auditoria.registrar({ usuarioId: u.id, acao: 'excluir', entidade: 'formulario_resposta', entidadeId: respostaId, dados: { formularioId: id } });
+    return { ok: true };
   }
 
   /** Respostas com o resumo das perguntas de escolha e de nota (NPS). */

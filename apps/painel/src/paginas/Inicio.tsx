@@ -164,7 +164,7 @@ export function Inicio() {
           <div className="eb">Início · {dataLonga}</div>
           <h1><span>{saudacao()}{nome ? `, ${nome}` : ''}</span></h1>
         </div>
-        {pode('maletas', 'criar') && <Link className="botao" to="/maletas/nova">Nova maleta</Link>}
+        {pode('maletas', 'criar') && <Link className="botao" to="/maletas/nova">Novo pedido</Link>}
       </div>
       <AvisoImplantacao />
 

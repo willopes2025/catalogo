@@ -67,6 +67,15 @@ function Protegido({ children }: { children: React.ReactNode }) {
   return lerSessao() ? <>{children}</> : <Navigate to="/entrar" replace />;
 }
 
+/**
+ * Decide na hora (e não quando o sistema abre): quem pode ver o Início vê o painel; quem não pode vai para a
+ * Cobrança ou para o Meu ponto. Antes era decidido uma vez só, e quem abria a tela de login caía sempre no ponto.
+ */
+function PaginaInicial() {
+  if (pode('inicio', 'ver')) return <Inicio />;
+  return <Navigate to={pode('cobranca', 'ver') ? '/cobranca' : '/meu-ponto'} replace />;
+}
+
 ReactDOM.createRoot(document.getElementById('raiz')!).render(
   <React.StrictMode>
     <QueryClientProvider client={cliente}>
@@ -94,7 +103,7 @@ ReactDOM.createRoot(document.getElementById('raiz')!).render(
               </Protegido>
             }
           >
-            <Route index element={pode('inicio', 'ver') ? <Inicio /> : <Navigate to={pode('cobranca', 'ver') ? '/cobranca' : '/meu-ponto'} replace />} />
+            <Route index element={<PaginaInicial />} />
             <Route path="assistente" element={<Assistente />} />
             <Route path="meu-ponto" element={<MeuPonto />} />
             <Route path="agenda" element={<Agenda />} />
