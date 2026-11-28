@@ -707,7 +707,7 @@ export class AtendimentoController {
         horario: z.enum(['agora', 'dentro', 'fora']).optional(),
         agenteId: uuid.nullable().optional(),
         transferencias: z.number().int().min(0).max(10).optional(),
-        config: z.object({ instrucoes: z.string().max(20000).optional(), conhecimento: z.string().max(60000).optional(), nome: z.string().max(40).optional(), maxTransferencias: z.number().int().min(0).max(5).optional() }).optional(),
+        config: z.object({ instrucoes: z.string().max(20000).optional(), conhecimento: z.string().max(100000).optional(), nome: z.string().max(40).optional(), maxTransferencias: z.number().int().min(0).max(5).optional() }).optional(),
       }),
       body,
     );
@@ -726,8 +726,8 @@ export class AtendimentoController {
       z.object({
         ativo: z.boolean(),
         canais: z.array(uuid).max(50).default([]),
-        instrucoes: z.string().max(6000).default(''),
-        conhecimento: z.string().max(20000).default(''),
+        instrucoes: z.string().max(20000).default(''),
+        conhecimento: z.string().max(100000).default(''),
         maxRespostas: z.number().int().min(1).max(50).default(10),
         nome: z.string().trim().max(40).default(''),
         maxTransferencias: z.number().int().min(0).max(5).default(2),
@@ -780,8 +780,8 @@ export class AtendimentoController {
     funcao: z.string().trim().toLowerCase().regex(/^[a-z][a-z0-9_]{1,29}$/, 'Use só letras minúsculas, sem espaço (ex.: vendas)'),
     nome: z.string().trim().min(2, 'Dê um nome ao especialista').max(60),
     quando: z.string().trim().min(10, 'Explique quando a recepção deve passar para ele').max(600),
-    instrucoes: z.string().max(6000).default(''),
-    conhecimento: z.string().max(20000).default(''),
+    instrucoes: z.string().max(20000).default(''),
+    conhecimento: z.string().max(100000).default(''),
     ativo: z.boolean().default(true),
     ordem: z.number().int().min(0).max(100).default(0),
     /** Números em que atende (vazio = todos). */

@@ -660,10 +660,10 @@ function AgenteIa() {
           <input type="number" min={0} max={5} disabled={!admin} value={f.maxTransferencias ?? 2} onChange={(e) => setF({ ...f, maxTransferencias: Math.max(0, Math.min(5, Number(e.target.value) || 0)) })} />
         </Campo>
         <Campo rotulo="Como ela deve atender (vale para todos)" className="l4" ajuda="O tom, o objetivo e o que perguntar. Ex.: trate por você; descubra se a pessoa quer comprar ou ser revendedora; para revendedora, peça a cidade.">
-          <textarea rows={5} maxLength={6000} disabled={!admin} value={f.instrucoes} onChange={(e) => setF({ ...f, instrucoes: e.target.value })} />
+          <textarea rows={5} maxLength={20000} disabled={!admin} value={f.instrucoes} onChange={(e) => setF({ ...f, instrucoes: e.target.value })} />
         </Campo>
         <Campo rotulo="O que ela precisa saber sobre a empresa (vale para todos)" className="l4" ajuda="Endereço, horário, formas de pagamento, como funciona a revenda, prazo de entrega, perguntas frequentes. Ela só afirma o que estiver escrito aqui; o resto ela diz que vai confirmar com a equipe.">
-          <textarea rows={10} maxLength={20000} disabled={!admin} value={f.conhecimento} onChange={(e) => setF({ ...f, conhecimento: e.target.value })} />
+          <textarea rows={10} maxLength={100000} disabled={!admin} value={f.conhecimento} onChange={(e) => setF({ ...f, conhecimento: e.target.value })} />
         </Campo>
         <Campo rotulo="Respostas seguidas antes de passar para a equipe" className="l2" ajuda="Evita conversa em círculo. Chegando ao limite, a conversa fica na fila com um recado.">
           <input type="number" min={1} max={50} disabled={!admin} value={f.maxRespostas} onChange={(e) => setF({ ...f, maxRespostas: Math.max(1, Math.min(50, Number(e.target.value) || 1)) })} />
@@ -1022,8 +1022,8 @@ function Especialistas({ lista, admin }: { lista: Especialista[]; admin: boolean
               <Campo rotulo="Chave" erro={erros.funcao} ajuda="Minúsculas, sem espaço." ><input value={editar.funcao ?? ''} onChange={(ev) => setEditar({ ...editar, funcao: ev.target.value.toLowerCase().replace(/[^a-z0-9_]/g, '') })} placeholder="posvenda" /></Campo>
               <Campo rotulo="Ordem"><input type="number" min={0} max={100} value={editar.ordem ?? 0} onChange={(ev) => setEditar({ ...editar, ordem: Number(ev.target.value) })} /></Campo>
               <Campo rotulo="Quando a recepção passa para ele" erro={erros.quando} className="l4" ajuda="O assunto, com exemplos. É o que a recepção lê para decidir."><textarea rows={3} maxLength={600} value={editar.quando ?? ''} onChange={(ev) => setEditar({ ...editar, quando: ev.target.value })} placeholder="Ex.: troca, defeito ou garantia de peça já comprada." /></Campo>
-              <Campo rotulo="Como atender este assunto" className="l4"><textarea rows={5} maxLength={6000} value={editar.instrucoes ?? ''} onChange={(ev) => setEditar({ ...editar, instrucoes: ev.target.value })} /></Campo>
-              <Campo rotulo="O que ele precisa saber deste assunto" className="l4" ajuda="Só o que é deste assunto (o conhecimento geral já vai junto)."><textarea rows={6} maxLength={20000} value={editar.conhecimento ?? ''} onChange={(ev) => setEditar({ ...editar, conhecimento: ev.target.value })} /></Campo>
+              <Campo rotulo="Como atender este assunto" className="l4"><textarea rows={5} maxLength={20000} value={editar.instrucoes ?? ''} onChange={(ev) => setEditar({ ...editar, instrucoes: ev.target.value })} /></Campo>
+              <Campo rotulo="O que ele precisa saber deste assunto" className="l4" ajuda="Só o que é deste assunto (o conhecimento geral já vai junto)."><textarea rows={6} maxLength={100000} value={editar.conhecimento ?? ''} onChange={(ev) => setEditar({ ...editar, conhecimento: ev.target.value })} /></Campo>
               <div className="l4">
                 <label className="muted" style={{ fontSize: 13, fontWeight: 600 }}>Atende em quais números (nenhum marcado = todos)</label>
                 <div className="flex" style={{ gap: 12, flexWrap: 'wrap', marginTop: 4 }}>

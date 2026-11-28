@@ -8,6 +8,11 @@ import { Abas, Campo, Carregando, Erro, Topo } from '../componentes/ui';
 import './assistente.css';
 
 interface AnexoInfo { id: string; nome: string; mime: string }
+/** Acima disso, o texto colado vira anexo; a mensagem aceita até LIMITE_TEXTO caracteres. */
+const COLAR_COMO_ANEXO = 3000;
+const LIMITE_TEXTO = 8000;
+const textoComoArquivo = (t: string) => new File([t], `texto-colado-${new Date().toLocaleTimeString('pt-BR').replace(/:/g, '')}.txt`, { type: 'text/plain' });
+
 interface Mensagem { id: string; papel: 'user' | 'assistant'; texto: string; fala: string | null; origem: string | null; criadoEm: string; anexos: AnexoInfo[] }
 interface Pendente { chave: string; nome: string; mime: string; tamanho: number; previa: string | null; id?: string; leitura?: string; erro?: string }
 
@@ -290,6 +295,12 @@ function Chat({ id, estado, aoApagar }: { id: string; estado: Estado; aoApagar: 
   const prontos = pendentes.filter((p) => p.id).map((p) => p.id!);
   const mandar = (t: string, origem: 'texto' | 'voz') => {
     if ((!t.trim() && !prontos.length) || s.data?.ocupada || enviandoAnexo) return;
+    // Texto muito longo (passou do limite da mensagem): vira um arquivo anexado, como no Claude.
+    if (t.trim().length > LIMITE_TEXTO) {
+      adicionar([textoComoArquivo(t.trim())]);
+      setTexto('');
+      return;
+    }
     enviar.mutate({ texto: t.trim(), origem, anexos: prontos });
   };
 
@@ -401,6 +412,13 @@ function Chat({ id, estado, aoApagar }: { id: string; estado: Estado; aoApagar: 
             if (arquivos.length) {
               e.preventDefault();
               adicionar(arquivos);
+              return;
+            }
+            // Texto grande colado (Ctrl+V) vira um anexo .txt, como no Claude.
+            const colado = e.clipboardData.getData('text/plain');
+            if (colado.length > COLAR_COMO_ANEXO) {
+              e.preventDefault();
+              adicionar([textoComoArquivo(colado)]);
             }
           }}
           rows={2}
