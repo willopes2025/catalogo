@@ -1,3 +1,4 @@
+import { AgendaService } from '../agenda/agenda.service';
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { and, asc, desc, eq, gte, inArray, or, sql } from 'drizzle-orm';
 import { DB, type Db } from '../comum/db.module';
@@ -29,8 +30,14 @@ export interface FerramentasAgente {
   acordo: boolean;
   /** Fechar sozinha o acordo que a pessoa aceitou (dentro das regras). Desligado: anota a proposta aceita e passa para a equipe. */
   fecharAcordo: boolean;
+  /** Marcar na agenda uma conversa (ligação/vídeo) com a pessoa, no horário que ela escolher. */
+  agendar?: boolean;
+  /** Em nome de quem fica o compromisso (usuária da equipe). Sem ninguém, a IA passa para a equipe. */
+  agendaResponsavelId?: string | null;
+  /** Tipo do compromisso (entrevista de candidata, reunião…). */
+  agendaTipo?: 'entrevista' | 'reuniao' | 'outro';
 }
-export const FERRAMENTAS_PADRAO: FerramentasAgente = { segundaVia: true, promessa: true, promessaMaxDias: 10, estoque: true, candidatura: true, comprovante: true, acordo: true, fecharAcordo: false };
+export const FERRAMENTAS_PADRAO: FerramentasAgente = { segundaVia: true, promessa: true, promessaMaxDias: 10, estoque: true, candidatura: true, comprovante: true, acordo: true, fecharAcordo: false, agendar: false, agendaResponsavelId: null, agendaTipo: 'entrevista' };
 
 type Contato = typeof crmContatos.$inferSelect;
 export interface ResultadoFerramenta {
@@ -62,6 +69,7 @@ export class FerramentasAgenteService {
     private readonly cobranca: CobrancaService,
     private readonly cobrancaConfig: CobrancaConfigService,
     private readonly pix: PixRecebidosService,
+    private readonly agenda: AgendaService,
   ) {}
 
   /** A IA cobra como um cobrador da casa: sem carteira restrita e com o limite de desconto do cobrador. */
@@ -95,6 +103,7 @@ export class FerramentasAgenteService {
     if (contato.pessoaId && cfg.acordo) f.push(`- {"ferramenta": "aceitar_acordo", "parcelas": mesmo número da simulação aceita, "entrada": mesma entrada ou null, "forma": "pix" ou "boleto"}: a pessoa disse com clareza que aceita a proposta simulada. ${cfg.fecharAcordo ? 'O acordo é fechado e os links de pagamento são gerados.' : 'A proposta fica anotada e a equipe fecha o acordo: depois de usar, avise que a equipe vai confirmar e passe a conversa (passar = true).'}`);
     if (cfg.estoque) f.push('- {"ferramenta": "consultar_estoque", "busca": "o que a pessoa procura"}: diz se a peça existe, o preço e se há em estoque. Só fale de preço e disponibilidade com o que esta ferramenta devolver.');
     if (cfg.candidatura) f.push('- {"ferramenta": "registrar_candidatura", "nome": "nome completo", "cidade": "...", "uf": "..", "modelo": "consignado", "revenda", "afiliado" ou "nao_sei", "experiencia": "se já vendeu, em poucas palavras"}: registra quem quer ser revendedora. Só use depois de a pessoa dizer nome completo e cidade e confirmar que quer se candidatar.');
+    if (cfg.agendar && cfg.agendaResponsavelId) f.push(`- {"ferramenta": "agendar_conversa", "inicio": "AAAA-MM-DDTHH:MM" (horário de Brasília), "assunto": "em poucas palavras"}: marca na agenda da equipe uma conversa com a pessoa (ligação ou vídeo, ${cfg.agendaTipo === 'reuniao' ? 'reunião' : cfg.agendaTipo === 'outro' ? 'conversa' : 'entrevista'}). Antes, combine o dia e a hora com ela e confirme. Se o horário bater com outro compromisso, a ferramenta avisa: ofereça outro. Hoje é ${new Date(Date.now() - 3 * 3600_000).toISOString().slice(0, 10)}.`);
     if (!f.length) return '';
     return [
       'FERRAMENTAS: para consultar ou fazer algo no sistema, devolva no JSON o campo "acao" com a ferramenta (e "resposta" vazia). O sistema executa e devolve o resultado; aí você responde ao cliente. Uma ferramenta por vez.',
@@ -127,10 +136,29 @@ export class FerramentasAgenteService {
       if (nome === 'aceitar_acordo' && cfg.acordo) return await this.aceitarAcordo(cfg, contato, acao);
       if (nome === 'consultar_estoque' && cfg.estoque) return await this.consultarEstoque(acao);
       if (nome === 'registrar_candidatura' && cfg.candidatura) return await this.registrarCandidatura(contato, conversaId, acao);
+      if (nome === 'agendar_conversa' && cfg.agendar && cfg.agendaResponsavelId) return await this.agendarConversa(cfg, contato, acao);
       return { texto: `A ferramenta "${nome}" não existe ou está desligada. Responda sem ela ou passe para a equipe.` };
     } catch (e) {
       this.log.warn(`Conversa ${conversaId}: ferramenta ${nome} falhou: ${(e as Error).message}`);
       return { texto: `Não deu certo: ${(e as Error).message.slice(0, 200)} Não invente o resultado; diga que alguém da equipe vai resolver e passe a conversa.`, nota: `🤖 A IA tentou "${nome}" e não deu certo: ${(e as Error).message.slice(0, 200)}` };
+    }
+  }
+
+  /** Marca a conversa na agenda (com lembrete e aviso pelo WhatsApp para a pessoa, como a equipe faria). */
+  private async agendarConversa(cfg: FerramentasAgente, contato: Contato, acao: Record<string, unknown>): Promise<ResultadoFerramenta> {
+    const quando = txt(acao.inicio, 20);
+    if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(quando)) return { texto: 'Diga o dia e a hora no formato AAAA-MM-DDTHH:MM.' };
+    const inicio = new Date(`${quando}:00-03:00`);
+    if (Number.isNaN(inicio.getTime()) || inicio.getTime() < Date.now()) return { texto: 'Esse horário já passou ou é inválido. Combine outro com a pessoa.' };
+    const [lead] = await this.crm.leadsAbertosDoContato(contato.id);
+    const tipo = cfg.agendaTipo ?? 'entrevista';
+    try {
+      const c = await this.agenda.criar({ tipo, titulo: `${txt(acao.assunto, 80) || (tipo === 'entrevista' ? 'Conversa sobre revenda' : 'Conversa')} · ${contato.nome}`, inicio, duracaoMin: 30, online: true, responsavelId: cfg.agendaResponsavelId!, pessoaId: contato.pessoaId ?? null, leadId: lead?.id ?? null, convidadoNome: contato.nome, convidadoTelefone: contato.telefone, observacao: 'Marcado pela IA no WhatsApp.', avisar: true }, cfg.agendaResponsavelId!);
+      const dia = inicio.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo', weekday: 'long', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+      return { texto: `Marcado: ${dia}${c.link ? `, link da chamada ${c.link}` : ''}. A pessoa recebe a confirmação e o lembrete pelo WhatsApp. Confirme com ela de forma simples.`, nota: `🤖 A IA marcou na agenda: ${c.titulo} (${dia}).` };
+    } catch (e) {
+      const msg = (e as { response?: { mensagem?: string } }).response?.mensagem ?? (e as Error).message;
+      return { texto: `Não deu para marcar: ${msg} Ofereça outro horário.` };
     }
   }
 

@@ -2264,6 +2264,10 @@ export const assistenteSessoes = pgTable(
       .notNull()
       .references(() => usuarios.id, { onDelete: 'cascade' }),
     titulo: text('titulo').notNull().default('Nova conversa'),
+    /** A pessoa deu o nome: a IA não troca mais o título. */
+    tituloManual: boolean('titulo_manual').notNull().default(false),
+    /** Fixada no topo da lista. */
+    fixadaEm: timestamp('fixada_em', { withTimezone: true }),
     /** O assistente está trabalhando nesta conversa agora (a tela acompanha). */
     ocupada: boolean('ocupada').notNull().default(false),
     /** perguntar = ações que mandam, cobram ou alteram esperam confirmação; automatico = executa direto. */

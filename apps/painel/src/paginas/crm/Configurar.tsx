@@ -625,7 +625,7 @@ function Ramais() {
 
 interface Especialista { id: string; funcao: string; nome: string; quando: string; instrucoes: string; conhecimento: string; ativo: boolean; ordem: number; canais?: string[] }
 interface OpcaoVoz { id: string; nome: string }
-interface ConfigAgente { ativo: boolean; canais: string[]; instrucoes: string; conhecimento: string; maxRespostas: number; nome: string; maxTransferencias: number; ligada: boolean; especialistas: Especialista[]; respostaAudio: 'nunca' | 'espelhar' | 'sempre'; vozProvedor: 'automatica' | 'elevenlabs' | 'openai'; vozElevenlabs: string; vozOpenai: string; audioComTexto: boolean; ferramentas: { segundaVia: boolean; promessa: boolean; promessaMaxDias: number; estoque: boolean; candidatura: boolean; comprovante: boolean; acordo: boolean; fecharAcordo: boolean }; memoriaClientes: boolean; esperaMinS?: number; esperaMaxS?: number; reserva?: boolean; reservaMin?: number; voz?: { disponivel: 'elevenlabs' | 'openai' | null; elevenlabs: boolean; openai: boolean; opcoes: { elevenlabs: OpcaoVoz[]; openai: OpcaoVoz[] } } }
+interface ConfigAgente { ativo: boolean; canais: string[]; instrucoes: string; conhecimento: string; maxRespostas: number; nome: string; maxTransferencias: number; ligada: boolean; especialistas: Especialista[]; respostaAudio: 'nunca' | 'espelhar' | 'sempre'; vozProvedor: 'automatica' | 'elevenlabs' | 'openai'; vozElevenlabs: string; vozOpenai: string; audioComTexto: boolean; ferramentas: { segundaVia: boolean; promessa: boolean; promessaMaxDias: number; estoque: boolean; candidatura: boolean; comprovante: boolean; acordo: boolean; fecharAcordo: boolean; agendar?: boolean; agendaResponsavelId?: string | null; agendaTipo?: 'entrevista' | 'reuniao' | 'outro' }; memoriaClientes: boolean; esperaMinS?: number; esperaMaxS?: number; reserva?: boolean; reservaMin?: number; voz?: { disponivel: 'elevenlabs' | 'openai' | null; elevenlabs: boolean; openai: boolean; opcoes: { elevenlabs: OpcaoVoz[]; openai: OpcaoVoz[] } } }
 
 /** O agente que atende no WhatsApp enquanto ninguém da equipe pegou a conversa. */
 function AgenteIa() {
@@ -685,6 +685,8 @@ function AgenteIa() {
         {([['segundaVia', 'Dizer as parcelas em aberto com o valor atualizado e mandar a 2ª via ou um Pix novo (vencida sai com multa e juros)'], ['promessa', 'Anotar a promessa de pagamento na Cobrança'], ['comprovante', 'Receber o comprovante: conferir valor, data e nome e deixar para a equipe dar baixa (Cobrança › Comprovantes)'], ['acordo', 'Propor acordo dentro das regras da Cobrança (à vista com o desconto máximo do cobrador, ou parcelado até o máximo de parcelas)'], ['fecharAcordo', 'Fechar sozinha o acordo que a pessoa aceitou (desligado: anota a proposta e passa para a equipe fechar)'], ['estoque', 'Consultar peça, preço e se há em estoque'], ['candidatura', 'Registrar quem quer ser revendedora no recrutamento']] as const).map(([k, rotulo]) => (
           <label key={k} className="check l4"><input type="checkbox" disabled={!admin || (k === 'fecharAcordo' && !f.ferramentas?.acordo)} checked={f.ferramentas?.[k] ?? k !== 'fecharAcordo'} onChange={(e) => setF({ ...f, ferramentas: { ...f.ferramentas, [k]: e.target.checked } })} /> {rotulo}</label>
         ))}
+        <label className="check l4"><input type="checkbox" disabled={!admin} checked={f.ferramentas?.agendar ?? false} onChange={(e) => setF({ ...f, ferramentas: { ...f.ferramentas, agendar: e.target.checked } })} /> Marcar na agenda uma conversa (ligação ou vídeo) no horário que a pessoa escolher, com confirmação e lembrete pelo WhatsApp</label>
+        {f.ferramentas?.agendar && <AgendaDaIa f={f} setF={setF} admin={admin} />}
         <Campo rotulo="Promessa: até quantos dias à frente" className="l2" ajuda="Prazo maior que isso ela passa para a equipe.">
           <input type="number" min={1} max={60} disabled={!admin || !f.ferramentas?.promessa} value={f.ferramentas?.promessaMaxDias ?? 10} onChange={(e) => setF({ ...f, ferramentas: { ...f.ferramentas, promessaMaxDias: Math.max(1, Math.min(60, Number(e.target.value) || 1)) } })} />
         </Campo>
@@ -773,6 +775,28 @@ function AudioDoAgente({ f, setF, admin }: { f: ConfigAgente; setF: (c: ConfigAg
           {erro != null && <div className="l4"><Erro erro={erro} /></div>}
         </>
       )}
+    </>
+  );
+}
+
+/** Em nome de quem a IA marca as conversas na agenda, e o tipo do compromisso. */
+function AgendaDaIa({ f, setF, admin }: { f: ConfigAgente; setF: (c: ConfigAgente) => void; admin: boolean }) {
+  const usuarios = usarUsuariosDoCrm();
+  return (
+    <>
+      <Campo rotulo="Na agenda de quem" className="l2" ajuda="O compromisso fica com esta pessoa (os horários dela que já estão ocupados não são oferecidos).">
+        <select disabled={!admin} value={f.ferramentas.agendaResponsavelId ?? ''} onChange={(e) => setF({ ...f, ferramentas: { ...f.ferramentas, agendaResponsavelId: e.target.value || null } })}>
+          <option value="">Escolha…</option>
+          {usuarios.data?.map((u: { id: string; nome: string }) => <option key={u.id} value={u.id}>{u.nome}</option>)}
+        </select>
+      </Campo>
+      <Campo rotulo="Tipo" className="l2">
+        <select disabled={!admin} value={f.ferramentas.agendaTipo ?? 'entrevista'} onChange={(e) => setF({ ...f, ferramentas: { ...f.ferramentas, agendaTipo: e.target.value as 'entrevista' } })}>
+          <option value="entrevista">Entrevista de candidata</option>
+          <option value="reuniao">Reunião</option>
+          <option value="outro">Outro</option>
+        </select>
+      </Campo>
     </>
   );
 }

@@ -102,3 +102,10 @@
 
 /* Frase de andamento entre ferramentas ("deixa eu ver…"): discreta, a resposta final vem depois. */
 .assistente .fala.dele.passo { background: transparent; border: 1px dashed var(--linha); color: var(--suave, #7a7166); font-size: 13px; padding: 6px 10px; }
+
+/* Fixar e renomear (aparecem ao passar o mouse; o alfinete fica visível quando fixada) */
+.assistente-item .assistente-acoes-item { position: absolute; bottom: 4px; right: 4px; display: flex; gap: 2px; -webkit-line-clamp: unset; }
+.assistente-mini { border: 0; background: none; cursor: pointer; font-size: 13px; opacity: 0; padding: 3px; border-radius: 6px; }
+.assistente-item:hover .assistente-mini, .assistente-item.ativo .assistente-mini, .assistente-mini:focus, .assistente-mini.ligado { opacity: 0.75; }
+.assistente-mini:hover { opacity: 1 !important; background: var(--creme-2); }
+@media (hover: none) { .assistente-mini { opacity: 0.6; } }

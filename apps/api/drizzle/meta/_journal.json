@@ -421,6 +421,13 @@
       "when": 1795897320768,
       "tag": "0059_ia_reserva",
       "breakpoints": true
+    },
+    {
+      "idx": 60,
+      "version": "7",
+      "when": 1795898296107,
+      "tag": "0060_assistente_fixar",
+      "breakpoints": true
     }
   ]
 }

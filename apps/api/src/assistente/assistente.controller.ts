@@ -86,7 +86,9 @@ export class AssistenteController {
   @Patch('sessoes/:id')
   @Permissao('assistente', 'ver')
   mudarSessao(@Usuario() u: UsuarioLogado, @Param('id', ParseUUIDPipe) id: string, @Body() body: unknown) {
-    const d = validar(z.object({ aprovacao: z.enum(['perguntar', 'automatico']) }), body);
+    const d = validar(z.object({ aprovacao: z.enum(['perguntar', 'automatico']).optional(), titulo: z.string().trim().min(1, 'Dê um nome').max(120).optional(), fixada: z.boolean().optional() }), body);
+    if (d.titulo !== undefined || d.fixada !== undefined) return this.assistente.editarSessao(u, id, d);
+    if (!d.aprovacao) throw new BadRequestException('Nada para mudar.');
     return this.assistente.mudarAprovacao(u, id, d.aprovacao);
   }
 

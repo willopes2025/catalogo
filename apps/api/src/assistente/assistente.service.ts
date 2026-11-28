@@ -305,7 +305,23 @@ export class AssistenteService implements OnModuleInit, OnModuleDestroy {
   // ───────────── Conversas ─────────────
 
   sessoes(u: UsuarioLogado) {
-    return this.db.select({ id: assistenteSessoes.id, titulo: assistenteSessoes.titulo, ocupada: assistenteSessoes.ocupada, atualizadoEm: assistenteSessoes.atualizadoEm }).from(assistenteSessoes).where(eq(assistenteSessoes.usuarioId, u.id)).orderBy(desc(assistenteSessoes.atualizadoEm)).limit(50);
+    // Fixadas primeiro (sempre aparecem, mesmo antigas); depois as mais recentes.
+    return this.db
+      .select({ id: assistenteSessoes.id, titulo: assistenteSessoes.titulo, ocupada: assistenteSessoes.ocupada, atualizadoEm: assistenteSessoes.atualizadoEm, fixada: sql<boolean>`${assistenteSessoes.fixadaEm} is not null` })
+      .from(assistenteSessoes)
+      .where(eq(assistenteSessoes.usuarioId, u.id))
+      .orderBy(sql`${assistenteSessoes.fixadaEm} is null`, desc(assistenteSessoes.fixadaEm), desc(assistenteSessoes.atualizadoEm))
+      .limit(80);
+  }
+
+  /** Renomear e fixar/desafixar a conversa. */
+  async editarSessao(u: UsuarioLogado, sessaoId: string, d: { titulo?: string; fixada?: boolean }) {
+    await this.minha(u, sessaoId);
+    const mudar: Partial<typeof assistenteSessoes.$inferInsert> = {};
+    if (d.titulo !== undefined) Object.assign(mudar, { titulo: d.titulo, tituloManual: true });
+    if (d.fixada !== undefined) mudar.fixadaEm = d.fixada ? new Date() : null;
+    const [s] = await this.db.update(assistenteSessoes).set(mudar).where(eq(assistenteSessoes.id, sessaoId)).returning();
+    return { id: s.id, titulo: s.titulo, fixada: !!s.fixadaEm };
   }
 
   /** Conversa nova: herda o modo de aprovação da última (se a pessoa ainda pode usar o automático). */
@@ -504,7 +520,8 @@ export class AssistenteService implements OnModuleInit, OnModuleDestroy {
       mensagens: [{ role: 'user', content: conversa }],
     });
     const titulo = t.replace(/^["'“”\s]+|["'“”.\s]+$/g, '').replace(/\s+/g, ' ').slice(0, 70);
-    if (titulo.length >= 3) await this.db.update(assistenteSessoes).set({ titulo }).where(eq(assistenteSessoes.id, sessaoId));
+    // Título dado pela pessoa fica.
+    if (titulo.length >= 3) await this.db.update(assistenteSessoes).set({ titulo }).where(and(eq(assistenteSessoes.id, sessaoId), eq(assistenteSessoes.tituloManual, false)));
   }
 
   /** Executa (ou prepara, se pede confirmação) uma ferramenta e devolve o resultado para o Claude. */

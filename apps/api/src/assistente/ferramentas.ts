@@ -5,7 +5,7 @@ import { calcularEncargos, formatarReais, preencherTexto } from '@aritana/regras
 import { DB, type Db } from '../comum/db.module';
 import { temPermissao, type UsuarioLogado } from '../comum/auth';
 import { AuditoriaService } from '../comum/auditoria.service';
-import { planoContas, assistenteAnexos, assistentePedidos, assistenteRotinas, cobrancaCarteira, crmContatos, crmConversas, crmEtapas, crmLeads, crmMensagens, crmTarefas, usuarios, chamadoMensagens, iaAgentes, chamados, crmCanais, crmTemplates, empresas, maletas, pessoas, titulos, vendas } from '../db/schema';
+import { planoContas, assistenteAnexos, assistentePedidos, assistenteRotinas, cobrancaCarteira, crmContatos, crmConversas, crmEtapas, crmLeads, crmMensagens, crmTarefas, usuarios, chamadoMensagens, iaAgentes, chamados, crmCanais, crmTemplates, crmGatilhos, crmFunis, empresas, maletas, pessoas, titulos, vendas } from '../db/schema';
 import { CanaisService } from '../crm/canais.service';
 import { CobrancaService } from '../cobranca/cobranca.service';
 import { CobrancaConfigService } from '../cobranca/cobranca-config.service';
@@ -147,6 +147,9 @@ export class FerramentasAssistente {
       this.alterarRegras(),
       this.verAgentesWhatsapp(),
       this.alterarAgentesWhatsapp(),
+      this.configurarNumero(),
+      this.verGatilhos(),
+      this.gerenciarGatilhos(),
       this.enviarEmail(),
       this.agendarRotina(),
       this.gerenciarRotinas(),
@@ -1350,13 +1353,26 @@ export class FerramentasAssistente {
             conhecimento: cfg.conhecimento.slice(0, 6000),
             maxRespostas: cfg.maxRespostas,
             maxTransferencias: cfg.maxTransferencias,
-            numeros: cfg.canais.length ? `${cfg.canais.length} número(s)` : 'todos',
+            numeros: cfg.canais.length ? `${cfg.canais.length} número(s) (veja "numeros" abaixo)` : 'TODOS os números (nenhum marcado)',
+            esperaAntesDeResponder: `${cfg.esperaMinS ?? 7} a ${cfg.esperaMaxS ?? 7} segundos`,
+            modoReserva: cfg.reserva ? `ligado: ${cfg.reservaMin} min sem resposta` : 'desligado',
             respostaEmAudio: { nunca: 'nunca (só texto)', espelhar: 'quando o cliente manda áudio', sempre: 'sempre' }[cfg.respostaAudio],
             voz: cfg.vozProvedor === 'openai' ? `OpenAI · ${VOZES_OPENAI.find((v) => v.id === cfg.vozOpenai)?.nome ?? cfg.vozOpenai}` : `${cfg.vozProvedor === 'elevenlabs' ? 'ElevenLabs' : 'automática (ElevenLabs se tiver a chave)'} · ${VOZES_ELEVENLABS.find((v) => v.id === cfg.vozElevenlabs)?.nome ?? cfg.vozElevenlabs}`,
             textoJuntoComAudio: cfg.audioComTexto,
             vozesDisponiveis: { elevenlabs: this.ia.temElevenlabs ? VOZES_ELEVENLABS : 'sem chave da ElevenLabs', openai: this.ia.imagem ? VOZES_OPENAI : 'sem chave da OpenAI' },
           },
-          especialistas: lista.map((e) => ({ especialistaId: e.id, chave: e.funcao, nome: e.nome, ligado: e.ativo, atendeQuando: e.quando, instrucoes: e.instrucoes, conhecimento: e.conhecimento.slice(0, 4000), ordem: e.ordem })),
+          especialistas: lista.map((e) => ({ especialistaId: e.id, chave: e.funcao, nome: e.nome, ligado: e.ativo, atendeQuando: e.quando, instrucoes: e.instrucoes, conhecimento: e.conhecimento.slice(0, 4000), ordem: e.ordem, soNosNumeros: e.canais })),
+          numeros: (await this.db.select().from(crmCanais).where(sql`${crmCanais.excluidoEm} is null`)).map((c) => ({
+            canalId: c.id,
+            nome: c.nome,
+            iaAtendeAqui: cfg.ativo && (!cfg.canais.length || cfg.canais.includes(c.id)),
+            marcadoParaIa: !cfg.canais.length || cfg.canais.includes(c.id),
+            especialistasDoNumero: c.iaEspecialistas.length ? c.iaEspecialistas.map((id) => lista.find((e) => e.id === id)?.nome ?? id) : 'todos os ligados',
+            horarioDaEquipe: c.atendimentoAtivo ? `${c.atendimentoInicio}–${c.atendimentoFim}, dias ${c.atendimentoDias.join(',')} (0=domingo)` : 'não configurado',
+            avisoForaDoHorario: c.avisoForaHorario,
+            funilDosCardsNovos: c.funilEntradaId,
+          })),
+          observacao: 'A IA sempre responde pelo mesmo número em que a pessoa escreveu (cada conversa é de um número). Cards do CRM: o número cria o card sozinho no funil de entrada; os gatilhos (gerenciar_gatilhos) movem a etapa.',
         };
       },
     };
@@ -1366,8 +1382,8 @@ export class FerramentasAssistente {
     chave: z.string().trim().toLowerCase().regex(/^[a-z][a-z0-9_]{1,29}$/, 'Chave só com letras minúsculas, números e _ (ex.: posvenda)').optional(),
     nome: z.string().trim().min(2).max(60).optional(),
     atendeQuando: z.string().trim().min(10).max(600).optional().describe('Assuntos que este especialista atende (a recepção usa isto para escolher)'),
-    instrucoes: z.string().max(6000).optional().describe('Como atender: tom, o que perguntar, o que nunca fazer, quando passar para a equipe'),
-    conhecimento: z.string().max(20000).optional().describe('Fatos que ele pode usar: preços, regras, endereços, links'),
+    instrucoes: z.string().max(20000).optional().describe('Como atender: tom, o que perguntar, o que nunca fazer, quando passar para a equipe'),
+    conhecimento: z.string().max(100000).optional().describe('Fatos que ele pode usar: preços, regras, endereços, links'),
     ordem: z.number().int().min(0).max(100).optional(),
   });
 
@@ -1379,9 +1395,13 @@ export class FerramentasAssistente {
       .object({
         ligado: z.boolean().optional().describe('Liga ou desliga o atendimento automático no WhatsApp'),
         nome: z.string().trim().max(40).optional(),
-        instrucoes: z.string().max(6000).optional(),
-        conhecimento: z.string().max(20000).optional(),
+        instrucoes: z.string().max(20000).optional(),
+        conhecimento: z.string().max(100000).optional(),
         maxRespostas: z.number().int().min(1).max(50).optional(),
+        esperaMinS: z.number().int().min(0).max(900).optional().describe('Espera mínima antes de responder (segundos); a IA sorteia entre mínima e máxima'),
+        esperaMaxS: z.number().int().min(0).max(900).optional(),
+        reserva: z.boolean().optional().describe('Modo reserva: dentro do horário da equipe a IA só entra se a pessoa ficar reservaMin minutos sem resposta; se alguém da equipe escrever, a IA para e volta só quando uma mensagem ficar reservaMin sem resposta'),
+        reservaMin: z.number().int().min(1).max(120).optional(),
         maxTransferencias: z.number().int().min(0).max(5).optional(),
         respostaAudio: z.enum(['nunca', 'espelhar', 'sempre']).optional().describe('Responder em áudio de WhatsApp: nunca, espelhar (só quando o cliente manda áudio) ou sempre'),
         vozProvedor: z.enum(['automatica', 'elevenlabs', 'openai']).optional(),
@@ -1465,11 +1485,145 @@ export class FerramentasAssistente {
           const atual = await this.agente.config();
           // Voz da OpenAI tem nome curto (ash, coral…); qualquer outro id é da ElevenLabs.
           const vozCampo = g.voz ? (VOZES_OPENAI.some((v) => v.id === g.voz) ? { vozOpenai: g.voz } : { vozElevenlabs: g.voz }) : {};
-          await this.agente.salvarConfig({ ...atual, ...vozCampo, ...(g.respostaAudio ? { respostaAudio: g.respostaAudio } : {}), ...(g.vozProvedor ? { vozProvedor: g.vozProvedor } : {}), ...(g.audioComTexto !== undefined ? { audioComTexto: g.audioComTexto } : {}), ...(g.ligado !== undefined ? { ativo: g.ligado } : {}), ...(g.nome !== undefined ? { nome: g.nome } : {}), ...(g.instrucoes !== undefined ? { instrucoes: g.instrucoes } : {}), ...(g.conhecimento !== undefined ? { conhecimento: g.conhecimento } : {}), ...(g.maxRespostas !== undefined ? { maxRespostas: g.maxRespostas } : {}), ...(g.maxTransferencias !== undefined ? { maxTransferencias: g.maxTransferencias } : {}) });
+          await this.agente.salvarConfig({ ...atual, ...vozCampo, ...(g.respostaAudio ? { respostaAudio: g.respostaAudio } : {}), ...(g.vozProvedor ? { vozProvedor: g.vozProvedor } : {}), ...(g.audioComTexto !== undefined ? { audioComTexto: g.audioComTexto } : {}), ...(g.ligado !== undefined ? { ativo: g.ligado } : {}), ...(g.nome !== undefined ? { nome: g.nome } : {}), ...(g.instrucoes !== undefined ? { instrucoes: g.instrucoes } : {}), ...(g.conhecimento !== undefined ? { conhecimento: g.conhecimento } : {}), ...(g.maxRespostas !== undefined ? { maxRespostas: g.maxRespostas } : {}), ...(g.maxTransferencias !== undefined ? { maxTransferencias: g.maxTransferencias } : {}), ...(g.esperaMinS !== undefined ? { esperaMinS: g.esperaMinS } : {}), ...(g.esperaMaxS !== undefined ? { esperaMaxS: g.esperaMaxS } : {}), ...(g.reserva !== undefined ? { reserva: g.reserva } : {}), ...(g.reservaMin !== undefined ? { reservaMin: g.reservaMin } : {}) });
           r = { alterado: true };
         }
         await this.auditoria.registrar({ usuarioId: ctx.usuario.id, acao: `assistente_agente_${e.acao}`, entidade: 'ia_agente', entidadeId: e.especialistaId ?? null, dados: { especialista: e.especialista ? { ...e.especialista, conhecimento: undefined } : undefined, geral: e.geral ? { ...e.geral, conhecimento: undefined } : undefined } });
         return r;
+      },
+    };
+  }
+
+  // ───────────── Números do WhatsApp e gatilhos do CRM ─────────────
+
+  private configurarNumeroSchema = z.object({
+    canalId: uuid.describe('Número (canalId de ver_agentes_whatsapp ou numeros_whatsapp)'),
+    iaAtende: z.boolean().optional().describe('Marca/desmarca este número para a IA atender (só vale com o agente ligado)'),
+    especialistaIds: z.array(uuid).max(20).optional().describe('Especialistas que atendem neste número ([] = todos os ligados)'),
+    horario: z.object({ ativo: z.boolean(), inicio: z.string().regex(/^\d{2}:\d{2}$/).optional(), fim: z.string().regex(/^\d{2}:\d{2}$/).optional(), dias: z.array(z.number().int().min(0).max(6)).min(1).max(7).optional().describe('0=domingo … 6=sábado') }).optional().describe('Horário da equipe neste número'),
+    avisoForaHorario: z.boolean().optional().describe('Quando a IA não atende a conversa, manda aviso automático fora do horário'),
+    mensagemForaHorario: z.string().max(1000).optional(),
+    funilEntradaId: uuid.nullable().optional().describe('Funil onde cada conversa nova deste número vira card (null = não cria card)'),
+  });
+
+  private configurarNumero(): Ferramenta {
+    const plano = async (e: z.infer<FerramentasAssistente['configurarNumeroSchema']>) => {
+      const [c] = await this.db.select().from(crmCanais).where(eq(crmCanais.id, e.canalId));
+      if (!c || c.excluidoEm) throw new BadRequestException('Número não encontrado.');
+      const partes: string[] = [];
+      if (e.iaAtende !== undefined) partes.push(e.iaAtende ? 'IA passa a atender aqui' : 'IA deixa de atender aqui');
+      if (e.especialistaIds) {
+        const lista = await this.agente.especialistas(true);
+        const nomes = e.especialistaIds.map((id) => lista.find((x) => x.id === id)?.nome);
+        if (nomes.some((n) => !n)) throw new BadRequestException('Especialista não encontrado (use ver_agentes_whatsapp).');
+        partes.push(e.especialistaIds.length ? `especialistas: ${nomes.join(', ')}` : 'especialistas: todos os ligados');
+      }
+      if (e.horario) partes.push(e.horario.ativo ? `horário da equipe ${e.horario.inicio ?? c.atendimentoInicio}–${e.horario.fim ?? c.atendimentoFim}` : 'sem horário da equipe');
+      if (e.avisoForaHorario !== undefined) partes.push(`aviso fora do horário ${e.avisoForaHorario ? 'ligado' : 'desligado'}`);
+      if (e.funilEntradaId !== undefined) {
+        if (e.funilEntradaId) {
+          const [f] = await this.db.select({ nome: crmFunis.nome }).from(crmFunis).where(eq(crmFunis.id, e.funilEntradaId));
+          if (!f) throw new BadRequestException('Funil não encontrado.');
+          partes.push(`conversa nova vira card no funil "${f.nome}"`);
+        } else partes.push('não cria mais card');
+      }
+      if (!partes.length) throw new BadRequestException('Diga o que mudar no número.');
+      return { c, resumo: `No número "${c.nome}": ${partes.join('; ')}.` };
+    };
+    return {
+      nome: 'configurar_numero_whatsapp',
+      descricao: 'Configura um número do WhatsApp: se a IA atende nele, quais especialistas, horário da equipe, aviso fora do horário e em qual funil cada conversa nova vira card no CRM.',
+      schema: this.configurarNumeroSchema,
+      risco: 'confirmar',
+      permitido: pode('configuracoes', 'editar'),
+      preparar: async (e) => {
+        try {
+          return { resumo: (await plano(e)).resumo };
+        } catch (err) {
+          return { resumo: '', impedimento: (err as Error).message };
+        }
+      },
+      executar: async (e: z.infer<FerramentasAssistente['configurarNumeroSchema']>, ctx) => {
+        const { c } = await plano(e);
+        const mudar: Partial<typeof crmCanais.$inferInsert> = {};
+        if (e.especialistaIds) mudar.iaEspecialistas = e.especialistaIds;
+        if (e.horario) Object.assign(mudar, { atendimentoAtivo: e.horario.ativo, ...(e.horario.inicio ? { atendimentoInicio: e.horario.inicio } : {}), ...(e.horario.fim ? { atendimentoFim: e.horario.fim } : {}), ...(e.horario.dias ? { atendimentoDias: [...new Set(e.horario.dias)].sort() } : {}) });
+        if (e.avisoForaHorario !== undefined) mudar.avisoForaHorario = e.avisoForaHorario;
+        if (e.mensagemForaHorario !== undefined) mudar.mensagemForaHorario = e.mensagemForaHorario;
+        if (e.funilEntradaId !== undefined) mudar.funilEntradaId = e.funilEntradaId;
+        if (Object.keys(mudar).length) await this.db.update(crmCanais).set(mudar).where(eq(crmCanais.id, c.id));
+        if (e.iaAtende !== undefined) {
+          const cfg = await this.agente.config();
+          const todos = (await this.db.select({ id: crmCanais.id }).from(crmCanais).where(sql`${crmCanais.excluidoEm} is null`)).map((x) => x.id);
+          // "Nenhum marcado" significa todos: ao desmarcar um, os outros ficam marcados de verdade.
+          const atuais = cfg.canais.length ? cfg.canais : todos;
+          const canais = e.iaAtende ? [...new Set([...(cfg.canais.length ? cfg.canais : []), c.id])] : atuais.filter((x) => x !== c.id);
+          await this.agente.salvarConfig({ ...cfg, canais });
+        }
+        await this.auditoria.registrar({ usuarioId: ctx.usuario.id, acao: 'assistente_configurar_numero', entidade: 'crm_canal', entidadeId: c.id, dados: { ...e, mensagemForaHorario: undefined } });
+        return { ok: true };
+      },
+    };
+  }
+
+  private verGatilhos(): Ferramenta {
+    return {
+      nome: 'ver_gatilhos',
+      descricao: 'Mostra os gatilhos do CRM e os funis com as etapas (etapaId), para configurar com gerenciar_gatilhos.',
+      schema: z.object({}),
+      risco: 'leitura',
+      permitido: pode('crm', 'ver'),
+      executar: async () => {
+          const gs = await this.db.select().from(crmGatilhos).orderBy(asc(crmGatilhos.nome));
+          const etapas = await this.db.select({ id: crmEtapas.id, nome: crmEtapas.nome, funilId: crmEtapas.funilId }).from(crmEtapas);
+          const funis = await this.db.select({ id: crmFunis.id, nome: crmFunis.nome }).from(crmFunis);
+          return { gatilhos: gs.map((g) => ({ gatilhoId: g.id, nome: g.nome, ligado: g.ativo, evento: g.evento, parametro: g.parametro, funil: funis.find((f) => f.id === g.funilId)?.nome ?? 'qualquer', etapa: etapas.find((x) => x.id === g.etapaId)?.nome ?? null, acoes: g.acoes, execucoes: g.execucoes })), funis: funis.map((f) => ({ funilId: f.id, nome: f.nome, etapas: etapas.filter((x) => x.funilId === f.id).map((x) => ({ etapaId: x.id, nome: x.nome })) })) };
+      },
+    };
+  }
+
+  private gatilhosSchema = z.object({
+    acao: z.enum(['criar', 'ligar', 'desligar', 'excluir']),
+    gatilhoId: uuid.optional(),
+    gatilho: z
+      .object({
+        nome: z.string().trim().min(2).max(120),
+        funilId: uuid.nullable().optional(),
+        evento: z.enum(['lead_criado', 'entrou_etapa', 'mensagem_recebida', 'sem_resposta', 'etiqueta_adicionada', 'primeira_resposta', 'formulario_respondido']).describe('lead_criado = card novo; primeira_resposta = a conversa foi respondida pela 1ª vez (parametro "ia"/"equipe" ou vazio); formulario_respondido = o contato respondeu um formulário (parametro = endereço do formulário, ex. pre-cadastro-consultora)'),
+        etapaId: uuid.nullable().optional(),
+        parametro: z.string().max(120).nullable().optional(),
+        acoes: z.array(z.object({ tipo: z.enum(['mover_etapa', 'adicionar_etiqueta', 'criar_tarefa', 'atribuir', 'esperar', 'enviar_mensagem']) }).passthrough()).min(1).max(10).describe('Ex.: [{ tipo: "mover_etapa", etapaId }] · [{ tipo: "adicionar_etiqueta", etiqueta }] · [{ tipo: "criar_tarefa", titulo, prazoHoras }]'),
+      })
+      .optional(),
+  });
+
+  private gerenciarGatilhos(): Ferramenta {
+    return {
+      nome: 'gerenciar_gatilhos',
+      descricao: 'Lista, cria, liga, desliga ou exclui gatilhos do CRM (automações que movem o card de etapa, põem etiqueta, criam tarefa…). Ex.: card novo do Comercial Hemilly entra em "Novo contato"; quando a conversa for respondida, vai para "Em contato"; quando a pessoa responder o pré-cadastro, vai para "Pré-cadastro feito". Antes, use ver_gatilhos para pegar funis, etapas (etapaId) e o que já existe.',
+      schema: this.gatilhosSchema,
+      risco: 'confirmar',
+      permitido: pode('crm', 'editar'),
+      preparar: async (e: z.infer<FerramentasAssistente['gatilhosSchema']>) => {
+        if (e.acao === 'criar') {
+          if (!e.gatilho) return { resumo: '', impedimento: 'Para criar, mande o gatilho (nome, evento e ações).' };
+          for (const a of e.gatilho.acoes) if (a.tipo === 'mover_etapa' && !(a as { etapaId?: string }).etapaId) return { resumo: '', impedimento: 'Na ação mover_etapa falta o etapaId.' };
+          return { resumo: `Criar o gatilho "${e.gatilho.nome}" (${e.gatilho.evento}${e.gatilho.parametro ? `: ${e.gatilho.parametro}` : ''}) com ${e.gatilho.acoes.length} ação(ões): ${e.gatilho.acoes.map((a) => a.tipo).join(', ')}.` };
+        }
+        if (!e.gatilhoId) return { resumo: '', impedimento: 'Falta o gatilhoId (use ver_gatilhos).' };
+        return { resumo: `${({ ligar: 'Ligar', desligar: 'Desligar', excluir: 'Excluir' } as Record<string, string>)[e.acao]} o gatilho.` };
+      },
+      executar: async (e: z.infer<FerramentasAssistente['gatilhosSchema']>, ctx) => {
+        if (e.acao === 'criar') {
+          const g = e.gatilho!;
+          const [n] = await this.db.insert(crmGatilhos).values({ nome: g.nome, funilId: g.funilId ?? null, evento: g.evento, etapaId: g.evento === 'entrou_etapa' ? (g.etapaId ?? null) : null, parametro: g.parametro?.trim() || null, acoes: g.acoes as Record<string, unknown>[], ativo: true }).returning();
+          await this.auditoria.registrar({ usuarioId: ctx.usuario.id, acao: 'assistente_criar_gatilho', entidade: 'crm_gatilho', entidadeId: n.id, dados: g });
+          return { criado: true, gatilhoId: n.id };
+        }
+        if (e.acao === 'excluir') await this.db.delete(crmGatilhos).where(eq(crmGatilhos.id, e.gatilhoId!));
+        else await this.db.update(crmGatilhos).set({ ativo: e.acao === 'ligar' }).where(eq(crmGatilhos.id, e.gatilhoId!));
+        await this.auditoria.registrar({ usuarioId: ctx.usuario.id, acao: `assistente_gatilho_${e.acao}`, entidade: 'crm_gatilho', entidadeId: e.gatilhoId!, dados: null });
+        return { ok: true };
       },
     };
   }

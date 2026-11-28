@@ -158,7 +158,12 @@ export function Assistente() {
 
 function Conversas({ estado, sel, setSel }: { estado: Estado; sel: string | null; setSel: (id: string | null) => void }) {
   const qc = useQueryClient();
-  const lista = useQuery({ queryKey: ['assistente', 'sessoes'], queryFn: () => api<{ id: string; titulo: string; ocupada: boolean; atualizadoEm: string }[]>('/assistente/sessoes') });
+  const lista = useQuery({ queryKey: ['assistente', 'sessoes'], queryFn: () => api<{ id: string; titulo: string; ocupada: boolean; atualizadoEm: string; fixada: boolean }[]>('/assistente/sessoes') });
+  const [renomeando, setRenomeando] = useState<{ id: string; titulo: string } | null>(null);
+  const editar = useMutation({
+    mutationFn: (d: { id: string; titulo?: string; fixada?: boolean }) => api(`/assistente/sessoes/${d.id}`, { metodo: 'PATCH', corpo: { titulo: d.titulo, fixada: d.fixada } }),
+    onSuccess: (_r, d) => { setRenomeando(null); qc.invalidateQueries({ queryKey: ['assistente', 'sessoes'] }); qc.invalidateQueries({ queryKey: ['assistente', 'sessao', d.id] }); },
+  });
   const nova = useMutation({ mutationFn: () => api<{ id: string }>('/assistente/sessoes', { corpo: {} }), onSuccess: (s) => { setSel(s.id); qc.invalidateQueries({ queryKey: ['assistente', 'sessoes'] }); } });
   const atual = sel ?? lista.data?.[0]?.id ?? null;
   const apagar = useMutation({
@@ -170,9 +175,18 @@ function Conversas({ estado, sel, setSel }: { estado: Estado; sel: string | null
       <aside className="assistente-lista">
         <button className="botao" onClick={() => nova.mutate()} disabled={nova.isPending}>Nova conversa</button>
         {lista.data?.map((s) => (
-          <div key={s.id} className={`assistente-item ${s.id === atual ? 'ativo' : ''}`} onClick={() => setSel(s.id)} role="button" tabIndex={0} onKeyDown={(e) => e.key === 'Enter' && setSel(s.id)}>
-            <span>{s.titulo}</span>
+          <div key={s.id} className={`assistente-item ${s.id === atual ? 'ativo' : ''}`} onClick={() => setSel(s.id)} role="button" tabIndex={0} onKeyDown={(e) => e.key === 'Enter' && renomeando?.id !== s.id && setSel(s.id)}>
+            {renomeando?.id === s.id ? (
+              <form onSubmit={(e) => { e.preventDefault(); if (renomeando.titulo.trim()) editar.mutate({ id: s.id, titulo: renomeando.titulo.trim() }); }} onClick={(e) => e.stopPropagation()} style={{ display: 'flex', gap: 4 }}>
+                <input autoFocus value={renomeando.titulo} maxLength={120} onChange={(e) => setRenomeando({ id: s.id, titulo: e.target.value })} onKeyDown={(e) => e.key === 'Escape' && setRenomeando(null)} style={{ flex: 1, minWidth: 0 }} aria-label="Novo nome da conversa" />
+                <button className="botao pequeno" disabled={editar.isPending}>OK</button>
+              </form>
+            ) : <span>{s.fixada && <span title="Fixada">📌 </span>}{s.titulo}</span>}
             <small className="muted">{s.ocupada ? 'trabalhando…' : dataHora(s.atualizadoEm)}</small>
+            <span className="assistente-acoes-item">
+              <button className={`assistente-mini ${s.fixada ? 'ligado' : ''}`} title={s.fixada ? 'Desafixar' : 'Fixar no topo'} aria-label={s.fixada ? `Desafixar ${s.titulo}` : `Fixar ${s.titulo}`} disabled={editar.isPending} onClick={(e) => { e.stopPropagation(); editar.mutate({ id: s.id, fixada: !s.fixada }); }}>📌</button>
+              <button className="assistente-mini" title="Renomear" aria-label={`Renomear ${s.titulo}`} onClick={(e) => { e.stopPropagation(); setRenomeando({ id: s.id, titulo: s.titulo }); }}>✏️</button>
+            </span>
             <button
               className="assistente-excluir"
               title="Excluir conversa"
@@ -185,6 +199,7 @@ function Conversas({ estado, sel, setSel }: { estado: Estado; sel: string | null
           </div>
         ))}
         {apagar.error && <Erro erro={apagar.error} />}
+        {editar.error && <Erro erro={editar.error} />}
       </aside>
       {atual ? <Chat key={atual} id={atual} estado={estado} aoApagar={() => setSel(null)} /> : (
         <div className="cartao vazio">

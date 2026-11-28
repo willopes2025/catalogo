@@ -1,3 +1,4 @@
+import { normalizarTelefone } from '../crm/telefone';
 import { BadRequestException, Body, Controller, Delete, Get, Inject, Logger, NotFoundException, Param, ParseUUIDPipe, Patch, Post, Query, Req } from '@nestjs/common';
 import type { Request } from 'express';
 import { and, desc, eq, or, sql } from 'drizzle-orm';
@@ -224,6 +225,21 @@ export class FormulariosController {
       await tx.insert(formularioRespostas).values({ formularioId: f.id, respostas: r.valores, origem, pessoaId, candidaturaId });
       return { ok: true, mensagem: f.mensagemFinal || 'Resposta enviada. Obrigada!', pessoaId };
     });
+    // Quem respondeu já tem card aberto no CRM (ex.: lead que chegou pelo WhatsApp): gatilho "formulário respondido".
+    const telResp = porPapel('telefone');
+    if (telResp) {
+      try {
+        const ct = await this.crm.contatoPorTelefone(normalizarTelefone(telResp) ?? telResp);
+        if (ct) {
+          for (const l of await this.crm.leadsAbertosDoContato(ct.id)) {
+            await this.crm.evento(l.id, 'sistema', `Respondeu o formulário "${f.titulo}".`);
+            this.crm.emitir({ tipo: 'formulario_respondido', leadId: l.id, formulario: f.slug });
+          }
+        }
+      } catch {
+        /* o formulário já foi gravado; o card é extra */
+      }
+    }
     // Cliente vinda do anúncio: card no funil escolhido (é ele que a distribuição por localização entrega à consultora mais perto).
     const nome = porPapel('nome');
     const telefone = porPapel('telefone');

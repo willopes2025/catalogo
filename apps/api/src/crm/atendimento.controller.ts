@@ -72,7 +72,7 @@ const acao = z
 const gatilhoSchema = z.object({
   nome: z.string().trim().min(2).max(120),
   funilId: uuid.nullable().optional(),
-  evento: z.enum(['lead_criado', 'entrou_etapa', 'mensagem_recebida', 'sem_resposta', 'etiqueta_adicionada']),
+  evento: z.enum(['lead_criado', 'entrou_etapa', 'mensagem_recebida', 'sem_resposta', 'etiqueta_adicionada', 'primeira_resposta', 'formulario_respondido']),
   etapaId: uuid.nullable().optional(),
   parametro: opcional(120),
   acoes: z.array(acao).min(1, 'Adicione ao menos uma ação').max(20),
@@ -750,14 +750,18 @@ export class AtendimentoController {
             comprovante: z.boolean().default(atual.ferramentas.comprovante),
             acordo: z.boolean().default(atual.ferramentas.acordo),
             fecharAcordo: z.boolean().default(atual.ferramentas.fecharAcordo),
+            agendar: z.boolean().default(atual.ferramentas.agendar ?? false),
+            agendaResponsavelId: uuid.nullable().default(atual.ferramentas.agendaResponsavelId ?? null),
+            agendaTipo: z.enum(['entrevista', 'reuniao', 'outro']).default(atual.ferramentas.agendaTipo ?? 'entrevista'),
           })
-          .default(atual.ferramentas),
+          .default({ ...atual.ferramentas, agendar: atual.ferramentas.agendar ?? false, agendaResponsavelId: atual.ferramentas.agendaResponsavelId ?? null, agendaTipo: atual.ferramentas.agendaTipo ?? 'entrevista' }),
         memoriaClientes: z.boolean().default(atual.memoriaClientes),
       }),
       body,
     );
     if (d.respostaAudio !== 'nunca' && !this.ia.vozDisponivel) throw new BadRequestException('Para responder em áudio, cole a chave da ElevenLabs ou da OpenAI em Configurações › Integrações › Inteligência artificial.');
     if (d.ativo && !this.ia.texto) throw new BadRequestException('Cole a chave do Claude em Configurações › Integrações › Inteligência artificial antes de ligar o agente.');
+    if (d.ferramentas.agendar && !d.ferramentas.agendaResponsavelId) throw new BadRequestException('Para a IA marcar na agenda, escolha em nome de quem fica o compromisso.');
     if (d.esperaMaxS < d.esperaMinS) throw new BadRequestException('A espera máxima precisa ser maior ou igual à mínima.');
     await this.agente.salvarConfig(d);
     await this.auditoria.registrar({ usuarioId: u.id, acao: d.ativo ? 'ligar' : 'configurar', entidade: 'ia_agente', dados: { ativo: d.ativo, canais: d.canais.length, maxRespostas: d.maxRespostas } });

@@ -50,6 +50,8 @@ const EVENTOS: Record<string, string> = {
   mensagem_recebida: 'Mensagem recebida',
   sem_resposta: 'Sem resposta do contato há X horas',
   etiqueta_adicionada: 'Etiqueta adicionada',
+  primeira_resposta: 'Conversa respondida pela 1ª vez (IA ou equipe)',
+  formulario_respondido: 'Contato respondeu um formulário',
 };
 const ACOES: Record<string, string> = {
   enviar_template: 'Enviar template',
@@ -61,6 +63,19 @@ const ACOES: Record<string, string> = {
   criar_tarefa: 'Criar tarefa',
 };
 interface Gatilho { id: string; nome: string; funilId: string | null; evento: string; etapaId: string | null; parametro: string | null; acoes: Record<string, any>[]; ativo: boolean; execucoes: number; agendados: number; errosSemana: number }
+
+/** Qual formulário dispara o gatilho (vazio = qualquer um). */
+function FormularioDoGatilho({ valor, mudar }: { valor: string; mudar: (v: string) => void }) {
+  const q = useQuery({ queryKey: ['formularios'], queryFn: () => api<{ id: string; titulo: string; slug: string }[]>('/formularios') });
+  return (
+    <Campo rotulo="Formulário" className="l2" ajuda="O card do contato que respondeu (pelo mesmo WhatsApp) anda sozinho.">
+      <select value={valor} onChange={(e) => mudar(e.target.value)}>
+        <option value="">Qualquer formulário</option>
+        {q.data?.map((f) => <option key={f.id} value={f.slug}>{f.titulo} (/f/{f.slug})</option>)}
+      </select>
+    </Campo>
+  );
+}
 
 export function Gatilhos() {
   const qc = useQueryClient();
@@ -150,6 +165,8 @@ function EditorGatilho({ inicial, fechar }: { inicial: Partial<Gatilho>; fechar:
       {g.evento === 'sem_resposta' && <Campo rotulo="Horas sem resposta" className="l2"><input type="number" min={1} value={g.parametro ?? ''} onChange={(e) => setG({ ...g, parametro: e.target.value })} /></Campo>}
       {g.evento === 'mensagem_recebida' && <Campo rotulo="Só se a mensagem contiver (opcional)" className="l2"><input value={g.parametro ?? ''} onChange={(e) => setG({ ...g, parametro: e.target.value })} placeholder="Ex.: catálogo" /></Campo>}
       {g.evento === 'etiqueta_adicionada' && <Campo rotulo="Etiqueta" className="l2"><input value={g.parametro ?? ''} onChange={(e) => setG({ ...g, parametro: e.target.value })} /></Campo>}
+      {g.evento === 'primeira_resposta' && <Campo rotulo="Quem respondeu" className="l2"><select value={g.parametro ?? ''} onChange={(e) => setG({ ...g, parametro: e.target.value })}><option value="">IA ou equipe</option><option value="ia">Só a IA</option><option value="equipe">Só a equipe</option></select></Campo>}
+      {g.evento === 'formulario_respondido' && <FormularioDoGatilho valor={g.parametro ?? ''} mudar={(v) => setG({ ...g, parametro: v })} />}
 
       <div className="l4">
         <div className="secao">Ações, em ordem</div>

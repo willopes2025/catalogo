@@ -414,8 +414,22 @@ export class CanaisService implements OnModuleInit {
       .values({ ia: !!e.ia, citadaId, conversaId: cv.id, direcao: 'saida', tipo: e.tipo, texto: textoGuardado, midia: midiaNome, midiaNome: e.midia?.nome ?? null, templateNome, status: 'pendente', usuarioId: e.usuarioId ?? null, gatilhoId: e.gatilhoId ?? null, disparoId: e.disparoId ?? null })
       .returning();
     try {
-      const r = await this.conexao(canal).enviar(saida);
-      const [ok] = await this.db.update(crmMensagens).set({ status: 'enviada', idExterno: r.idExterno }).where(eq(crmMensagens.id, m.id)).returning();
+      // Mensagem automática (IA, gatilho, envio em massa) que falhar: tenta de novo mais 2 vezes antes de desistir.
+      const automatica = !e.usuarioId;
+      let r: Awaited<ReturnType<ReturnType<CanaisService['conexao']>['enviar']>> | undefined;
+      for (let tentativa = 1; ; tentativa++) {
+        try {
+          r = await this.conexao(canal).enviar(saida);
+          break;
+        } catch (err) {
+          if (!automatica || tentativa >= 3 || !(err instanceof ErroCanal) || /janela|24 ?h|template|bloque|inválid|não existe|not exist/i.test((err as Error).message)) throw err;
+          await new Promise((ok) => setTimeout(ok, Number(process.env.REENVIO_ESPERA_MS ?? 4000) * tentativa));
+        }
+      }
+      const [{ anteriores }] = await this.db.select({ anteriores: sql<number>`count(*)::int` }).from(crmMensagens).where(and(eq(crmMensagens.conversaId, cv.id), eq(crmMensagens.direcao, 'saida'), eq(crmMensagens.status, 'enviada')));
+      const [ok] = await this.db.update(crmMensagens).set({ status: 'enviada', idExterno: r!.idExterno }).where(eq(crmMensagens.id, m.id)).returning();
+      // Primeira resposta da conversa (da IA ou da equipe): gatilho para mover o card (ex.: "Em contato").
+      if (!anteriores && !e.gatilhoId && !e.disparoId) for (const l of await this.crm.leadsAbertosDoContato(cv.contatoId)) this.crm.emitir({ tipo: 'primeira_resposta', leadId: l.id, ia: !!e.ia });
       const resumo = textoGuardado ?? `[${e.tipo}]`;
       // Atendente respondendo uma conversa da fila: ela passa a ser dele.
       const pegar = e.usuarioId && cv.status !== 'atendimento' ? { status: 'atendimento', atendenteId: e.usuarioId, pegaEm: new Date() } : {};

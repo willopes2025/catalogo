@@ -88,6 +88,10 @@ export class AutomacaoService implements OnModuleInit, OnModuleDestroy {
       if (e.tipo === 'entrou_etapa' && g.etapaId && g.etapaId !== e.etapaId) continue;
       if (e.tipo === 'mensagem_recebida' && g.parametro?.trim() && !e.texto.toLowerCase().includes(g.parametro.trim().toLowerCase())) continue;
       if (e.tipo === 'etiqueta_adicionada' && g.parametro?.trim() && g.parametro.trim().toLowerCase() !== e.etiqueta.toLowerCase()) continue;
+      // Formulário: parâmetro = endereço do formulário (/f/<endereço>); vazio = qualquer um.
+      if (e.tipo === 'formulario_respondido' && g.parametro?.trim() && g.parametro.trim().replace(/^.*\/f\//, '').toLowerCase() !== e.formulario.toLowerCase()) continue;
+      // Primeira resposta: parâmetro "ia" = só quando quem respondeu foi a IA; "equipe" = só pessoa da equipe.
+      if (e.tipo === 'primeira_resposta' && g.parametro?.trim() && (g.parametro.trim().toLowerCase() === 'ia') !== e.ia) continue;
       // Proteção contra laço (um gatilho que move para uma etapa que dispara ele mesmo).
       const [recente] = await this.db
         .select({ id: crmFila.id })

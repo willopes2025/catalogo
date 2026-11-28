@@ -3831,7 +3831,7 @@ test('ferramentas do agente de IA: reconhece o número, parcelas, 2ª via, prome
   await ok('POST', '/financeiro/titulos', { empresaId: emp.id, tipo: 'receber', pessoaId: dev.id, descricao: 'Parcela futura Fernanda', valor: 8000, vencimento: dia(20) });
   await ok('PUT', '/integracoes/ia', { valores: { ANTHROPIC_API_KEY: 'chave-claude-teste' } });
   const cfg = await ok('GET', '/crm/ia-agente');
-  assert.deepEqual(cfg.ferramentas, { segundaVia: true, promessa: true, promessaMaxDias: 10, estoque: true, candidatura: true, comprovante: true, acordo: true, fecharAcordo: false });
+  assert.deepEqual(cfg.ferramentas, { segundaVia: true, promessa: true, promessaMaxDias: 10, estoque: true, candidatura: true, comprovante: true, acordo: true, fecharAcordo: false, agendar: false, agendaResponsavelId: null, agendaTipo: 'entrevista' });
   const base = { ativo: true, canais: [c.id], instrucoes: '', conhecimento: 'Vendemos semijoias.', maxRespostas: 30, nome: '', maxTransferencias: 2 };
   // Sem especialistas neste teste: o agente geral atende direto.
   const ligados = cfg.especialistas.filter((e) => e.ativo);
@@ -5251,4 +5251,45 @@ test('modo reserva: a equipe responde primeiro; a IA entra depois do prazo e par
 
   await ok('PUT', '/crm/ia-agente', { ...antes, especialistas: undefined, ligada: undefined });
   await ok('DELETE', `/crm/canais/${c.id}`);
+});
+
+test('gatilhos novos: conversa respondida pela 1ª vez e formulário respondido movem o card; reenvio de mensagem automática', async () => {
+  const funil = (await ok('GET', '/crm/funis')).find((f) => f.tipo === 'recrutamento');
+  const [e1, e2, e3] = funil.etapas;
+  const c = await ok('POST', '/crm/canais', { nome: 'Gatilhos novos', tipo: 'evolution', funilEntradaId: funil.id });
+  await fetch(`${SIM}/__evo/conectar?i=${encodeURIComponent(c.config.instancia)}`);
+  const hook = (await recebidos()).filter((r) => r.caminho === '/evo/instance/create').pop().corpo.webhook.url.replace('http://localhost:3100', '');
+  const g1 = await ok('POST', '/crm/gatilhos', { nome: 'Respondeu: em contato', funilId: funil.id, evento: 'primeira_resposta', acoes: [{ tipo: 'mover_etapa', etapaId: e2.id }] });
+  const f = await ok('POST', '/formularios', { titulo: 'Pré-cadastro gatilho', descricao: null, campos: [{ id: 'nome', tipo: 'texto', rotulo: 'Nome', obrigatorio: true, papel: 'nome' }, { id: 'tel', tipo: 'telefone', rotulo: 'WhatsApp', obrigatorio: true, papel: 'telefone' }], acao: 'nenhuma', mensagemFinal: null, consentimento: null });
+  const g2 = await ok('POST', '/crm/gatilhos', { nome: 'Pré-cadastro feito', funilId: funil.id, evento: 'formulario_respondido', parametro: f.slug, acoes: [{ tipo: 'mover_etapa', etapaId: e3.id }] });
+  await fetch(API.replace(/\/api$/, '') + hook, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ event: 'messages.upsert', instance: c.config.instancia, data: { key: { remoteJid: '5527944441111@s.whatsapp.net', fromMe: false, id: 'GT1' }, pushName: 'Lead Gatilho', message: { conversation: 'Oi' }, messageTimestamp: Math.floor(Date.now() / 1000) } }) });
+  await new Promise((r) => setTimeout(r, 400));
+  const cv = (await ok('GET', `/crm/conversas?aba=todas&canalId=${c.id}`)).find((x) => x.telefone === '5527944441111');
+  const card = async () => (await ok('GET', `/crm/leads?funilId=${funil.id}&busca=Lead Gatilho`))[0];
+  assert.equal((await card()).etapaId, e1.id, 'card novo na primeira etapa');
+  await ok('POST', `/crm/conversas/${cv.id}/mensagens`, { texto: 'Oi! Tudo bem?' });
+  await new Promise((r) => setTimeout(r, 400));
+  assert.equal((await card()).etapaId, e2.id, 'respondeu: foi para a segunda etapa');
+  await ok('POST', `/crm/conversas/${cv.id}/mensagens`, { texto: 'Segunda mensagem' });
+  const salvo = token;
+  token = '';
+  await ok('POST', `/publico/formularios/${f.slug}`, { respostas: { nome: 'Lead Gatilho', tel: '(27) 94444-1111' } });
+  token = salvo;
+  await new Promise((r) => setTimeout(r, 400));
+  assert.equal((await card()).etapaId, e3.id, 'respondeu o formulário: terceira etapa');
+  for (const g of [g1, g2]) await ok('DELETE', `/crm/gatilhos/${g.id}`);
+  await ok('DELETE', `/formularios/${f.id}`);
+  await ok('DELETE', `/crm/canais/${c.id}`);
+});
+
+test('assistente: fixar e renomear conversa (o nome dado não é trocado)', async () => {
+  const s = await ok('POST', '/assistente/sessoes', {});
+  const r = await ok('PATCH', `/assistente/sessoes/${s.id}`, { titulo: 'Minha conversa fixa', fixada: true });
+  assert.deepEqual([r.titulo, r.fixada], ['Minha conversa fixa', true]);
+  const lista = await ok('GET', '/assistente/sessoes');
+  assert.equal(lista[0].id, s.id, 'fixada vem primeiro');
+  assert.equal((await chamar('PATCH', `/assistente/sessoes/${s.id}`, { titulo: '  ' })).status, 400);
+  await ok('PATCH', `/assistente/sessoes/${s.id}`, { fixada: false });
+  assert.equal((await ok('GET', '/assistente/sessoes')).find((x) => x.id === s.id).fixada, false);
+  await ok('DELETE', `/assistente/sessoes/${s.id}`);
 });
