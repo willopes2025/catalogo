@@ -5270,13 +5270,20 @@ test('gatilhos novos: conversa respondida pela 1ª vez e formulário respondido 
   await ok('POST', `/crm/conversas/${cv.id}/mensagens`, { texto: 'Oi! Tudo bem?' });
   await new Promise((r) => setTimeout(r, 400));
   assert.equal((await card()).etapaId, e2.id, 'respondeu: foi para a segunda etapa');
-  await ok('POST', `/crm/conversas/${cv.id}/mensagens`, { texto: 'Segunda mensagem' });
+  // Link do formulário mandado na conversa ganha o rastreio do card (?l=).
+  await ok('POST', `/crm/conversas/${cv.id}/mensagens`, { texto: `Preencha aqui: https://aritana.wideic.com/f/${f.slug}` });
+  const enviada = (await ok('GET', `/crm/conversas/${cv.id}/mensagens`)).mensagens.filter((m) => m.direcao === 'saida').pop().texto;
+  const l = /[?&]l=([0-9a-f-]{36})/.exec(enviada)?.[1];
+  assert.equal(l, (await card()).id, 'link rastreado com o card');
+  // Preencheu com OUTRO telefone: pelo rastreio, a resposta cai no card certo, com as respostas anotadas.
   const salvo = token;
   token = '';
-  await ok('POST', `/publico/formularios/${f.slug}`, { respostas: { nome: 'Lead Gatilho', tel: '(27) 94444-1111' } });
+  await ok('POST', `/publico/formularios/${f.slug}`, { respostas: { nome: 'Lead Gatilho', tel: '(27) 95555-0000' }, origem: { l } });
   token = salvo;
   await new Promise((r) => setTimeout(r, 400));
   assert.equal((await card()).etapaId, e3.id, 'respondeu o formulário: terceira etapa');
+  const hist = await ok('GET', `/crm/leads/${l}`);
+  assert.ok(hist.eventos.some((ev) => ev.texto.includes('Respondeu o formulário') && ev.texto.includes('pelo link da conversa') && /95555/.test(ev.texto.replace(/\D/g, ''))), 'as respostas ficam no card');
   for (const g of [g1, g2]) await ok('DELETE', `/crm/gatilhos/${g.id}`);
   await ok('DELETE', `/formularios/${f.id}`);
   await ok('DELETE', `/crm/canais/${c.id}`);

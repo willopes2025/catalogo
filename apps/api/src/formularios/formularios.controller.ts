@@ -9,7 +9,7 @@ import { Permissao, Publico, Usuario, type UsuarioLogado } from '../comum/auth';
 import { opcional, validar } from '../comum/validacao';
 import { Limitador } from '../comum/limitador';
 import { AuditoriaService } from '../comum/auditoria.service';
-import { candidaturaNotas, candidaturas, formularioRespostas, formularios, pessoas } from '../db/schema';
+import { candidaturaNotas, candidaturas, crmLeads, formularioRespostas, formularios, pessoas } from '../db/schema';
 import { MODELOS_FORMULARIO } from './modelos';
 import { CrmService } from '../crm/crm.service';
 
@@ -179,7 +179,7 @@ export class FormulariosController {
     if (f.consentimento && corpo.consentimento !== true) throw new BadRequestException({ mensagem: 'É preciso marcar a autorização para enviar.', campos: { consentimento: 'Obrigatório' } });
     const r = validarRespostas(f.campos, corpo.respostas ?? {});
     if (!r.ok) throw new BadRequestException({ mensagem: 'Confira as respostas destacadas.', campos: r.erros });
-    const origem = Object.fromEntries(Object.entries(corpo.origem ?? {}).filter(([k, v]) => /^(utm_[a-z]+|ref|pagina)$/.test(k) && typeof v === 'string').map(([k, v]) => [k, String(v).slice(0, 200)]));
+    const origem = Object.fromEntries(Object.entries(corpo.origem ?? {}).filter(([k, v]) => /^(utm_[a-z]+|ref|pagina|l)$/.test(k) && typeof v === 'string').map(([k, v]) => [k, String(v).slice(0, 200)]));
     const porPapel = (p: string) => {
       const c = f.campos.find((x) => x.papel === p);
       const v = c ? r.valores[c.id] : null;
@@ -223,22 +223,33 @@ export class FormulariosController {
         await tx.insert(candidaturaNotas).values({ candidaturaId, texto: `Respondeu o formulário "${f.titulo}".` });
       }
       await tx.insert(formularioRespostas).values({ formularioId: f.id, respostas: r.valores, origem, pessoaId, candidaturaId });
-      return { ok: true, mensagem: f.mensagemFinal || 'Resposta enviada. Obrigada!', pessoaId };
+      return { ok: true, mensagem: f.mensagemFinal || 'Resposta enviada. Obrigada!', pessoaId, candidaturaId };
     });
-    // Quem respondeu já tem card aberto no CRM (ex.: lead que chegou pelo WhatsApp): gatilho "formulário respondido".
-    const telResp = porPapel('telefone');
-    if (telResp) {
-      try {
-        const ct = await this.crm.contatoPorTelefone(normalizarTelefone(telResp) ?? telResp);
-        if (ct) {
-          for (const l of await this.crm.leadsAbertosDoContato(ct.id)) {
-            await this.crm.evento(l.id, 'sistema', `Respondeu o formulário "${f.titulo}".`);
-            this.crm.emitir({ tipo: 'formulario_respondido', leadId: l.id, formulario: f.slug });
-          }
-        }
-      } catch {
-        /* o formulário já foi gravado; o card é extra */
+    // Respostas no card do lead: pelo link rastreado (?l=<card>, que o sistema põe sozinho quando o link vai pela
+    // conversa) e pelo mesmo WhatsApp. Anota tudo o que a pessoa respondeu, liga a candidatura ao card e dispara o gatilho.
+    try {
+      const alvos = new Map<string, typeof crmLeads.$inferSelect>();
+      const rastreado = typeof origem.l === 'string' && /^[0-9a-f-]{36}$/i.test(origem.l) ? origem.l : null;
+      if (rastreado) {
+        const [l] = await this.db.select().from(crmLeads).where(and(eq(crmLeads.id, rastreado), eq(crmLeads.status, 'aberto')));
+        if (l) alvos.set(l.id, l);
       }
+      const telResp = porPapel('telefone');
+      const ct = telResp ? await this.crm.contatoPorTelefone(normalizarTelefone(telResp) ?? telResp) : null;
+      if (ct) for (const l of await this.crm.leadsAbertosDoContato(ct.id)) if (!alvos.has(l.id)) { const [x] = await this.db.select().from(crmLeads).where(eq(crmLeads.id, l.id)); if (x) alvos.set(x.id, x); }
+      const respostas = f.campos
+        .map((c) => [c.rotulo, r.valores[c.id]] as const)
+        .filter(([, v]) => v !== null && v !== undefined && v !== '')
+        .map(([rot, v]) => `• ${rot}: ${Array.isArray(v) ? v.join(', ') : String(v)}`.slice(0, 400))
+        .join('\n');
+      for (const l of alvos.values()) {
+        await this.crm.evento(l.id, 'sistema', `📝 Respondeu o formulário "${f.titulo}"${rastreado === l.id ? ' (pelo link da conversa)' : ''}:\n${respostas}`);
+        // A candidatura que o formulário abriu fica ligada a este card (não nasce outro card duplicado).
+        if (r2.candidaturaId && !l.candidaturaId) await this.db.update(crmLeads).set({ candidaturaId: r2.candidaturaId }).where(and(eq(crmLeads.id, l.id), sql`${crmLeads.candidaturaId} is null`)).catch(() => undefined);
+        this.crm.emitir({ tipo: 'formulario_respondido', leadId: l.id, formulario: f.slug });
+      }
+    } catch {
+      /* o formulário já foi gravado; o card é extra */
     }
     // Cliente vinda do anúncio: card no funil escolhido (é ele que a distribuição por localização entrega à consultora mais perto).
     const nome = porPapel('nome');

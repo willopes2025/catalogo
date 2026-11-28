@@ -62,6 +62,12 @@ export class CrmController {
       const [ja] = await this.db.select({ id: crmLeads.id }).from(crmLeads).where(eq(crmLeads.candidaturaId, c.id));
       if (ja) return;
       const contato = await this.crmSvc.garantirContato({ telefone: c.telefone, nome: c.nome, email: c.email });
+      // Já existe card aberto desta pessoa no recrutamento (ex.: chegou pelo WhatsApp): liga a candidatura a ele.
+      const [doWhats] = await this.db.select({ id: crmLeads.id }).from(crmLeads).where(and(eq(crmLeads.contatoId, contato.id), eq(crmLeads.funilId, alvo.funilId), eq(crmLeads.status, 'aberto'), sql`${crmLeads.candidaturaId} is null`)).limit(1);
+      if (doWhats) {
+        await this.db.update(crmLeads).set({ candidaturaId: c.id }).where(eq(crmLeads.id, doWhats.id));
+        return;
+      }
       const extrasContato = Object.fromEntries(Object.entries({ CPF: c.cpf, Cidade: c.cidade, UF: c.uf, Instagram: c.instagram }).filter(([, v]) => v)) as Record<string, string>;
       if (Object.keys(extrasContato).length) await this.db.execute(sql`update crm_contatos set campos_extras = ${JSON.stringify(extrasContato)}::jsonb || campos_extras where id = ${contato.id}`);
       await this.crmSvc.criarLead({

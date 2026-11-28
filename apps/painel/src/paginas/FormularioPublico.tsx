@@ -11,7 +11,7 @@ export function FormularioPublico() {
   const origem = useMemo(() => {
     const p = new URLSearchParams(window.location.search);
     const o: Record<string, string> = {};
-    for (const k of ['utm_source', 'utm_medium', 'utm_campaign', 'utm_content', 'utm_term', 'ref']) if (p.get(k)) o[k] = p.get(k)!.slice(0, 200);
+    for (const k of ['utm_source', 'utm_medium', 'utm_campaign', 'utm_content', 'utm_term', 'ref', 'l']) if (p.get(k)) o[k] = p.get(k)!.slice(0, 200);
     return o;
   }, []);
   const [r, setR] = useState<Record<string, any>>({});

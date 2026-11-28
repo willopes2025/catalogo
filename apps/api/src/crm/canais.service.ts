@@ -363,6 +363,17 @@ export class CanaisService implements OnModuleInit {
     return !!cv.ultimaEntradaEm && Date.now() - cv.ultimaEntradaEm.getTime() < JANELA_MS;
   }
 
+  /**
+   * Link de formulário mandado na conversa (pela IA ou pela equipe) ganha o rastreio do card: /f/<endereço>?l=<card>.
+   * Assim a resposta cai no card certo mesmo que a pessoa preencha outro telefone.
+   */
+  private async rastrearFormularios(texto: string, contatoId: string, leadId: string | null) {
+    if (!/\/f\/[a-z0-9-]+/i.test(texto)) return texto;
+    const card = leadId ?? (await this.crm.leadsAbertosDoContato(contatoId))[0]?.id;
+    if (!card) return texto;
+    return texto.replace(/(https?:\/\/[^\s/]+\/f\/[a-z0-9-]+)(\?[^\s]*)?/gi, (tudo, base: string, qs?: string) => (qs && /[?&]l=/.test(qs) ? tudo : `${base}${qs ? `${qs}&` : '?'}l=${card}`));
+  }
+
   async enviar(e: EnvioCrm) {
     const [cv] = await this.db.select().from(crmConversas).where(eq(crmConversas.id, e.conversaId));
     if (!cv) throw new NotFoundException('Conversa não encontrada.');
@@ -394,7 +405,7 @@ export class CanaisService implements OnModuleInit {
       if (canal.tipo === 'instagram' && !this.dentroDaJanela(cv)) throw new BadRequestException('Fora da janela de 24h: no Instagram só dá para responder quem mandou mensagem nas últimas 24 horas.');
       if (canal.tipo === 'oficial' && !this.dentroDaJanela(cv)) throw new BadRequestException('Fora da janela de 24h: o contato não escreveu nas últimas 24 horas. No número oficial, use um template aprovado.');
       if (e.tipo === 'texto' && !e.texto?.trim()) throw new BadRequestException('Escreva a mensagem.');
-      textoGuardado = e.texto ? preencherTexto(e.texto, vars) : null;
+      textoGuardado = e.texto ? await this.rastrearFormularios(preencherTexto(e.texto, vars), contato.id, e.leadId ?? null) : null;
       saida = { para: contato.telefone, tipo: e.tipo, texto: textoGuardado ?? undefined, midia: e.midia ?? undefined };
     }
 
