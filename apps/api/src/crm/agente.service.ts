@@ -115,8 +115,10 @@ export class AgenteService implements OnModuleInit, OnModuleDestroy {
   }
 
   /** O que a IA recebe: quem é a empresa, como falar, o que sabe, e as regras de quando passar a vez. */
-  private async sistema(cfg: ConfigAgente, contato: typeof crmContatos.$inferSelect, canalNome: string, modo: 'agente' | 'sugestao', agente?: Especialista | null, outros: Especialista[] = [], falado = false, canal?: typeof crmCanais.$inferSelect | null) {
-    const fora = canal ? foraDoHorario(canal) : null;
+  private async sistema(cfg: ConfigAgente, contato: typeof crmContatos.$inferSelect, canalNome: string, modo: 'agente' | 'sugestao', agente?: Especialista | null, outros: Especialista[] = [], falado = false, canal?: typeof crmCanais.$inferSelect | null, horarioForcado?: 'dentro' | 'fora') {
+    const comHorario = canal && (canal.atendimentoAtivo || horarioForcado) ? { ...canal, atendimentoAtivo: true } : null;
+    const fora = horarioForcado === 'dentro' ? null : horarioForcado === 'fora' && comHorario ? { horario: descreverHorario(comHorario), retorno: `amanhã a partir das ${comHorario.atendimentoInicio}`, volta: null } : comHorario ? foraDoHorario(comHorario) : null;
+    canal = comHorario;
     const horario = canal?.atendimentoAtivo
       ? fora
         ? `HORÁRIO DA EQUIPE: as pessoas da equipe atendem neste número ${fora.horario}. AGORA ESTÁ FORA DO HORÁRIO. Continue ajudando no que puder; quando for passar para a equipe (ou a pessoa pedir um atendente), avise com gentileza que a equipe responde ${fora.retorno}. Nunca diga que alguém vai responder agora ou "em instantes".`
@@ -409,6 +411,96 @@ export class AgenteService implements OnModuleInit, OnModuleDestroy {
     const [r] = await this.db.update(crmConversas).set({ foraHorarioAvisoEm: new Date() }).where(and(eq(crmConversas.id, conversaId), sql`(${crmConversas.foraHorarioAvisoEm} is null or ${crmConversas.foraHorarioAvisoEm} < now() - interval '16 hours')`)).returning({ id: crmConversas.id });
     if (!r) return;
     await this.canais.enviar({ conversaId, tipo: 'texto', texto: mensagemForaHorario(c.canal.mensagemForaHorario, fora), ia: true });
+  }
+
+  /**
+   * Ambiente de teste: a equipe conversa com a IA como se fosse uma cliente, sem WhatsApp e sem gravar nada.
+   * Segue o mesmo caminho do atendimento de verdade (especialistas do número, recepção, troca de assunto,
+   * horário da equipe). Ferramentas que só consultam rodam de verdade; as que gravam (promessa, comprovante,
+   * acordo, 2ª via, candidatura) são simuladas.
+   */
+  async testar(d: {
+    canalId: string | null;
+    mensagens: { de: 'cliente' | 'ia'; texto: string }[];
+    pessoaId?: string | null;
+    nome?: string | null;
+    horario?: 'agora' | 'dentro' | 'fora';
+    agenteId?: string | null;
+    transferencias?: number;
+    config?: Partial<Pick<ConfigAgente, 'instrucoes' | 'conhecimento' | 'nome' | 'maxTransferencias' | 'ferramentas'>>;
+  }) {
+    if (!this.ia.texto) throw new Error('A inteligência artificial não está ligada: cole a chave do Claude em Configurações › Integrações.');
+    const base = await this.config();
+    const cfg: ConfigAgente = { ...base, ...(d.config ?? {}), ferramentas: { ...base.ferramentas, ...(d.config?.ferramentas ?? {}) } };
+    const [canal] = d.canalId ? await this.db.select().from(crmCanais).where(eq(crmCanais.id, d.canalId)) : [];
+    const contato = { id: '00000000-0000-0000-0000-000000000000', nome: d.nome?.trim() || null, telefone: '', pessoaId: d.pessoaId ?? null, memoriaIa: null } as unknown as typeof crmContatos.$inferSelect;
+    const passos: string[] = [];
+    const ferramentasUsadas: { ferramenta: string; dados: Record<string, unknown>; resultado: string; simulada: boolean }[] = [];
+    // Conversa no formato da IA (vez alternada).
+    const mensagens: MensagemIa[] = [];
+    for (const m of d.mensagens) {
+      const role = m.de === 'cliente' ? 'user' : 'assistant';
+      const t = m.texto.trim();
+      if (!t) continue;
+      const ultima = mensagens.at(-1);
+      if (ultima?.role === role) (ultima.content as Bloco[]).push({ type: 'text', text: t });
+      else mensagens.push({ role, content: [{ type: 'text', text: t }] });
+    }
+    if (mensagens.at(-1)?.role !== 'user') throw new Error('Escreva a mensagem da cliente.');
+    const horario = d.horario && d.horario !== 'agora' ? d.horario : undefined;
+    if (canal) {
+      const f = horario === 'fora' ? true : horario === 'dentro' ? false : !!foraDoHorario(canal);
+      passos.push(canal.atendimentoAtivo || horario ? `Horário da equipe: ${f ? 'FORA do horário' : 'dentro do horário'}${horario ? ' (simulado)' : ''}.` : 'Este número não tem horário da equipe configurado.');
+      const iaAqui = !cfg.canais.length || cfg.canais.includes(canal.id);
+      if (!cfg.ativo || !iaAqui) passos.push(`⚠️ Na vida real a IA NÃO responderia neste número (${!cfg.ativo ? 'o agente está desligado' : 'o número não está marcado em "Em quais números"'}). O teste responde mesmo assim.`);
+    }
+    const todos = await this.especialistas(true);
+    const doNumero = canal?.iaEspecialistas ?? [];
+    const lista = todos.filter((a) => a.ativo && (!canal || !a.canais.length || a.canais.includes(canal.id)) && (!doNumero.length || doNumero.includes(a.id)));
+    let agente = d.agenteId ? (todos.find((a) => a.id === d.agenteId) ?? null) : null;
+    if (agente) passos.push(`Especialista escolhido no teste: ${agente.nome}${agente.ativo ? '' : ' (desligado: só no teste)'}.`);
+    else if (lista.length === 1) {
+      agente = lista[0];
+      passos.push(`${agente.nome} atende direto (único especialista deste número).`);
+    } else if (lista.length) {
+      const t = await this.triagem(cfg, { cv: {} as typeof crmConversas.$inferSelect, contato, canal: canal ?? null } as never, mensagens, lista, d.mensagens.filter((m) => m.de === 'ia').length < 2);
+      passos.push(`Recepção: ${t.agente}${t.certeza ? ` (certeza ${Math.round(t.certeza * 100)}%)` : ''}${t.motivo ? ` — ${t.motivo}` : ''}.`);
+      if (t.agente === 'perguntar' && t.pergunta) return { resposta: t.pergunta, passar: false, motivo: null, agente: null, passos, ferramentas: ferramentasUsadas };
+      agente = lista.find((a) => a.funcao === t.agente) ?? null;
+      if (!agente) return { resposta: '', passar: true, motivo: t.motivo || 'A recepção não achou um especialista para o assunto.', agente: null, passos, ferramentas: ferramentasUsadas };
+    } else passos.push('Nenhum especialista ligado para este número: responde só com as instruções gerais.');
+    const SO_CONSULTA = new Set(['consultar_parcelas', 'consultar_estoque', 'simular_acordo']);
+    let transferencias = d.transferencias ?? 0;
+    let usos = 0;
+    for (let volta = 0; volta < 7; volta++) {
+      const outros = lista.filter((a) => a.id !== agente?.id);
+      const r = await this.ia.perguntarJson<Resposta>({ recurso: 'agente', sistema: await this.sistema(cfg, contato, canal?.nome ?? 'Teste', 'agente', agente, outros, false, canal ?? null, horario), mensagens, maxTokens: 700 });
+      const novo = agente && r.transferir ? outros.find((a) => a.funcao === String(r.transferir).trim().toLowerCase()) : null;
+      if (novo && agente) {
+        if (transferencias >= Math.max(0, cfg.maxTransferencias)) return { resposta: '', passar: true, motivo: `Mudou de assunto mais de ${cfg.maxTransferencias} vez(es) (agora: ${novo.nome}).`, agente: { id: agente.id, nome: agente.nome }, passos, ferramentas: ferramentasUsadas, transferencias };
+        transferencias++;
+        passos.push(`${agente.nome} → ${novo.nome}${r.motivo ? `: ${String(r.motivo).slice(0, 200)}` : ''}`);
+        agente = novo;
+        continue;
+      }
+      if (r.acao && typeof r.acao === 'object' && typeof r.acao.ferramenta === 'string') {
+        if (usos >= 3) return { resposta: '', passar: true, motivo: 'A IA usou ferramentas demais numa resposta só.', agente: agente && { id: agente.id, nome: agente.nome }, passos, ferramentas: ferramentasUsadas, transferencias };
+        usos++;
+        const nome = r.acao.ferramenta;
+        const { ferramenta: _f, ...dados } = r.acao as Record<string, unknown>;
+        let resultado: string;
+        const simulada = !SO_CONSULTA.has(nome);
+        if (simulada) resultado = `[TESTE] A ferramenta "${nome}" seria executada agora com ${JSON.stringify(dados)}. Considere que deu certo (sem valores ou links novos: diga que vai mandar em seguida).`;
+        else resultado = (await this.ferramentas.executar(cfg.ferramentas, contato, '00000000-0000-0000-0000-000000000000', r.acao)).texto;
+        ferramentasUsadas.push({ ferramenta: nome, dados, resultado: resultado.slice(0, 1500), simulada });
+        passos.push(`Ferramenta ${nome}${simulada ? ' (simulada, nada foi gravado)' : ' (consulta de verdade)'}.`);
+        mensagens.push({ role: 'assistant', content: JSON.stringify({ acao: r.acao }) }, { role: 'user', content: `[RESULTADO DA FERRAMENTA ${nome}; isto não é mensagem do cliente]\n${resultado}\n\nAgora responda ao cliente no mesmo formato JSON.` });
+        continue;
+      }
+      const texto = semTagsDeVoz(String(r.resposta ?? '').trim().slice(0, 4000));
+      return { resposta: texto, passar: !!r.passar || !texto, motivo: r.passar || !texto ? String(r.motivo ?? '').trim().slice(0, 300) || 'A IA achou melhor uma pessoa continuar.' : null, agente: agente && { id: agente.id, nome: agente.nome }, passos, ferramentas: ferramentasUsadas, transferencias };
+    }
+    return { resposta: '', passar: true, motivo: 'A IA não conseguiu decidir quem atende.', agente: null, passos, ferramentas: ferramentasUsadas, transferencias };
   }
 
   /** Liga ou desliga a IA nesta conversa (botão "Acionar IA"). Ligando, ela já responde se o cliente está esperando. */

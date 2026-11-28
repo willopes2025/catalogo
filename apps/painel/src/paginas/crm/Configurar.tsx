@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, lerSessao, pode } from '../../api';
 import { Link } from 'react-router-dom';
@@ -641,6 +641,7 @@ function AgenteIa() {
   return (
     <div className="coluna" style={{ gap: 12 }}>
       <div className="aviso">Dica: em <Link to="/assistente">Assistente</Link> você vê todos os agentes numa lista (os do WhatsApp e os agendados) e pode pedir para ele montar ou ajustar um agente conversando, inclusive a voz.</div>
+      <TestarIa f={f} especialistas={q.data?.especialistas ?? []} />
       {!f.ligada && <div className="aviso alerta">A inteligência artificial ainda não está ligada. Cole a chave do Claude em Configurações › Integrações › Inteligência artificial. Sem a chave, o agente não atende e os botões de IA do chat ficam escondidos.</div>}
       <div className="cartao form">
         <div className="secao" style={{ gridColumn: '1 / -1', marginTop: 0 }}>Agente que atende no WhatsApp</div>
@@ -761,6 +762,133 @@ function AudioDoAgente({ f, setF, admin }: { f: ConfigAgente; setF: (c: ConfigAg
         </>
       )}
     </>
+  );
+}
+
+interface MsgTeste { de: 'cliente' | 'ia' | 'equipe'; texto: string; agente?: string | null; passos?: string[]; ferramentas?: { ferramenta: string; resultado: string; simulada: boolean }[] }
+
+/**
+ * Ambiente de teste: a equipe escreve como se fosse a cliente e vê o que a IA responderia, por qual especialista,
+ * o que a recepção decidiu e quais ferramentas usou. Nada vai para o WhatsApp e nada é gravado.
+ */
+function TestarIa({ f, especialistas }: { f: ConfigAgente; especialistas: Especialista[] }) {
+  const canais = usarCanais();
+  const [aberto, setAberto] = useState(false);
+  const [canalId, setCanalId] = useState('');
+  const [horario, setHorario] = useState<'agora' | 'dentro' | 'fora'>('agora');
+  const [agenteId, setAgenteId] = useState('');
+  const [rascunho, setRascunho] = useState(true);
+  const [busca, setBusca] = useState('');
+  const [pessoa, setPessoa] = useState<{ id: string; nome: string } | null>(null);
+  const [nome, setNome] = useState('');
+  const [texto, setTexto] = useState('');
+  const [msgs, setMsgs] = useState<MsgTeste[]>([]);
+  const [transf, setTransf] = useState(0);
+  const [verBastidores, setVerBastidores] = useState(true);
+  const pessoas = useQuery({ queryKey: ['teste-ia-pessoas', busca], queryFn: () => api<{ itens: { id: string; nome: string }[] }>(`/pessoas?tipo=representante&busca=${encodeURIComponent(busca)}`), enabled: busca.trim().length >= 3 });
+  const enviar = useMutation({
+    mutationFn: (lista: MsgTeste[]) => api<{ resposta: string; passar: boolean; motivo: string | null; agente: { id: string; nome: string } | null; passos: string[]; ferramentas: { ferramenta: string; resultado: string; simulada: boolean }[]; transferencias?: number }>('/crm/ia-agente/testar', {
+      corpo: {
+        canalId: canalId || null,
+        mensagens: lista.filter((m) => m.de !== 'equipe').map((m) => ({ de: m.de, texto: m.texto })),
+        pessoaId: pessoa?.id ?? null,
+        nome: nome || null,
+        horario,
+        agenteId: agenteId || null,
+        transferencias: transf,
+        ...(rascunho ? { config: { instrucoes: f.instrucoes, conhecimento: f.conhecimento, nome: f.nome, maxTransferencias: f.maxTransferencias } } : {}),
+      },
+    }),
+    onSuccess: (r, lista) => {
+      setTransf(r.transferencias ?? transf);
+      if (r.agente && !agenteId) setAgenteId(r.agente.id);
+      const novas: MsgTeste[] = [];
+      if (r.resposta) novas.push({ de: 'ia', texto: r.resposta, agente: r.agente?.nome ?? 'Recepção', passos: r.passos, ferramentas: r.ferramentas });
+      if (r.passar) novas.push({ de: 'equipe', texto: `A IA passaria a conversa para a equipe: ${r.motivo ?? ''}`, passos: r.resposta ? undefined : r.passos });
+      setMsgs([...lista, ...novas]);
+    },
+  });
+  const mandar = (e?: FormEvent) => {
+    e?.preventDefault();
+    if (!texto.trim() || enviar.isPending) return;
+    const lista = [...msgs, { de: 'cliente' as const, texto: texto.trim() }];
+    setMsgs(lista);
+    setTexto('');
+    enviar.mutate(lista);
+  };
+  const reiniciar = () => { setMsgs([]); setTransf(0); setAgenteId(''); enviar.reset(); };
+  const encerrada = msgs.at(-1)?.de === 'equipe';
+  if (!aberto) {
+    return (
+      <div className="cartao flex entre" style={{ gap: 10, flexWrap: 'wrap' }}>
+        <div><b>Testar a IA antes de soltar</b><div className="muted" style={{ fontSize: 13 }}>Converse como se fosse uma cliente e veja o que ela responderia, qual especialista atende e quando passa para a equipe. Nada vai para o WhatsApp.</div></div>
+        <button className="botao" onClick={() => setAberto(true)}>Abrir o teste</button>
+      </div>
+    );
+  }
+  return (
+    <div className="cartao coluna" style={{ gap: 10 }}>
+      <div className="flex entre" style={{ gap: 8, flexWrap: 'wrap' }}>
+        <b>Teste da IA</b>
+        <span className="flex" style={{ gap: 6 }}><button className="botao claro pequeno" onClick={reiniciar}>Recomeçar conversa</button><button className="botao claro pequeno" onClick={() => setAberto(false)}>Fechar</button></span>
+      </div>
+      <div className="form">
+        <Campo rotulo="Como se a mensagem chegasse no número" className="l2">
+          <select value={canalId} onChange={(e) => { setCanalId(e.target.value); reiniciar(); }}>
+            <option value="">Nenhum número (só as instruções gerais)</option>
+            {canais.data?.map((c) => <option key={c.id} value={c.id}>{c.nome}{f.ativo && (!f.canais.length || f.canais.includes(c.id)) ? ' · IA ligada' : ' · IA desligada'}</option>)}
+          </select>
+        </Campo>
+        <Campo rotulo="Horário" className="l2">
+          <select value={horario} onChange={(e) => setHorario(e.target.value as typeof horario)}>
+            <option value="agora">Agora (horário real)</option>
+            <option value="dentro">Simular dentro do horário da equipe</option>
+            <option value="fora">Simular fora do horário (noite / fim de semana)</option>
+          </select>
+        </Campo>
+        <Campo rotulo="Especialista" className="l2" ajuda="Automático = a recepção escolhe, como no WhatsApp. Dá para testar um desligado antes de ligar.">
+          <select value={agenteId} onChange={(e) => { setAgenteId(e.target.value); setTransf(0); }}>
+            <option value="">Automático (recepção escolhe)</option>
+            {especialistas.map((e) => <option key={e.id} value={e.id}>{e.nome}{e.ativo ? '' : ' (desligado)'}</option>)}
+          </select>
+        </Campo>
+        <Campo rotulo="Quem está escrevendo" className="l2" ajuda="Vazio = pessoa desconhecida (lead). Escolha uma revendedora para a IA ver a maleta e as parcelas dela (só consulta).">
+          {pessoa ? (
+            <div className="flex" style={{ gap: 6 }}><span className="etiqueta neutra">{pessoa.nome}</span><button className="botao claro pequeno" onClick={() => { setPessoa(null); reiniciar(); }}>Trocar</button></div>
+          ) : (
+            <>
+              <input value={busca} onChange={(e) => setBusca(e.target.value)} placeholder="Buscar revendedora (3 letras) ou deixe vazio" />
+              {pessoas.data?.itens?.slice(0, 6).map((p) => <button key={p.id} type="button" className="botao claro pequeno" style={{ margin: '4px 4px 0 0' }} onClick={() => { setPessoa({ id: p.id, nome: p.nome }); setBusca(''); reiniciar(); }}>{p.nome}</button>)}
+            </>
+          )}
+        </Campo>
+        {!pessoa && <Campo rotulo="Nome no WhatsApp (opcional)" className="l2"><input value={nome} maxLength={80} onChange={(e) => setNome(e.target.value)} placeholder="Ex.: Juliana" /></Campo>}
+        <label className="check l2"><input type="checkbox" checked={rascunho} onChange={(e) => setRascunho(e.target.checked)} /> Usar as instruções e o conhecimento desta tela, mesmo sem salvar</label>
+        <label className="check l4"><input type="checkbox" checked={verBastidores} onChange={(e) => setVerBastidores(e.target.checked)} /> Mostrar os bastidores (recepção, especialista, ferramentas)</label>
+      </div>
+      <div style={{ background: 'var(--creme-2, #efe6da)', borderRadius: 12, padding: 12, minHeight: 220, maxHeight: 460, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 8 }}>
+        {!msgs.length && <div className="muted" style={{ textAlign: 'center', marginTop: 70 }}>Escreva abaixo como se fosse a cliente. Ex.: "Oi, vi o anúncio e quero revender"</div>}
+        {msgs.map((m, k) => (
+          <div key={k} style={{ alignSelf: m.de === 'cliente' ? 'flex-end' : m.de === 'equipe' ? 'center' : 'flex-start', maxWidth: m.de === 'equipe' ? '100%' : '80%' }}>
+            {m.de === 'ia' && <div className="muted" style={{ fontSize: 11.5, marginBottom: 2 }}>🤖 {f.nome || 'IA'} · {m.agente}</div>}
+            <div style={{ whiteSpace: 'pre-wrap', padding: '8px 12px', borderRadius: 12, fontSize: 14, background: m.de === 'cliente' ? '#dcf8c6' : m.de === 'equipe' ? 'transparent' : '#fff', color: m.de === 'cliente' ? '#1f2d1f' : undefined, border: m.de === 'equipe' ? '1px dashed var(--borda)' : undefined, fontStyle: m.de === 'equipe' ? 'italic' : undefined }}>{m.texto}</div>
+            {verBastidores && (m.passos?.length || m.ferramentas?.length) ? (
+              <div className="muted" style={{ fontSize: 12, marginTop: 3, paddingLeft: 4 }}>
+                {m.passos?.map((p, j) => <div key={j}>· {p}</div>)}
+                {m.ferramentas?.map((t, j) => <details key={`f${j}`}><summary>🔧 {t.ferramenta}{t.simulada ? ' (simulada)' : ''}</summary><div style={{ whiteSpace: 'pre-wrap' }}>{t.resultado}</div></details>)}
+              </div>
+            ) : null}
+          </div>
+        ))}
+        {enviar.isPending && <div className="muted" style={{ fontSize: 13 }}>🤖 digitando…</div>}
+      </div>
+      {enviar.error && <Erro erro={enviar.error} />}
+      {encerrada && <div className="aviso" style={{ margin: 0 }}>Na vida real a conversa iria para a fila da equipe aqui. Continue escrevendo para ver como a IA reagiria se fosse acionada de novo, ou recomece.</div>}
+      <form className="flex" style={{ gap: 8 }} onSubmit={mandar}>
+        <input style={{ flex: 1 }} value={texto} onChange={(e) => setTexto(e.target.value)} placeholder="Mensagem da cliente…" maxLength={2000} autoFocus />
+        <button className="botao" disabled={!texto.trim() || enviar.isPending}>Enviar</button>
+      </form>
+    </div>
   );
 }
 

@@ -5190,3 +5190,13 @@ test('formulários: excluir uma resposta e o formulário inteiro', async () => {
   assert.equal((await chamar('GET', `/publico/formularios/${f.slug}`)).status, 404);
   assert.ok(!(await ok('GET', '/formularios')).some((x) => x.id === f.id));
 });
+
+test('ambiente de teste da IA: responde sem mandar nada no WhatsApp e sem gravar conversa', async () => {
+  await ok('PUT', '/integracoes/ia', { valores: { ANTHROPIC_API_KEY: 'chave-claude-teste' } });
+  const antes = (await ok('GET', '/crm/conversas?status=todas')).length ?? null;
+  const r = await ok('POST', '/crm/ia-agente/testar', { canalId: null, mensagens: [{ de: 'cliente', texto: 'Oi, quero saber o preço de um brinco' }], horario: 'fora', nome: 'Juliana' });
+  assert.ok(Array.isArray(r.passos));
+  assert.ok(typeof r.resposta === 'string' && (r.resposta.length > 0 || r.passar), 'responde ou passa para a equipe');
+  if (antes !== null) assert.equal((await ok('GET', '/crm/conversas?status=todas')).length, antes, 'não cria conversa');
+  assert.equal((await chamar('POST', '/crm/ia-agente/testar', { mensagens: [{ de: 'ia', texto: 'Olá' }] })).status, 400, 'precisa terminar com a mensagem da cliente');
+});

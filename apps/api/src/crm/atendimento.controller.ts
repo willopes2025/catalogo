@@ -694,6 +694,30 @@ export class AtendimentoController {
     return { ...(await this.agente.config()), ligada: this.ia.texto, especialistas: await this.agente.especialistas(true), voz: { disponivel: this.ia.vozDisponivel, elevenlabs: this.ia.temElevenlabs, openai: this.ia.imagem, opcoes: { elevenlabs: VOZES_ELEVENLABS, openai: VOZES_OPENAI } } };
   }
 
+  /** Ambiente de teste da IA: responde como no WhatsApp, sem mandar nada e sem gravar. */
+  @Post('crm/ia-agente/testar')
+  @Permissao('crm', 'ver')
+  async testarAgente(@Body() body: unknown) {
+    const d = validar(
+      z.object({
+        canalId: uuid.nullable().optional(),
+        mensagens: z.array(z.object({ de: z.enum(['cliente', 'ia']), texto: z.string().max(4000) })).min(1).max(60),
+        pessoaId: uuid.nullable().optional(),
+        nome: z.string().max(80).nullable().optional(),
+        horario: z.enum(['agora', 'dentro', 'fora']).optional(),
+        agenteId: uuid.nullable().optional(),
+        transferencias: z.number().int().min(0).max(10).optional(),
+        config: z.object({ instrucoes: z.string().max(20000).optional(), conhecimento: z.string().max(60000).optional(), nome: z.string().max(40).optional(), maxTransferencias: z.number().int().min(0).max(5).optional() }).optional(),
+      }),
+      body,
+    );
+    try {
+      return await this.agente.testar({ ...d, canalId: d.canalId ?? null });
+    } catch (e) {
+      throw new BadRequestException((e as Error).message);
+    }
+  }
+
   @Put('crm/ia-agente')
   @Permissao('configuracoes', 'editar')
   async salvarAgente(@Usuario() u: UsuarioLogado, @Body() body: unknown) {
