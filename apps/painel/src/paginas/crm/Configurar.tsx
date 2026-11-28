@@ -1002,15 +1002,21 @@ function Especialistas({ lista, admin }: { lista: Especialista[]; admin: boolean
       </p>
       {lista.length > 0 && (
         <table className="tabela">
-          <thead><tr><th>Especialista</th><th>Atende quando</th><th></th></tr></thead>
+          <thead><tr><th>Especialista</th><th>Situação</th><th>Atende quando</th><th></th></tr></thead>
           <tbody>
             {lista.map((e) => (
               <tr key={e.id} style={e.ativo ? undefined : { opacity: 0.55 }}>
-                <td><b>{e.nome}</b><div className="muted" style={{ fontSize: 12 }}>{e.funcao}{e.ativo ? '' : ' · desligado'}{e.canais?.length ? ` · só em ${e.canais.map((id) => canais.data?.find((c) => c.id === id)?.nome ?? '?').join(', ')}` : ''}</div></td>
+                <td><b>{e.nome}</b><div className="muted" style={{ fontSize: 12 }}>{e.funcao}{e.canais?.length ? ` · só em ${e.canais.map((id) => canais.data?.find((c) => c.id === id)?.nome ?? '?').join(', ')}` : ''}</div></td>
+                <td style={{ whiteSpace: 'nowrap' }}>
+                  {/* Mostra o estado, não a ação: marcado = ligado (atendendo). */}
+                  <label className="check" title={admin ? (e.ativo ? 'Clique para desligar' : 'Clique para ligar') : undefined} style={{ cursor: admin ? 'pointer' : 'default' }}>
+                    <input type="checkbox" checked={e.ativo} disabled={!admin || ligar.isPending} onChange={() => ligar.mutate(e)} />
+                    <span className={`etiqueta ${e.ativo ? 'ok' : 'neutra'}`}>{e.ativo ? 'Ligado' : 'Desligado'}</span>
+                  </label>
+                </td>
                 <td style={{ fontSize: 13 }}>{e.quando}</td>
                 <td style={{ whiteSpace: 'nowrap' }}>
                   {admin && <button className="botao claro pequeno" onClick={() => setEditar(e)}>Editar</button>}{' '}
-                  {admin && <button className="botao claro pequeno" disabled={ligar.isPending} onClick={() => ligar.mutate(e)}>{e.ativo ? 'Desligar' : 'Ligar'}</button>}{' '}
                   {admin && <button className="botao claro pequeno" title="Cria uma cópia desligada para você ajustar" disabled={duplicar.isPending} onClick={() => duplicar.mutate(e)}>Duplicar</button>}
                 </td>
               </tr>
