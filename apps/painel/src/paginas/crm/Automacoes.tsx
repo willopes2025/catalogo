@@ -1,3 +1,4 @@
+import { AcoesTarefa } from './TarefaEditar';
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
@@ -28,7 +29,7 @@ export function Tarefas() {
               return (
                 <tr key={t.id}>
                   <td><input type="checkbox" disabled={marcar.isPending} onChange={() => marcar.mutate(t.id)} title="Concluir" /></td>
-                  <td>{t.titulo}</td>
+                  <td>{t.titulo}{pode('crm', 'editar') && t.venceEm && <AcoesTarefa t={t} aoMudar={() => qc.invalidateQueries({ queryKey: ['crm'] })} />}</td>
                   <td><Link to={`/crm/lead/${t.lead_id}`}>{t.lead}</Link></td>
                   <td style={{ color: vencida ? 'var(--erro)' : undefined, fontWeight: vencida ? 700 : undefined }}>{vencida ? 'Vencida · ' : ''}{new Date(t.vence_em).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' })}</td>
                   <td>{t.responsavel ?? '—'}</td>

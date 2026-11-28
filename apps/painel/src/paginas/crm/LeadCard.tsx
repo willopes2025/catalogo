@@ -10,6 +10,7 @@ import { Chat } from './Chat';
 import { Aprovar, Motivo } from './Funil';
 import { ha, ligar, NovoCampo, telefoneBonito, usarAtendentes, usarCampos, usarCanais, usarFunis, ValorCampo, type Etapa } from './comum';
 import './crm.css';
+import { AcoesTarefa } from './TarefaEditar';
 import { EscolherMensagem, MensagemDaTarefa, corpoMensagem, mensagemPronta, mensagemVazia } from './TarefaMensagem';
 
 const ICONES: Record<string, string> = { nota: '📝', etapa: '➜', campo: '✎', tarefa: '☑', gatilho: '⚡', sistema: '•', ligacao: '📞' };
@@ -282,7 +283,7 @@ export function LeadCard() {
                   <label key={t.id} className="evento" style={{ cursor: 'pointer', textDecoration: t.feitaEm ? 'line-through' : undefined, opacity: t.feitaEm ? 0.6 : 1 }}>
                     <input type="checkbox" checked={!!t.feitaEm} disabled={!editar} onChange={(e) => marcar.mutate({ tid: t.id, feita: e.target.checked })} style={{ width: 'auto', flex: 'none', alignSelf: 'flex-start', marginTop: 3 }} />
                     <div style={{ flex: 1, minWidth: 0 }}>
-                      <div>{t.titulo}</div>
+                      <div>{t.titulo}{editar && !t.feitaEm && <AcoesTarefa t={t} aoMudar={atualizar} />}</div>
                       <div className="muted" style={{ fontSize: 12, color: vencida ? 'var(--erro)' : undefined }}>{vencida ? 'Vencida · ' : ''}{new Date(t.venceEm).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' })} · {t.responsavel ?? 'sem responsável'}</div>
                       <MensagemDaTarefa t={t} podeEnviar={editar} />
                     </div>

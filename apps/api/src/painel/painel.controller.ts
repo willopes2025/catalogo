@@ -50,7 +50,7 @@ export class PainelController {
         triagem: sql<number>`count(*) filter (where ${pessoas.status} = 'triagem')::int`,
         novasMes: sql<number>`count(*) filter (where ${pessoas.criadoEm} >= ${inicioMes}::date)::int`,
         bloqueadas: sql<number>`count(*) filter (where ${pessoas.bloqueado})::int`,
-        semMaleta: sql<number>`count(*) filter (where ${pessoas.status} = 'ativo' and ${pessoas.modeloTrabalho} = 'consignado' and not exists (select 1 from ${maletas} mm where mm.representante_id = ${pessoas.id} and mm.status = 'aberta'))::int`,
+        semMaleta: sql<number>`count(*) filter (where ${pessoas.status} = 'ativo' and ${pessoas.modeloTrabalho} = 'consignado' and not exists (select 1 from ${maletas} mm where mm.representante_id = "pessoas"."id" and mm.status = 'aberta'))::int`,
       })
       .from(pessoas)
       .where(eq(pessoas.tipo, 'representante'));

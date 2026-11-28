@@ -343,7 +343,7 @@ export class FerramentasAgenteService {
         referencia: produtos.referencia,
         cor: produtos.cor,
         preco: produtos.preco,
-        estoque: sql<number>`coalesce((select sum(s.quantidade) from ${saldos} s join ${locaisEstoque} l on l.id = s.local_id where s.produto_id = ${produtos.id} and l.tipo <> 'maleta'), 0)::int`,
+        estoque: sql<number>`coalesce((select sum(s.quantidade) from ${saldos} s join ${locaisEstoque} l on l.id = s.local_id where s.produto_id = "produtos"."id" and l.tipo <> 'maleta'), 0)::int`,
       })
       .from(produtos)
       .where(and(eq(produtos.ativo, true), eq(produtos.exibeCatalogo, true), sql`${produtos.preco} > 0`, or(eq(produtos.referencia, busca), eq(produtos.codigoBarras, busca), and(...palavras.map((p) => sql`(${produtos.descricao} || ' ' || coalesce(${produtos.cor}, '')) ilike ${`%${p}%`}`)))))

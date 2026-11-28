@@ -322,7 +322,7 @@ export class PortalController {
         dataRetirada: maletas.dataRetirada,
         dataLimite: maletas.dataLimite,
         acertadaEm: maletas.acertadaEm,
-        valor: sql<number>`coalesce((select sum(mi.preco * mi.enviada) from maleta_itens mi where mi.maleta_id = ${maletas.id}),0)::int`,
+        valor: sql<number>`coalesce((select sum(mi.preco * mi.enviada) from maleta_itens mi where mi.maleta_id = "maletas"."id"),0)::int`,
       })
       .from(maletas)
       .where(and(eq(maletas.representanteId, r.rep), inArray(maletas.status, ['aberta', 'acertada'])))

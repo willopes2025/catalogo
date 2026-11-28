@@ -5300,3 +5300,18 @@ test('assistente: fixar e renomear conversa (o nome dado não é trocado)', asyn
   assert.equal((await ok('GET', '/assistente/sessoes')).find((x) => x.id === s.id).fixada, false);
   await ok('DELETE', `/assistente/sessoes/${s.id}`);
 });
+
+test('tarefa do card: editar (texto, horário, responsável) e excluir', async () => {
+  const funil = (await ok('GET', '/crm/funis'))[0];
+  const lead = await ok('POST', '/crm/leads', { funilId: funil.id, nome: 'Tarefa Editável', telefone: '27966660000' });
+  const t = await ok('POST', `/crm/leads/${lead.id}/tarefas`, { titulo: 'Ligar', venceEm: '2030-01-10T10:00' });
+  const e = await ok('PATCH', `/crm/tarefas/${t.id}`, { titulo: 'Ligar e marcar entrevista', venceEm: '2030-01-11T15:30:00-03:00', responsavelId: null });
+  assert.equal(e.titulo, 'Ligar e marcar entrevista');
+  assert.equal(e.responsavelId, null);
+  assert.equal(new Date(e.venceEm).toISOString(), '2030-01-11T18:30:00.000Z');
+  assert.equal((await chamar('PATCH', `/crm/tarefas/${t.id}`, { titulo: 'x' })).status, 400);
+  await ok('DELETE', `/crm/tarefas/${t.id}`);
+  const d = await ok('GET', `/crm/leads/${lead.id}`);
+  assert.equal(d.tarefas.length, 0);
+  assert.ok(d.eventos.some((ev) => ev.texto.includes('Tarefa excluída')));
+});

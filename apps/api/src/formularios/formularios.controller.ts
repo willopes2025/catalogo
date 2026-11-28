@@ -78,8 +78,9 @@ export class FormulariosController {
         acao: formularios.acao,
         ativo: formularios.ativo,
         criadoEm: formularios.criadoEm,
-        respostas: sql<number>`(select count(*)::int from formulario_respostas r where r.formulario_id = ${formularios.id})`,
-        ultima: sql<string | null>`(select max(r.criado_em) from formulario_respostas r where r.formulario_id = ${formularios.id})`,
+        // Nome da tabela escrito por extenso: sem join, o Drizzle escreve só "id", que dentro da subconsulta vira r.id (e a contagem dava 0).
+        respostas: sql<number>`(select count(*)::int from formulario_respostas r where r.formulario_id = "formularios"."id")`,
+        ultima: sql<string | null>`(select max(r.criado_em) from formulario_respostas r where r.formulario_id = "formularios"."id")`,
       })
       .from(formularios)
       .orderBy(desc(formularios.criadoEm));

@@ -431,7 +431,7 @@ export class AutomacaoService implements OnModuleInit, OnModuleDestroy {
   /** Tarefas abertas: do usuário (ou de todos, para a gestão). */
   async tarefas(usuarioId: string | null) {
     return this.db.execute(sql`
-      select t.id, t.titulo, t.vence_em, t.lead_id, l.titulo as lead, u.nome as responsavel, t.mensagem_tipo, t.envio, t.mensagem_status, t.mensagem_erro
+      select t.id, t.titulo, t.vence_em, t.vence_em as "venceEm", t.responsavel_id as "responsavelId", t.lead_id, l.titulo as lead, u.nome as responsavel, t.mensagem_tipo, t.envio, t.mensagem_status, t.mensagem_erro
       from crm_tarefas t join crm_leads l on l.id = t.lead_id left join usuarios u on u.id = t.responsavel_id
       where t.feita_em is null ${usuarioId ? sql`and (t.responsavel_id = ${usuarioId} or t.responsavel_id is null)` : sql``}
       order by t.vence_em limit 200`);

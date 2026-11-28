@@ -97,7 +97,7 @@ export class GruposController {
   @Permissao('configuracoes', 'ver')
   listar() {
     return this.db
-      .select({ id: grupos.id, nome: grupos.nome, permissoes: grupos.permissoes, usuarios: sql<number>`(select count(*)::int from ${usuarios} u where u.grupo_id = ${grupos.id})` })
+      .select({ id: grupos.id, nome: grupos.nome, permissoes: grupos.permissoes, usuarios: sql<number>`(select count(*)::int from ${usuarios} u where u.grupo_id = "grupos"."id")` })
       .from(grupos)
       .orderBy(asc(grupos.nome));
   }

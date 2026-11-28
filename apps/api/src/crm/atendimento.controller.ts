@@ -412,11 +412,40 @@ export class AtendimentoController {
   @Patch('crm/tarefas/:id')
   @Permissao('crm', 'editar')
   async tarefa(@Usuario() u: UsuarioLogado, @Param('id', ParseUUIDPipe) id: string, @Body() body: unknown) {
-    const { feita } = validar(z.object({ feita: z.boolean() }), body);
-    const [t] = await this.db.update(crmTarefas).set({ feitaEm: feita ? new Date() : null }).where(eq(crmTarefas.id, id)).returning();
-    if (!t) throw new NotFoundException('Tarefa não encontrada.');
-    if (feita) await this.crm.evento(t.leadId, 'tarefa', `Tarefa concluída: ${t.titulo}.`, u.id);
+    const d = validar(
+      z.object({
+        feita: z.boolean().optional(),
+        titulo: z.string().trim().min(2, 'Escreva o que fazer').max(200).optional(),
+        venceEm: z.string().datetime({ offset: true }).or(z.string().regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/)).optional(),
+        responsavelId: uuid.nullable().optional(),
+      }),
+      body,
+    );
+    const [antes] = await this.db.select().from(crmTarefas).where(eq(crmTarefas.id, id));
+    if (!antes) throw new NotFoundException('Tarefa não encontrada.');
+    const mudar: Partial<typeof crmTarefas.$inferInsert> = {};
+    if (d.feita !== undefined) mudar.feitaEm = d.feita ? new Date() : null;
+    if (d.titulo !== undefined) mudar.titulo = d.titulo;
+    if (d.venceEm !== undefined) {
+      mudar.venceEm = new Date(d.venceEm);
+      // Remarcou: a mensagem automática da tarefa sai no horário novo.
+      if (antes.mensagemStatus && antes.mensagemStatus !== 'enviada') mudar.mensagemStatus = 'pendente';
+    }
+    if (d.responsavelId !== undefined) mudar.responsavelId = d.responsavelId;
+    if (!Object.keys(mudar).length) throw new BadRequestException('Nada para mudar.');
+    const [t] = await this.db.update(crmTarefas).set(mudar).where(eq(crmTarefas.id, id)).returning();
+    if (d.feita) await this.crm.evento(t.leadId, 'tarefa', `Tarefa concluída: ${t.titulo}.`, u.id);
+    else if (d.titulo !== undefined || d.venceEm !== undefined || d.responsavelId !== undefined) await this.crm.evento(t.leadId, 'tarefa', `Tarefa editada: ${t.titulo}.`, u.id);
     return t;
+  }
+
+  @Delete('crm/tarefas/:id')
+  @Permissao('crm', 'editar')
+  async excluirTarefa(@Usuario() u: UsuarioLogado, @Param('id', ParseUUIDPipe) id: string) {
+    const [t] = await this.db.delete(crmTarefas).where(eq(crmTarefas.id, id)).returning();
+    if (!t) throw new NotFoundException('Tarefa não encontrada.');
+    await this.crm.evento(t.leadId, 'tarefa', `Tarefa excluída: ${t.titulo}.`, u.id);
+    return { ok: true };
   }
 
   @Get('crm/tarefas')

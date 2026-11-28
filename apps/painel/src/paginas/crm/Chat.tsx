@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, lerSessao, pode } from '../../api';
 import { Campo, Carregando, Erro } from '../../componentes/ui';
+import { AcoesTarefa } from './TarefaEditar';
 import { EscolherMensagem, MensagemDaTarefa, corpoMensagem, mensagemPronta, mensagemVazia, type TarefaComMensagem } from './TarefaMensagem';
 import { ha, ligar, meuId, telefoneBonito, useMidia, useRelogio, usarAtendentes, usarFunis, type Template } from './comum';
 
@@ -130,7 +131,7 @@ function NotasTarefas({ modo, leadId, contato }: { modo: 'notas' | 'tarefas'; le
             <label key={t.id} className="nota-chat check" style={{ alignItems: 'flex-start' }}>
               <input type="checkbox" checked={!!t.feitaEm} disabled={!editar || concluir.isPending} onChange={(e) => concluir.mutate({ id: t.id, feita: e.target.checked })} />
               <span style={{ flex: 1 }}>
-                <span style={{ textDecoration: t.feitaEm ? 'line-through' : undefined }}>{t.titulo}</span>
+                <span style={{ textDecoration: t.feitaEm ? 'line-through' : undefined }}>{t.titulo}</span>{editar && !t.feitaEm && <AcoesTarefa t={t} aoMudar={recarregar} />}
                 <span className="muted" style={{ display: 'block', fontSize: 12, color: !t.feitaEm && new Date(t.venceEm) < new Date() ? 'var(--erro)' : undefined }}>{t.feitaEm ? `feita em ${quando(t.feitaEm)}` : `${new Date(t.venceEm) < new Date() ? 'venceu em' : 'para'} ${quando(t.venceEm)}`}{t.responsavel ? ` · ${t.responsavel}` : ''}</span>
                 <MensagemDaTarefa t={t} podeEnviar={editar} />
               </span>
