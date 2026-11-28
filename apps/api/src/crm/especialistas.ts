@@ -46,8 +46,12 @@ export const ESPECIALISTAS_SUGERIDOS = [
     nome: 'Quero revender',
     ordem: 2,
     quando: 'Pessoa interessada em revender ou trabalhar com a empresa: como funciona a maleta (consignado), revenda, afiliada, ganhos, requisitos, como se cadastrar.',
-    instrucoes:
-      'Explique os modelos de trabalho com o que estiver no conhecimento, sem prometer ganho. Descubra a cidade da pessoa, se já vende algo e como prefere trabalhar. Para se cadastrar, mande o link do formulário de candidatas se estiver no conhecimento; senão, diga que a equipe vai entrar em contato e passe a conversa.',
+    instrucoes: [
+      'Você faz a triagem de quem quer revender ou trabalhar com consignado. Explique os modelos com o que estiver no conhecimento, sem prometer ganho.',
+      'Descubra, uma pergunta por vez e com naturalidade: 1) o nome; 2) onde a pessoa trabalha hoje; 3) a cidade; 4) por que quer revender.',
+      'Com essas respostas, ofereça o formulário de cadastro (o link do formulário de candidatas, se estiver no conhecimento ou na ferramenta de candidatura).',
+      'Depois de mandar o formulário, ou se a pessoa preferir falar com alguém, passe a conversa para a equipe com um resumo: nome, onde trabalha, cidade e motivo.',
+    ].join('\n'),
     conhecimento: '',
   },
   {

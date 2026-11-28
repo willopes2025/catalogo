@@ -80,10 +80,10 @@ export function ConferenciaMaleta() {
   return (
     <>
       <Topo
-        eb={`Maleta nº ${m.numero} · ${tipo === 'saida' ? 'Conferência de saída' : 'Conferência de volta'}`}
+        eb={`Pedido nº ${m.numero} · ${tipo === 'saida' ? 'Conferência de saída' : 'Conferência de volta'}`}
         titulo={m.representante}
         sub={tipo === 'saida' ? 'Bipe cada peça que vai na maleta antes de entregar.' : comPrebaixa ? `Bipe cada peça que voltou. A pré-baixa (${dataHora(m.prebaixaEm)}) diz quais deviam voltar.` : 'Bipe cada peça que voltou. Sem pré-baixa, o que não voltar conta como vendido no acerto.'}
-        acoes={<Link className="botao claro" to={`/maletas/${id}`}>Voltar para a maleta</Link>}
+        acoes={<Link className="botao claro" to={`/maletas/${id}`}>Voltar para o pedido</Link>}
       />
       <div className="grade" style={{ gridTemplateColumns: 'minmax(0, 1fr) 340px', alignItems: 'start' }}>
         <div className="cartao coluna" style={{ minWidth: 0 }}>

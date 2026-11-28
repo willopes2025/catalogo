@@ -8,6 +8,7 @@ import { AuditoriaService } from '../comum/auditoria.service';
 import { metas } from '../db/schema';
 import { hoje } from '../maletas/maletas.service';
 import { numeros } from './fontes';
+import { sqlAtivos, sqlChurn, sqlRenovacoes } from './consignado';
 
 export const TIPOS_META = {
   faturamento: { nome: 'Faturamento total', dinheiro: true },
@@ -17,7 +18,11 @@ export const TIPOS_META = {
   local: { nome: 'Por loja ou evento', dinheiro: true },
   novas_revendedoras: { nome: 'Novas revendedoras', dinheiro: false },
   consultoras_ativas: { nome: 'Consultoras que acertaram no mês', dinheiro: false },
+  maletas_ativas: { nome: 'Pedidos ativos (com a consultora)', dinheiro: false },
+  renovacoes: { nome: 'Renovações (novo pedido de quem já teve)', dinheiro: false },
+  churn: { nome: 'Churn: consultoras que não renovaram (máximo)', dinheiro: false, menor: true },
 } as const;
+const menor = (t: string) => !!(TIPOS_META as Record<string, { menor?: boolean }>)[t]?.menor;
 type TipoMeta = keyof typeof TIPOS_META;
 
 const comp = z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/, 'Mês no formato AAAA-MM');
@@ -57,7 +62,10 @@ export class MetasController {
     const porLocal = numeros<{ id: string; valor: number }>(
       await this.db.execute(sql`select local_id as id, coalesce(sum(total - devolvido), 0) as valor from vendas where status = 'concluida' and criado_em::date between ${ini}::date and ${fim}::date group by local_id`),
     );
-    return { ...r, faturamento: r.rede + r.balcao, local: new Map(porLocal.map((x) => [x.id, x.valor])) };
+    const um = async (q: ReturnType<typeof sqlAtivos>) => Number((await this.db.execute<{ v: number }>(q)).rows[0]?.v ?? 0);
+    const fimAte = fim < hoje() ? fim : hoje();
+    const [maletas_ativas, renovacoes, churn] = await Promise.all([um(sqlAtivos(fimAte)), um(sqlRenovacoes(ini, fim)), um(sqlChurn(ini, fim))]);
+    return { ...r, maletas_ativas, renovacoes, churn, faturamento: r.rede + r.balcao, local: new Map(porLocal.map((x) => [x.id, x.valor])) };
   }
 
   @Get()
@@ -74,8 +82,17 @@ export class MetasController {
     const linhas = definidas.rows.map((d) => {
       const realizado = d.tipo === 'local' ? (real.local.get(d.local_id!) ?? 0) : Number((real as Record<string, unknown>)[d.tipo] ?? 0);
       const mesAnterior = d.tipo === 'local' ? (realAnt.local.get(d.local_id!) ?? 0) : Number((realAnt as Record<string, unknown>)[d.tipo] ?? 0);
-      // Projeção pelo ritmo do mês até hoje (mês fechado: o próprio realizado).
-      const projecao = p.restantes === 0 ? realizado : p.decorridos > 0 ? Math.round((realizado / p.decorridos) * p.dias) : 0;
+      // Projeção pelo ritmo do mês até hoje (mês fechado: o próprio realizado). Pedidos ativos é uma foto: não projeta.
+      const projecao = p.restantes === 0 || d.tipo === 'maletas_ativas' ? realizado : p.decorridos > 0 ? Math.round((realizado / p.decorridos) * p.dias) : 0;
+      if (menor(d.tipo)) {
+        // Churn: a meta é um teto (quanto menos, melhor).
+        return {
+          id: d.id, tipo: d.tipo, nome: TIPOS_META[d.tipo]?.nome ?? d.tipo, localId: d.local_id, dinheiro: false, menor: true,
+          meta: d.valor, realizado, atingidoPb: pb(realizado, d.valor), projecao, projecaoPb: pb(projecao, d.valor),
+          falta: 0, porDia: 0, mesAnterior,
+          situacao: p.restantes === 0 ? (realizado <= d.valor ? 'batida' : 'nao_batida') : projecao <= d.valor ? 'no_ritmo' : realizado <= d.valor ? 'perto' : 'abaixo',
+        };
+      }
       const falta = Math.max(0, d.valor - realizado);
       return {
         id: d.id,

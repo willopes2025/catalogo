@@ -84,6 +84,20 @@ export const CONFIGS = {
       termoCobranca: z.string().trim().min(20).max(3000),
     }),
   },
+  /** Boleto da pré-baixa: X dias antes do acerto, para quem lançou vendas no sistema. */
+  boleto_prebaixa: {
+    padrao: {
+      ativo: false,
+      diasAntes: 5,
+      texto:
+        'Oi, {{primeiro_nome}}! 💛 Faltam {{dias}} dias para o acerto do seu pedido nº {{numero}} ({{data_acerto}}).\nPelas vendas que você lançou no sistema ({{pecas}} peça(s)), o valor a pagar já com a sua comissão é *{{valor}}*.\n\nPague pelo boleto: {{link}}\n\nAssim que o pagamento cair, a gente dá a baixa e já separa o seu novo pedido. Se vendeu mais alguma peça, lance no app antes do acerto.',
+    },
+    schema: z.object({
+      ativo: z.boolean(),
+      diasAntes: z.number().int().min(1).max(30),
+      texto: z.string().trim().min(10, 'Escreva a mensagem.').max(2000),
+    }),
+  },
   mensagem_app: {
     padrao: {
       ativo: true,

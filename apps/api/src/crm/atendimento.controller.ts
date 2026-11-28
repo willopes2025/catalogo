@@ -1219,10 +1219,20 @@ export class AtendimentoController {
         envioInicio: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'Horário no formato HH:MM').optional(),
         envioFim: z.string().regex(/^(([01]\d|2[0-3]):[0-5]\d|24:00)$/, 'Horário no formato HH:MM').optional(),
         envioDias: z.array(z.number().int().min(0).max(6)).min(1, 'Marque pelo menos um dia').max(7).optional(),
+        // Horário do atendimento humano e aviso fora do horário.
+        atendimentoAtivo: z.boolean().optional(),
+        atendimentoInicio: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'Horário no formato HH:MM').optional(),
+        atendimentoFim: z.string().regex(/^(([01]\d|2[0-3]):[0-5]\d|24:00)$/, 'Horário no formato HH:MM').optional(),
+        atendimentoDias: z.array(z.number().int().min(0).max(6)).min(1, 'Marque pelo menos um dia de atendimento').max(7).optional(),
+        avisoForaHorario: z.boolean().optional(),
+        mensagemForaHorario: z.string().max(1000).optional(),
+        iaEspecialistas: z.array(uuid).max(50).optional(),
       }),
       body,
     );
     const atual = await this.canais.obter(id);
+    if ((d.atendimentoFim ?? atual.atendimentoFim) <= (d.atendimentoInicio ?? atual.atendimentoInicio)) throw new BadRequestException('O fim do atendimento precisa ser depois do início.');
+    if (d.atendimentoDias) d.atendimentoDias = [...new Set(d.atendimentoDias)].sort();
     const min = d.envioIntervaloMinS ?? atual.envioIntervaloMinS;
     const max = d.envioIntervaloMaxS ?? atual.envioIntervaloMaxS;
     if (max < min) throw new BadRequestException('O intervalo máximo precisa ser maior ou igual ao mínimo.');

@@ -59,7 +59,7 @@ export function NovaMaleta() {
 
   return (
     <>
-      <Topo eb="Maletas · Nova" titulo="Montar maleta" />
+      <Topo eb="Pedidos · Novo" titulo="Montar pedido" />
       <div className="grade" style={{ gridTemplateColumns: '1fr 340px', alignItems: 'start' }}>
         <div className="coluna">
           <div className="cartao form">

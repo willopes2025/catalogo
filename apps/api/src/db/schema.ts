@@ -355,6 +355,16 @@ export const maletas = pgTable(
     garantiaValor: integer('garantia_valor'),
     garantiaVencimento: date('garantia_vencimento', { mode: 'string' }),
     garantiaPagaEm: date('garantia_paga_em', { mode: 'string' }),
+    /**
+     * Boleto da pré-baixa: X dias antes do acerto, quem lançou vendas no sistema recebe o boleto do que deve
+     * (vendidas menos a comissão). Pago, vira crédito usado no acerto (baixa mais rápida e novo pedido).
+     */
+    prebaixaCobrancaId: text('prebaixa_cobranca_id'),
+    prebaixaUrl: text('prebaixa_url'),
+    prebaixaValor: integer('prebaixa_valor'),
+    prebaixaVencimento: date('prebaixa_vencimento', { mode: 'string' }),
+    prebaixaBoletoEm: timestamp('prebaixa_boleto_em', { withTimezone: true }),
+    prebaixaPagaEm: date('prebaixa_paga_em', { mode: 'string' }),
     /** Contrato da consultora a que esta maleta está ligada (assinado no cadastro). */
     contratoId: uuid('contrato_id'),
     /** Onde a maleta está: criada | aguardando_retirada | em_transito | entregue | voltando | em_conferencia. */
@@ -1231,6 +1241,18 @@ export const crmCanais = pgTable('crm_canais', {
   envioInicio: text('envio_inicio').notNull().default('08:00'),
   envioFim: text('envio_fim').notNull().default('18:00'),
   envioDias: jsonb('envio_dias').$type<number[]>().notNull().default([1, 2, 3, 4, 5, 6]),
+  /**
+   * Horário do atendimento humano neste número (Brasília). Fora dele a IA avisa quando a equipe volta;
+   * com `avisoForaHorario`, números sem IA também mandam o aviso automático (uma vez por período).
+   */
+  atendimentoAtivo: boolean('atendimento_ativo').notNull().default(false),
+  atendimentoInicio: text('atendimento_inicio').notNull().default('09:00'),
+  atendimentoFim: text('atendimento_fim').notNull().default('18:00'),
+  atendimentoDias: jsonb('atendimento_dias').$type<number[]>().notNull().default([1, 2, 3, 4, 5]),
+  avisoForaHorario: boolean('aviso_fora_horario').notNull().default(false),
+  mensagemForaHorario: text('mensagem_fora_horario').notNull().default(''),
+  /** Especialistas da IA que atendem neste número (vazio = todos os ligados que valem para ele). */
+  iaEspecialistas: jsonb('ia_especialistas').$type<string[]>().notNull().default([]),
   /** Quando a próxima mensagem do envio em massa pode sair por este número. */
   proximoEnvioEm: timestamp('proximo_envio_em', { withTimezone: true }),
   criadoEm: criadoEm(),
@@ -1320,6 +1342,8 @@ export const crmConversas = pgTable(
     iaAgenteId: uuid('ia_agente_id').references((): AnyPgColumn => iaAgentes.id, { onDelete: 'set null' }),
     /** Quantas vezes a conversa passou de um especialista para outro neste atendimento. */
     iaTransferencias: integer('ia_transferencias').notNull().default(0),
+    /** Último aviso de "fora do horário" mandado nesta conversa (para não repetir no mesmo período). */
+    foraHorarioAvisoEm: timestamp('fora_horario_aviso_em', { withTimezone: true }),
     criadoEm: criadoEm(),
   },
   (t) => ({ unica: uniqueIndex('crm_conversas_contato_canal_idx').on(t.contatoId, t.canalId), recentes: index('crm_conversas_recentes_idx').on(t.ultimaMensagemEm), porStatus: index('crm_conversas_status_idx').on(t.status, t.atendenteId) }),

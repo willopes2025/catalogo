@@ -52,7 +52,7 @@ export function DetalheMaleta() {
   return (
     <>
       <Topo
-        eb={`Maletas · Nº ${m.numero}`}
+        eb={`Pedidos · Nº ${m.numero}`}
         titulo={m.representante}
         sub={<><StatusMaleta status={m.status} diasAtraso={m.diasAtraso} /> {m.status === 'aberta' && <MudarEtapa id={m.id} etapa={m.etapa} />} &nbsp; Retirada {data(m.dataRetirada)} · Acerto até <b>{data(m.dataLimite)}</b> · {telefone(m.telefone)} · {m.cidade}</>}
         acoes={(
@@ -76,6 +76,8 @@ export function DetalheMaleta() {
         <div className="cartao indicador"><div className="rotulo">Recebimento</div><div className="valor" style={{ fontSize: 18 }}>{m.recebidaEm ? `Confirmado ${dataHora(m.recebidaEm)}` : 'Aguardando'}</div><div className="detalhe">{m.entrega === 'envio' ? `Envio ${m.codigoRastreio ?? '(sem rastreio)'}` : 'Retirada presencial'}</div></div>
         <div className="cartao indicador"><div className="rotulo">Pré-baixa</div><div className="valor" style={{ fontSize: 18 }}>{temPrebaixa ? `Informada ${dataHora(m.prebaixaEm)}` : 'Não informada'}</div><div className="detalhe">o que ela diz ter vendido</div></div>
       </div>
+
+      {aberta && temPrebaixa && <BoletoPrebaixa m={m} />}
 
       {aberta && (
         <div className="cartao flex entre" style={{ marginBottom: 14, flexWrap: 'wrap' }}>
@@ -428,6 +430,31 @@ function ReceberAcerto({ maletaId, parcelas }: { maletaId: string; parcelas: any
       </table>
       {receber.error && <Erro erro={receber.error} />}
       {cobrar.error && <Erro erro={cobrar.error} />}
+    </div>
+  );
+}
+
+/** Boleto do que ela deve pelas vendas lançadas (pré-baixa): sai sozinho X dias antes do acerto ou à mão aqui. */
+function BoletoPrebaixa({ m }: { m: any }) {
+  const qc = useQueryClient();
+  const previa = useQuery({ queryKey: ['maleta', m.id, 'prebaixa-boleto', m.prebaixaEm], queryFn: () => api<{ pecas: number; valor: number }>(`/maletas/${m.id}/boleto-prebaixa`) });
+  const disparar = useMutation({ mutationFn: () => api<{ url: string | null; valor: number; whatsapp: string; jaExistia: boolean }>(`/maletas/${m.id}/boleto-prebaixa`, { corpo: {} }), onSuccess: () => qc.invalidateQueries({ queryKey: ['maleta', m.id] }) });
+  const atual = m.prebaixaCobrancaId && previa.data && m.prebaixaValor === previa.data.valor;
+  return (
+    <div className="cartao flex entre" style={{ marginBottom: 14, flexWrap: 'wrap', gap: 10 }}>
+      <div>
+        <h3>Boleto da pré-baixa</h3>
+        <p className="muted" style={{ margin: 0 }}>
+          {previa.data ? <>Pelas vendas lançadas ({previa.data.pecas} peça(s)), ela deve <b>{reais(previa.data.valor)}</b> já com a comissão. </> : 'Calculando… '}
+          Pago, vira crédito no acerto: é só dar a baixa e mandar o novo pedido.
+        </p>
+        {m.prebaixaPagaEm ? <div className="aviso ok" style={{ margin: '6px 0 0' }}>Pago em {data(m.prebaixaPagaEm)} ({reais(m.prebaixaValor)}): virou crédito. Faça a baixa e monte o novo pedido.</div>
+          : m.prebaixaCobrancaId ? <div className="muted" style={{ marginTop: 4 }}>Boleto de {reais(m.prebaixaValor)} enviado {m.prebaixaBoletoEm ? dataHora(m.prebaixaBoletoEm) : ''}, vence {data(m.prebaixaVencimento)}.{m.prebaixaUrl && <> <a className="link" href={m.prebaixaUrl} target="_blank" rel="noreferrer">Abrir boleto</a></>}{!atual && previa.data && ' As vendas mudaram: ao disparar de novo, o boleto antigo é cancelado.'}</div>
+          : m.prebaixaBoletoEm ? <div className="muted" style={{ marginTop: 4 }}>A rotina tentou emitir em {dataHora(m.prebaixaBoletoEm)} e não conseguiu. Dispare à mão.</div> : null}
+        {disparar.data && <div className="aviso ok" style={{ margin: '6px 0 0' }}>Boleto de {reais(disparar.data.valor)} {disparar.data.jaExistia ? 'reaproveitado' : 'emitido'} · WhatsApp: {disparar.data.whatsapp}.</div>}
+        {disparar.error && <Erro erro={disparar.error} />}
+      </div>
+      {!m.prebaixaPagaEm && pode('maletas', 'editar') && <button className="botao" disabled={disparar.isPending || !previa.data?.valor} onClick={() => disparar.mutate()}>{disparar.isPending ? 'Enviando…' : m.prebaixaCobrancaId ? 'Reenviar boleto' : 'Emitir e mandar no WhatsApp'}</button>}
     </div>
   );
 }

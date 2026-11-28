@@ -6,6 +6,7 @@ import { Permissao, Publico, Usuario, temPermissao, type UsuarioLogado } from '.
 import { dataISO, validar } from '../comum/validacao';
 import { contas, maletaItens, maletas, pessoas, produtos, titulos } from '../db/schema';
 import { ETAPAS_MALETA, MaletasService, hoje, type DadosAcerto } from './maletas.service';
+import { BoletoPrebaixaService } from './boleto-prebaixa.service';
 import { AvisarMaletaService } from './avisar-maleta.service';
 import { AsaasService } from '../integracoes/asaas.service';
 import { AuditoriaService } from '../comum/auditoria.service';
@@ -46,13 +47,19 @@ const prebaixaSchema = z.object({ itens: z.array(z.object({ produtoId: z.string(
 
 @Controller('maletas')
 export class MaletasController {
-  constructor(@Inject(DB) private readonly db: Db, private readonly svc: MaletasService, private readonly auditoria: AuditoriaService, private readonly asaas: AsaasService, private readonly avisar: AvisarMaletaService) {}
+  constructor(@Inject(DB) private readonly db: Db, private readonly svc: MaletasService, private readonly auditoria: AuditoriaService, private readonly asaas: AsaasService, private readonly avisar: AvisarMaletaService, private readonly prebaixaBoleto: BoletoPrebaixaService) {}
 
   @Get()
   @Permissao('maletas', 'ver')
-  async listar(@Query('aba') aba = 'abertas', @Query('busca') busca?: string, @Query('representanteId') representanteId?: string) {
+  async listar(@Query('aba') aba = 'abertas', @Query('busca') busca?: string, @Query('representanteId') representanteId?: string, @Query('de') de?: string, @Query('ate') ate?: string, @Query('campoData') campoData?: string) {
     const h = hoje();
     const f: SQL[] = [];
+    // Período: pela data de retirada (padrão), pelo prazo do acerto ou pelo dia em que foi baixado.
+    const dia = /^\d{4}-\d{2}-\d{2}$/;
+    const col = campoData === 'acerto' ? sql`${maletas.dataLimite}` : campoData === 'baixa' ? sql`(${maletas.acertadaEm} at time zone 'America/Sao_Paulo')::date` : sql`${maletas.dataRetirada}`;
+    if (de && dia.test(de)) f.push(sql`${col} >= ${de}::date`);
+    if (ate && dia.test(ate)) f.push(sql`${col} <= ${ate}::date`);
+    const comPeriodo = !!((de && dia.test(de)) || (ate && dia.test(ate)));
     if (aba === 'abertas') f.push(eq(maletas.status, 'aberta'));
     if (aba === 'vencendo') f.push(eq(maletas.status, 'aberta'), gte(maletas.dataLimite, h), lte(maletas.dataLimite, somarDias(h, 7)));
     if (aba === 'atrasadas') f.push(eq(maletas.status, 'aberta'), lt(maletas.dataLimite, h));
@@ -81,6 +88,9 @@ export class MaletasController {
         valor: sql<number>`coalesce(sum(${maletaItens.preco} * (${maletaItens.enviada} - ${maletaItens.vendida} - ${maletaItens.devolvida} - ${maletaItens.perdida})),0)::int`,
         valorEnviado: sql<number>`coalesce(sum(${maletaItens.preco} * ${maletaItens.enviada}),0)::int`,
         diasAtraso: sql<number>`case when ${maletas.status} = 'aberta' then greatest(${h}::date - ${maletas.dataLimite}, 0) else 0 end`,
+        acertadaEm: maletas.acertadaEm,
+        prebaixaPagaEm: maletas.prebaixaPagaEm,
+        prebaixaBoleto: sql<boolean>`${maletas.prebaixaCobrancaId} is not null`,
       })
       .from(maletas)
       .innerJoin(pessoas, eq(pessoas.id, maletas.representanteId))
@@ -88,7 +98,7 @@ export class MaletasController {
       .where(f.length ? and(...f) : undefined)
       .groupBy(maletas.id, pessoas.id)
       .orderBy(aba === 'acertadas' || aba === 'canceladas' ? desc(maletas.numero) : maletas.dataLimite)
-      .limit(300);
+      .limit(comPeriodo ? 3000 : 300);
   }
 
   @Get('situacao/:representanteId')
@@ -184,6 +194,7 @@ export class MaletasController {
     const r = await this.svc.acertar(id, d, u.id);
     // O boleto de garantia deixa de valer no acerto (no parcial, o valor da maleta mudou).
     await this.asaas.cancelarGarantiaMaleta(id).catch(() => undefined);
+    await this.asaas.cancelarPrebaixaMaleta(id).catch(() => undefined);
     // Acerto a pagar no boleto: já emite o boleto de cada parcela pela diferença (se o Asaas estiver ligado).
     const boletos: { tituloId: string; url?: string | null; erro?: string }[] = [];
     if (d.formaPagamento === 'boleto' && !d.pagoAgora && this.asaas.configurado) {
@@ -233,6 +244,20 @@ export class MaletasController {
   }
 
   /** Boleto de garantia no lugar da promissória: valor atual da maleta, vence no acerto. */
+  /** Boleto da pré-baixa: quanto ela deve pelas vendas lançadas (prévia). */
+  @Get(':id/boleto-prebaixa')
+  @Permissao('maletas', 'ver')
+  previaPrebaixa(@Param('id', ParseUUIDPipe) id: string) {
+    return this.prebaixaBoleto.calcular(id);
+  }
+
+  /** Emite o boleto da pré-baixa e manda no WhatsApp dela agora (sem esperar a rotina). */
+  @Post(':id/boleto-prebaixa')
+  @Permissao('maletas', 'editar')
+  boletoPrebaixa(@Usuario() u: UsuarioLogado, @Param('id', ParseUUIDPipe) id: string) {
+    return this.prebaixaBoleto.disparar(id, u.id);
+  }
+
   @Post(':id/boleto-garantia')
   @Permissao('maletas', 'editar')
   boletoGarantia(@Usuario() u: UsuarioLogado, @Param('id', ParseUUIDPipe) id: string) {
@@ -281,6 +306,7 @@ export class MaletasController {
     const { motivo } = validar(z.object({ motivo: z.string().min(3, 'Informe o motivo') }), body);
     const r = await this.svc.cancelar(id, motivo, u.id);
     await this.asaas.cancelarGarantiaMaleta(id).catch(() => undefined);
+    await this.asaas.cancelarPrebaixaMaleta(id).catch(() => undefined);
     return r;
   }
 

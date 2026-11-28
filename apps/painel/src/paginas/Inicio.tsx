@@ -30,6 +30,8 @@ interface Inicio {
   rede: { ativas: number; triagem: number; novasMes: number; bloqueadas: number; semMaleta: number };
   financeiro: { receberHoje: number; vencido: number; vencidos: number; aReceber: number };
   mes: { acertos: number; vendido: number; recebido: number; percentualMedio: number };
+  consignado: Consignado | null;
+  minhaCarteira: (Consignado & { consultoras: number }) | null;
   vendas: Vendas | null;
   pendencias: Pendencia[];
   tarefas: { id: string; titulo: string; venceEm: string; leadId: string; lead: string; funil: string }[];
@@ -87,6 +89,23 @@ function useContagem(alvo: number, duracao = 900) {
 function Conta({ valor, dinheiro }: { valor: number; dinheiro?: boolean }) {
   const v = useContagem(Number(valor) || 0);
   return <>{dinheiro ? reais(v) : v.toLocaleString('pt-BR')}</>;
+}
+
+interface Consignado { ativos: number; renovacoes: number; churn: number; churnPct: number | null }
+
+/** Pedidos ativos, renovações e churn do mês (meta de equipe em Relatórios › Metas; por pessoa no Scorecard). */
+function LinhaConsignado({ c, titulo, i }: { c: Consignado; titulo: string; i: number }) {
+  return (
+    <>
+      <h2 className="ini-titulo-secao" style={{ margin: '4px 0 8px', fontSize: 15 }}>{titulo}</h2>
+      <div className="ini-grade k4">
+        <Kpi i={i} rotulo="Pedidos ativos" valor={<Conta valor={c.ativos} />} detalhe="com as consultoras agora" />
+        <Kpi i={i + 1} rotulo="Renovações no mês" valor={<Conta valor={c.renovacoes} />} detalhe="novo pedido de quem já teve" />
+        <Kpi i={i + 2} tipo={c.churn ? 'atencao' : undefined} rotulo="Churn no mês" valor={<Conta valor={c.churn} />} detalhe="baixaram e não pegaram outro pedido" cor={c.churn ? 'var(--erro)' : undefined} />
+        <Kpi i={i + 3} rotulo="Churn (%)" valor={c.churnPct === null ? '—' : `${String(c.churnPct).replace('.', ',')}%`} detalhe="das que baixaram no mês" />
+      </div>
+    </>
+  );
 }
 
 function Kpi({ i, rotulo, valor, detalhe, tipo, cor }: { i: number; rotulo: string; valor: ReactNode; detalhe?: ReactNode; tipo?: 'escuro' | 'atencao'; cor?: string }) {
@@ -200,6 +219,8 @@ export function Inicio() {
         </div>
       )}
 
+      {d.consignado && <LinhaConsignado c={d.consignado} titulo="Consignado do mês (equipe)" i={i++} />}
+      {d.minhaCarteira && <LinhaConsignado c={d.minhaCarteira} titulo={`Minha carteira (${d.minhaCarteira.consultoras} consultoras)`} i={i++} />}
       <div className="ini-grade dois">
         <LinhaDoTempo inicial={d.atividades} porPessoa={d.porPessoa} gestao={d.gestao} i={i++} />
         {d.equipe ? <Equipe pessoas={d.equipe} i={i++} /> : <ResumoFinanceiro d={d} i={i++} />}

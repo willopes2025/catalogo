@@ -7,7 +7,7 @@ import { Carregando, Erro } from '../../componentes/ui';
 import { Cartao, Tabela } from './comum';
 import './indicadores.css';
 
-interface Linha { id: string; tipo: string; nome: string; localId: string | null; dinheiro: boolean; meta: number; realizado: number; atingidoPb: number; projecao: number; projecaoPb: number; falta: number; porDia: number; mesAnterior: number; situacao: 'batida' | 'nao_batida' | 'no_ritmo' | 'perto' | 'abaixo' }
+interface Linha { id: string; tipo: string; nome: string; localId: string | null; dinheiro: boolean; meta: number; realizado: number; atingidoPb: number; projecao: number; projecaoPb: number; falta: number; porDia: number; mesAnterior: number; menor?: boolean; situacao: 'batida' | 'nao_batida' | 'no_ritmo' | 'perto' | 'abaixo' }
 export interface MetasResp { competencia: string; dias: number; decorridos: number; restantes: number; tipos: Record<string, { nome: string; dinheiro: boolean }>; linhas: Linha[]; consultoras: { total: number; bateram: number; lista: any[] }; vendedoras: any[] }
 
 const SITUACAO: Record<Linha['situacao'], [string, string]> = {
@@ -27,7 +27,7 @@ const meses = () => {
 export function BarraMeta({ l, i = 0 }: { l: Linha; i?: number }) {
   const v = (n: number) => (l.dinheiro ? reais(n) : n.toLocaleString('pt-BR'));
   const escala = Math.max(l.meta, l.projecao, l.realizado) * 1.05 || 1;
-  const [rotulo, cor] = SITUACAO[l.situacao];
+  const [rotulo, cor] = l.menor ? ({ batida: ['Dentro do limite', 'var(--ok)'], nao_batida: ['Passou do limite', 'var(--erro)'], no_ritmo: ['Dentro do limite', 'var(--ok)'], perto: ['Vai passar do limite', '#c08a1e'], abaixo: ['Passou do limite', 'var(--erro)'] } as Record<string, [string, string]>)[l.situacao] : SITUACAO[l.situacao];
   return (
     <div className="ind-meta ini-anim" style={{ '--i': i } as CSSProperties}>
       <div className="flex entre" style={{ alignItems: 'baseline', gap: 10 }}>
@@ -40,7 +40,7 @@ export function BarraMeta({ l, i = 0 }: { l: Linha; i?: number }) {
         <i style={{ left: `${(l.meta / escala) * 100}%` }} title={`Meta ${v(l.meta)}`} />
       </div>
       <div className="flex entre" style={{ fontSize: 13, gap: 10, flexWrap: 'wrap' }}>
-        <span><b>{v(l.realizado)}</b> de {v(l.meta)} ({pct(l.atingidoPb)})</span>
+        <span><b>{v(l.realizado)}</b> {l.menor ? `· limite ${v(l.meta)}` : <>de {v(l.meta)} ({pct(l.atingidoPb)})</>}</span>
         <span className="muted">
           {l.situacao === 'batida' || l.situacao === 'nao_batida' ? `mês anterior ${v(l.mesAnterior)}` : `projeção ${v(l.projecao)}${l.porDia ? ` · precisa de ${v(l.porDia)} por dia` : ''}`}
         </span>

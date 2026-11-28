@@ -400,6 +400,20 @@
       "when": 1795820586598,
       "tag": "0056_catalogo_escolhas",
       "breakpoints": true
+    },
+    {
+      "idx": 57,
+      "version": "7",
+      "when": 1795881486734,
+      "tag": "0057_horario_atendimento",
+      "breakpoints": true
+    },
+    {
+      "idx": 58,
+      "version": "7",
+      "when": 1795881852291,
+      "tag": "0058_boleto_prebaixa",
+      "breakpoints": true
     }
   ]
 }

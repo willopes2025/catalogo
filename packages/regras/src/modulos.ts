@@ -12,7 +12,7 @@ export const MODULOS = [
   { chave: 'cadastros', nome: 'Cadastros', versao: 1 },
   { chave: 'produtos', nome: 'Produtos', versao: 1 },
   { chave: 'estoque', nome: 'Estoque', versao: 1 },
-  { chave: 'maletas', nome: 'Maletas', versao: 1 },
+  { chave: 'maletas', nome: 'Pedidos', versao: 1 },
   { chave: 'vendas', nome: 'Vendas', versao: 1 },
   { chave: 'lojas', nome: 'Lojas e eventos', versao: 1 },
   { chave: 'garantia', nome: 'Garantia', versao: 1 },

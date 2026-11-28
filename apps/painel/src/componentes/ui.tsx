@@ -107,7 +107,7 @@ export function Carregando() {
 
 export function StatusMaleta({ status, diasAtraso }: { status: string; diasAtraso?: number }) {
   if (status === 'aberta' && diasAtraso && diasAtraso > 0) return <span className="etiqueta erro">{diasAtraso} dias de atraso</span>;
-  const mapa: Record<string, [string, string]> = { aberta: ['ok', 'Aberta'], acertada: ['neutra', 'Baixada'], cancelada: ['neutra', 'Cancelada'] };
+  const mapa: Record<string, [string, string]> = { aberta: ['ok', 'Aberto'], acertada: ['neutra', 'Baixado'], cancelada: ['neutra', 'Cancelado'] };
   const [c, t] = mapa[status] ?? ['neutra', status];
   return <span className={`etiqueta ${c}`}>{t}</span>;
 }

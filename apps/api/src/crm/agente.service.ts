@@ -7,6 +7,7 @@ import { ArquivosService } from '../arquivos/arquivos.service';
 import { IaService, TAGS_VOZ, semTagsDeVoz, type Bloco, type MensagemIa } from '../ia/ia.service';
 import { CrmService } from './crm.service';
 import { CanaisService } from './canais.service';
+import { descreverHorario, foraDoHorario, mensagemForaHorario } from './horario-atendimento';
 import { TranscricaoService } from './transcricao.service';
 import { PEDIU_SAIR } from './telefone';
 import { AprendizadoService } from './aprendizado.service';
@@ -72,7 +73,10 @@ export class AgenteService implements OnModuleInit, OnModuleDestroy {
 
   onModuleInit() {
     this.crm.ouvir((e) => {
-      if (e.tipo === 'conversa_entrada') this.agendar(e.conversaId);
+      if (e.tipo === 'conversa_entrada') {
+        this.agendar(e.conversaId);
+        void this.avisarForaDoHorario(e.conversaId).catch((err) => this.log.warn(`Conversa ${e.conversaId}: aviso fora do horário não saiu (${(err as Error).message})`));
+      }
     });
   }
   onModuleDestroy() {
@@ -111,7 +115,13 @@ export class AgenteService implements OnModuleInit, OnModuleDestroy {
   }
 
   /** O que a IA recebe: quem é a empresa, como falar, o que sabe, e as regras de quando passar a vez. */
-  private async sistema(cfg: ConfigAgente, contato: typeof crmContatos.$inferSelect, canalNome: string, modo: 'agente' | 'sugestao', agente?: Especialista | null, outros: Especialista[] = [], falado = false) {
+  private async sistema(cfg: ConfigAgente, contato: typeof crmContatos.$inferSelect, canalNome: string, modo: 'agente' | 'sugestao', agente?: Especialista | null, outros: Especialista[] = [], falado = false, canal?: typeof crmCanais.$inferSelect | null) {
+    const fora = canal ? foraDoHorario(canal) : null;
+    const horario = canal?.atendimentoAtivo
+      ? fora
+        ? `HORÁRIO DA EQUIPE: as pessoas da equipe atendem neste número ${fora.horario}. AGORA ESTÁ FORA DO HORÁRIO. Continue ajudando no que puder; quando for passar para a equipe (ou a pessoa pedir um atendente), avise com gentileza que a equipe responde ${fora.retorno}. Nunca diga que alguém vai responder agora ou "em instantes".`
+        : `HORÁRIO DA EQUIPE: as pessoas da equipe atendem neste número ${descreverHorario(canal)} (agora está dentro do horário).`
+      : '';
     const [matriz] = await this.db.select({ nome: empresas.nome, cidade: empresas.cidade, uf: empresas.uf }).from(empresas).where(eq(empresas.tipo, 'matriz')).limit(1);
     const agora = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo', weekday: 'long', day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
     const nome = contato.nome && contato.nome !== contato.telefone ? contato.nome : null;
@@ -124,6 +134,7 @@ export class AgenteService implements OnModuleInit, OnModuleDestroy {
       nome ? `Você está falando com ${nome}.` : 'Você ainda não sabe o nome da pessoa; pergunte com naturalidade se fizer sentido.',
       await this.quemE(contato),
       cfg.memoriaClientes && contato.memoriaIa ? `O QUE VOCÊ LEMBRA DESTA PESSOA (de conversas anteriores; use com naturalidade, sem dizer que tem uma ficha): ${contato.memoriaIa}` : '',
+      horario,
       await this.aprendizado.licoesPara(agente?.funcao ?? null),
       agente ? `SUA ESPECIALIDADE NESTA CONVERSA: ${agente.nome} (${agente.quando}).${agente.instrucoes.trim() ? `\nCOMO ATENDER ESTE ASSUNTO:\n${agente.instrucoes.trim()}` : ''}${agente.conhecimento.trim() ? `\nO QUE VOCÊ SABE SOBRE ESTE ASSUNTO (use só isto como fato):\n${agente.conhecimento.trim()}` : ''}` : '',
       cfg.instrucoes.trim() ? `COMO ATENDER (definido pela empresa):\n${cfg.instrucoes.trim()}` : 'COMO ATENDER: seja cordial e objetiva, como uma atendente brasileira experiente. Descubra o que a pessoa precisa e ajude.',
@@ -274,7 +285,9 @@ export class AgenteService implements OnModuleInit, OnModuleDestroy {
       const falado = !!this.ia.vozDisponivel && (cfg.respostaAudio === 'sempre' || (cfg.respostaAudio === 'espelhar' && ultimaDoCliente?.tipo === 'audio'));
       if (c.cv.iaRespostas >= Math.max(1, cfg.maxRespostas)) return this.passar(conversaId, `Chegou ao limite de ${cfg.maxRespostas} respostas seguidas.`);
       // Só os especialistas deste número (ex.: Cobrança só no Financeiro).
-      const lista = (await this.especialistas()).filter((a) => !a.canais.length || a.canais.includes(c.cv.canalId));
+      // e, se o número escolheu especialistas, só esses (ex.: só "Quero revender" no Comercial Hemilly).
+      const doNumero = c.canal.iaEspecialistas ?? [];
+      const lista = (await this.especialistas()).filter((a) => (!a.canais.length || a.canais.includes(c.cv.canalId)) && (!doNumero.length || doNumero.includes(a.id)));
       let agente = lista.find((a) => a.id === c.cv.iaAgenteId) ?? null;
       // Um especialista só neste número: ele atende direto, sem recepção.
       if (lista.length === 1 && !agente) {
@@ -308,7 +321,7 @@ export class AgenteService implements OnModuleInit, OnModuleDestroy {
         const outros = lista.filter((a) => a.id !== agente?.id);
         let r: Resposta;
         try {
-          r = await this.ia.perguntarJson<Resposta>({ recurso: 'agente', sistema: await this.sistema(cfg, c.contato, c.canal.nome, 'agente', agente, outros, falado), mensagens, maxTokens: 700 });
+          r = await this.ia.perguntarJson<Resposta>({ recurso: 'agente', sistema: await this.sistema(cfg, c.contato, c.canal.nome, 'agente', agente, outros, falado, c.canal), mensagens, maxTokens: 700 });
         } catch (e) {
           // IA fora do ar ou sem crédito: a conversa fica na fila para a equipe, com o motivo anotado.
           return this.passar(conversaId, `A IA não conseguiu responder: ${(e as Error).message}`);
@@ -380,6 +393,24 @@ export class AgenteService implements OnModuleInit, OnModuleDestroy {
     if ((await this.config()).memoriaClientes) void this.aprendizado.atualizarMemoria(conversaId).catch(() => undefined);
   }
 
+  /**
+   * Número sem IA (ou com a IA fora desta conversa), com o aviso ligado: fora do horário manda a mensagem
+   * automática uma vez por período (não repete a cada mensagem da pessoa na mesma noite).
+   */
+  async avisarForaDoHorario(conversaId: string) {
+    const c = await this.contexto(conversaId);
+    if (!c?.canal?.ativo || c.canal.excluidoEm || !c.canal.avisoForaHorario) return;
+    const fora = foraDoHorario(c.canal);
+    if (!fora) return;
+    // A IA vai atender: ela mesma avisa do horário na resposta.
+    if (this.ia.texto && this.atende(c.cv, await this.config())) return;
+    // Já avisou neste período fora do horário (desde o último fechamento).
+    if (c.cv.foraHorarioAvisoEm && Date.now() - c.cv.foraHorarioAvisoEm.getTime() < 16 * 3600_000) return;
+    const [r] = await this.db.update(crmConversas).set({ foraHorarioAvisoEm: new Date() }).where(and(eq(crmConversas.id, conversaId), sql`(${crmConversas.foraHorarioAvisoEm} is null or ${crmConversas.foraHorarioAvisoEm} < now() - interval '16 hours')`)).returning({ id: crmConversas.id });
+    if (!r) return;
+    await this.canais.enviar({ conversaId, tipo: 'texto', texto: mensagemForaHorario(c.canal.mensagemForaHorario, fora), ia: true });
+  }
+
   /** Liga ou desliga a IA nesta conversa (botão "Acionar IA"). Ligando, ela já responde se o cliente está esperando. */
   async acionar(conversaId: string, ativa: boolean) {
     await this.db.update(crmConversas).set({ iaAtiva: ativa, ...(ativa ? { iaRespostas: 0, iaAgenteId: null, iaTransferencias: 0 } : {}) }).where(eq(crmConversas.id, conversaId));
@@ -396,7 +427,7 @@ export class AgenteService implements OnModuleInit, OnModuleDestroy {
     if (!mensagens.length) return { texto: '' };
     // A IA só fala depois do cliente: se a última foi da equipe, pede a continuação.
     if (mensagens.at(-1)!.role !== 'user') mensagens.push({ role: 'user', content: [{ type: 'text', text: '(O cliente ainda não respondeu. Escreva uma mensagem de retomada, curta e gentil.)' }] });
-    const texto = await this.ia.perguntar({ recurso: 'sugestao', sistema: await this.sistema(await this.config(), c.contato, c.canal?.nome ?? '', 'sugestao', c.cv.iaAgenteId ? (await this.especialistas(true)).find((a) => a.id === c.cv.iaAgenteId) : null), mensagens, maxTokens: 500, usuarioId });
+    const texto = await this.ia.perguntar({ recurso: 'sugestao', sistema: await this.sistema(await this.config(), c.contato, c.canal?.nome ?? '', 'sugestao', c.cv.iaAgenteId ? (await this.especialistas(true)).find((a) => a.id === c.cv.iaAgenteId) : null, [], false, c.canal), mensagens, maxTokens: 500, usuarioId });
     return { texto: texto.replace(/^["“]|["”]$/g, '').trim() };
   }
 }

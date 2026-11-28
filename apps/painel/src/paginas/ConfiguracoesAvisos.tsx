@@ -37,8 +37,34 @@ export function AvisosERegras() {
       <Avisos />
       <MensagensAgenda />
       <MensagemApp />
+      <BoletoPrebaixaCfg />
       <Impressao />
       <OutrasRegras />
+    </div>
+  );
+}
+
+interface CfgPrebaixa { ativo: boolean; diasAntes: number; texto: string }
+
+/** Boleto da pré-baixa: X dias antes do acerto, para quem lançou vendas no sistema. */
+function BoletoPrebaixaCfg() {
+  const { v, setV, salvar, carregando } = useConfig<CfgPrebaixa>('boleto_prebaixa');
+  const padrao = useQuery({ queryKey: ['config-padrao', 'boleto_prebaixa'], queryFn: () => api<CfgPrebaixa>('/configuracoes/padrao/boleto_prebaixa'), staleTime: Infinity });
+  if (carregando || !v) return <Carregando />;
+  return (
+    <div className="cartao form">
+      <div className="secao">Boleto da pré-baixa (WhatsApp)</div>
+      <p className="muted l4" style={{ margin: 0 }}>Para a consultora que lançou vendas no sistema: alguns dias antes do acerto, o sistema emite no Asaas o boleto do que ela deve (vendidas menos a comissão) e manda no WhatsApp. Pago, vira crédito no acerto: a equipe dá a baixa e já manda o novo pedido. Dá para disparar à mão no próprio pedido.</p>
+      <label className="check l2"><input type="checkbox" checked={v.ativo} onChange={(e) => setV({ ...v, ativo: e.target.checked })} /> Disparar sozinho (de hora em hora, das 8h às 20h)</label>
+      <Campo rotulo="Quantos dias antes do acerto" className="l2"><input type="number" min={1} max={30} value={v.diasAntes} onChange={(e) => setV({ ...v, diasAntes: Math.max(1, Math.min(30, Number(e.target.value) || 5)) })} /></Campo>
+      <div className="campo" style={{ gridColumn: 'span 4' }}>
+        <div className="flex entre" style={{ gap: 8, flexWrap: 'wrap' }}>
+          <label htmlFor="msg-prebaixa"><b>Texto</b> <span className="muted" style={{ fontSize: 12 }}>· variáveis: {'{{primeiro_nome}} {{nome}} {{numero}} {{dias}} {{data_acerto}} {{pecas}} {{valor}} {{link}}'}</span></label>
+          {padrao.data && v.texto !== padrao.data.texto && <button type="button" className="botao claro pequeno" onClick={() => setV({ ...v, texto: padrao.data!.texto })}>Voltar ao padrão</button>}
+        </div>
+        <TextoComVariaveis id="msg-prebaixa" linhas={8} maxLength={2000} value={v.texto} onChange={(t) => setV({ ...v, texto: t })} variaveis={[{ nome: 'primeiro_nome', rotulo: 'Primeiro nome' }, { nome: 'numero', rotulo: 'Nº do pedido' }, { nome: 'dias', rotulo: 'Dias até o acerto' }, { nome: 'data_acerto', rotulo: 'Data do acerto' }, { nome: 'pecas', rotulo: 'Peças vendidas lançadas' }, { nome: 'valor', rotulo: 'Valor a pagar' }, { nome: 'link', rotulo: 'Link do boleto' }]} style={{ resize: 'vertical', fontFamily: 'inherit' }} />
+      </div>
+      <Salvar s={salvar} valor={v} />
     </div>
   );
 }

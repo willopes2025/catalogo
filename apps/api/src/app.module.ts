@@ -36,6 +36,7 @@ import { PixController } from './financeiro/pix.controller';
 import { ConsultoraService } from './portal/consultora.service';
 import { ConsultoraAdminController, PortalConsultoraController } from './portal/consultora.controller';
 import { AvisarMaletaService } from './maletas/avisar-maleta.service';
+import { BoletoPrebaixaService } from './maletas/boleto-prebaixa.service';
 import { WebhooksController } from './integracoes/webhooks.controller';
 import { FiscalController } from './fiscal/fiscal.controller';
 import { FiscalService } from './fiscal/fiscal.service';
@@ -214,6 +215,7 @@ if (!segredo || (process.env.NODE_ENV === 'production' && segredo.length < 32)) 
     PixRecebidosService,
     ConsultoraService,
     AvisarMaletaService,
+    BoletoPrebaixaService,
     FiscalService,
     ImportacaoService,
     GarantiaService,

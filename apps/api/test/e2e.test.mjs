@@ -5133,3 +5133,44 @@ test('app da consultora: clientes, venda (maleta e catálogo), promissória, cob
   assert.equal(os.origem, 'portal');
   assert.equal(os.fotos.length, 1);
 });
+
+test('número: horário da equipe e especialistas; pedidos por período; boleto da pré-baixa; churn, renovações e pedidos ativos', async () => {
+  const c = await ok('POST', '/crm/canais', { nome: 'Comercial Hemilly', tipo: 'evolution' });
+  const esp = await ok('POST', '/crm/ia-agentes', { funcao: 'revenda_e2e', nome: 'Quero revender E2E', quando: 'Quer revender ou consignar.', instrucoes: '', conhecimento: '', ativo: true, ordem: 9, canais: [] });
+  const ed = await ok('PATCH', `/crm/canais/${c.id}`, { atendimentoAtivo: true, atendimentoInicio: '09:00', atendimentoFim: '18:00', atendimentoDias: [5, 1, 2, 3, 4], avisoForaHorario: true, mensagemForaHorario: 'Voltamos {{retorno}}.', iaEspecialistas: [esp.id] });
+  assert.equal(ed.atendimentoAtivo, true);
+  assert.deepEqual(ed.atendimentoDias, [1, 2, 3, 4, 5]);
+  assert.deepEqual(ed.iaEspecialistas, [esp.id]);
+  assert.equal((await chamar('PATCH', `/crm/canais/${c.id}`, { atendimentoInicio: '18:00', atendimentoFim: '09:00' })).status, 400);
+  await ok('DELETE', `/crm/canais/${c.id}`);
+
+  // Pedidos por período (data de retirada, acerto ou baixa).
+  assert.deepEqual(await ok('GET', '/maletas?aba=abertas&de=2000-01-01&ate=2000-01-02'), []);
+  const abertas = await ok('GET', '/maletas?aba=abertas');
+  const noAno = await ok('GET', `/maletas?aba=abertas&campoData=acerto&de=2000-01-01&ate=2100-12-31`);
+  assert.equal(noAno.length, abertas.length);
+  assert.ok(Array.isArray(await ok('GET', '/maletas?aba=acertadas&campoData=baixa&de=2000-01-01')));
+
+  // Boleto da pré-baixa: prévia do valor; sem Asaas (ou sem vendas lançadas) não emite.
+  if (abertas[0]) {
+    const pv = await ok('GET', `/maletas/${abertas[0].id}/boleto-prebaixa`);
+    assert.equal(typeof pv.valor, 'number');
+    assert.equal((await chamar('POST', `/maletas/${abertas[0].id}/boleto-prebaixa`)).status, 400);
+  }
+  const cfg = await ok('GET', '/configuracoes/padrao/boleto_prebaixa');
+  assert.equal(cfg.diasAntes, 5);
+
+  // Painel: consignado do mês; metas de equipe (churn é teto) e fontes do scorecard por pessoa.
+  const ini = await ok('GET', '/painel/inicio');
+  assert.equal(typeof ini.consignado.ativos, 'number');
+  assert.equal(typeof ini.consignado.renovacoes, 'number');
+  assert.equal(typeof ini.consignado.churn, 'number');
+  const comp = new Date(Date.now() - 3 * 3600_000).toISOString().slice(0, 7);
+  const antes = await ok('GET', `/metas?competencia=${comp}`);
+  const m = await ok('PUT', '/metas', { competencia: comp, metas: [{ tipo: 'maletas_ativas', valor: 100 }, { tipo: 'renovacoes', valor: 30 }, { tipo: 'churn', valor: 5 }] });
+  assert.equal(m.linhas.find((l) => l.tipo === 'churn').menor, true);
+  assert.equal(m.linhas.find((l) => l.tipo === 'maletas_ativas').realizado, ini.consignado.ativos);
+  await ok('PUT', '/metas', { competencia: comp, metas: antes.linhas.map((l) => ({ tipo: l.tipo, localId: l.localId, valor: l.meta })) });
+  const fontes = (await ok('GET', '/scorecard/regras')).fontes.map((f) => f.chave);
+  for (const f of ['pedidos_ativos', 'renovacoes', 'churn', 'churn_percentual']) assert.ok(fontes.includes(f), f);
+});

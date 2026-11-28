@@ -287,6 +287,40 @@ export class AsaasService implements OnApplicationBootstrap {
     return { id: pg.id, url, linha, valor, vencimento: venc, jaExistia: false };
   }
 
+  /** Boleto da pré-baixa (valor calculado fora: vendidas lançadas menos a comissão), vence no acerto. */
+  async boletoPrebaixaMaleta(maletaId: string, valor: number, usuarioId: string | null) {
+    if (!this.configurado) throw new BadRequestException('Asaas não configurado: configure em Configurações › Integrações.');
+    const [m] = await this.db.select().from(maletas).where(eq(maletas.id, maletaId));
+    if (!m) throw new BadRequestException('Maleta não encontrada.');
+    if (m.status !== 'aberta') throw new BadRequestException(`Este pedido está ${m.status}.`);
+    if (valor < 500) throw new BadRequestException('Valor da pré-baixa abaixo do mínimo do boleto (R$ 5,00).');
+    const venc = m.dataLimite > hoje() ? m.dataLimite : hoje();
+    if (m.prebaixaCobrancaId && !m.prebaixaPagaEm && m.prebaixaValor === valor && m.prebaixaVencimento === venc)
+      return { id: m.prebaixaCobrancaId, url: m.prebaixaUrl, valor, vencimento: venc, jaExistia: true };
+    const customer = await this.clienteAsaas(m.representanteId, false);
+    const pg = await this.chamar<{ id: string; invoiceUrl?: string; bankSlipUrl?: string }>('POST', '/payments', {
+      customer,
+      billingType: 'BOLETO',
+      value: valor / 100,
+      dueDate: venc,
+      description: `Pré-baixa do pedido nº ${m.numero} (vendas lançadas, já com a comissão). Vira crédito no acerto.`,
+      externalReference: `maleta-prebaixa:${m.id}`,
+    });
+    const url = pg.invoiceUrl ?? pg.bankSlipUrl ?? null;
+    await this.db.update(maletas).set({ prebaixaCobrancaId: pg.id, prebaixaUrl: url, prebaixaValor: valor, prebaixaVencimento: venc, prebaixaBoletoEm: new Date(), prebaixaPagaEm: null }).where(eq(maletas.id, m.id));
+    if (m.prebaixaCobrancaId && !m.prebaixaPagaEm && m.prebaixaCobrancaId !== pg.id) await this.cancelarCobranca(m.prebaixaCobrancaId).catch(() => undefined);
+    await this.auditoria.registrar({ usuarioId, acao: 'gerar_cobranca', entidade: 'maleta', entidadeId: m.id, dados: { asaas: pg.id, tipo: 'BOLETO', prebaixa: true, valor, vencimento: venc } });
+    return { id: pg.id, url, valor, vencimento: venc, jaExistia: false };
+  }
+
+  /** Acerto ou cancelamento: o boleto da pré-baixa não pago deixa de valer. */
+  async cancelarPrebaixaMaleta(maletaId: string) {
+    const [m] = await this.db.select({ id: maletas.prebaixaCobrancaId, paga: maletas.prebaixaPagaEm }).from(maletas).where(eq(maletas.id, maletaId));
+    if (!m?.id || m.paga) return;
+    await this.cancelarCobranca(m.id);
+    await this.db.update(maletas).set({ prebaixaCobrancaId: null, prebaixaUrl: null, prebaixaValor: null, prebaixaVencimento: null }).where(eq(maletas.id, maletaId));
+  }
+
   /** Acerto ou cancelamento da maleta: o boleto de garantia deixa de valer. */
   async cancelarGarantiaMaleta(maletaId: string) {
     const [m] = await this.db.select({ id: maletas.garantiaCobrancaId, paga: maletas.garantiaPagaEm }).from(maletas).where(eq(maletas.id, maletaId));
@@ -323,7 +357,18 @@ export class AsaasService implements OnApplicationBootstrap {
       if (evento.event === 'PAYMENT_RECEIVED' || evento.event === 'PAYMENT_CONFIRMED') {
         const p = evento.payment ?? {};
         const ref = String(p.externalReference ?? '');
-        if (ref.startsWith('maleta-garantia:')) {
+        if (ref.startsWith('maleta-prebaixa:')) {
+          // Pagou o boleto da pré-baixa: vira crédito dela (usado no acerto) e o pedido fica marcado para baixar.
+          const [m] = await this.db.select().from(maletas).where(eq(maletas.id, ref.slice('maleta-prebaixa:'.length)));
+          if (m && !m.prebaixaPagaEm) {
+            const data = String(p.paymentDate ?? p.clientPaymentDate ?? p.confirmedDate ?? hoje()).slice(0, 10);
+            const valor = Math.round(Number(p.value ?? 0) * 100);
+            await this.db.update(maletas).set({ prebaixaPagaEm: data }).where(eq(maletas.id, m.id));
+            await this.db.insert(creditos).values({ pessoaId: m.representanteId, valor, descricao: `Pagou o boleto da pré-baixa do pedido nº ${m.numero}`, origemTipo: 'prebaixa_maleta', origemId: m.id, usuarioId: null });
+            await this.auditoria.registrar({ usuarioId: null, acao: 'baixa_automatica', entidade: 'maleta', entidadeId: m.id, dados: { asaas: p.id, valor, prebaixa: true } });
+            resultado = 'pré-baixa paga: virou crédito';
+          } else resultado = 'pré-baixa já registrada';
+        } else if (ref.startsWith('maleta-garantia:')) {
           // Pagou o boleto de garantia: vira crédito dela (usado no acerto) e a maleta registra que foi pago.
           const [m] = await this.db.select().from(maletas).where(eq(maletas.id, ref.slice('maleta-garantia:'.length)));
           if (m && !m.garantiaPagaEm) {

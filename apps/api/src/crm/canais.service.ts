@@ -188,7 +188,7 @@ export class CanaisService implements OnModuleInit {
     return this.publico(c);
   }
 
-  async atualizar(id: string, d: Partial<{ nome: string; config: Record<string, string>; usuarioId: string | null; atendentes: string[]; funilEntradaId: string | null; ativo: boolean; envioIntervaloMinS: number; envioIntervaloMaxS: number; envioInicio: string; envioFim: string; envioDias: number[] }>) {
+  async atualizar(id: string, d: Partial<{ nome: string; config: Record<string, string>; usuarioId: string | null; atendentes: string[]; funilEntradaId: string | null; ativo: boolean; envioIntervaloMinS: number; envioIntervaloMaxS: number; envioInicio: string; envioFim: string; envioDias: number[]; atendimentoAtivo: boolean; atendimentoInicio: string; atendimentoFim: string; atendimentoDias: number[]; avisoForaHorario: boolean; mensagemForaHorario: string; iaEspecialistas: string[] }>) {
     const atual = await this.obter(id);
     if (atual.excluidoEm) throw new BadRequestException('Este número foi excluído. Para usar de novo, conecte como um número novo.');
     const config = d.config ? this.cifrarConfig({ ...Object.fromEntries(Object.entries(atual.config).filter(([k]) => !SECRETOS.includes(k))), ...d.config }, atual.config) : atual.config;

@@ -6,6 +6,7 @@ import { DB, type Db } from '../comum/db.module';
 import { Permissao, Usuario, temPermissao, type UsuarioLogado } from '../comum/auth';
 import { validar } from '../comum/validacao';
 import { AuditoriaService } from '../comum/auditoria.service';
+import { sqlAtivos, sqlChurn, sqlChurnPercentual, sqlRenovacoes } from '../relatorios/consignado';
 import { bscAvaliacoes, bscIndicadores, bscOcorrencias, bscResultados, configuracoes, grupos, usuarios } from '../db/schema';
 
 const CHAVE_REGRAS = 'scorecard_regras';
@@ -27,6 +28,12 @@ const FONTES: Record<string, { nome: string; unidade: 'numero' | 'reais' | 'perc
   tarefas_no_prazo: { nome: 'Tarefas feitas no prazo (%)', unidade: 'percentual', sentido: 'maior', ajuda: 'Das tarefas com prazo no mês, quantas foram concluídas até o prazo.', sql: (u, i, f) => sql`select case when count(*) = 0 then null else round(100.0 * count(*) filter (where feita_em is not null and (feita_em at time zone 'America/Sao_Paulo')::date <= vence_em) / count(*), 1) end as v from mesa_tarefas where responsavel_id = ${u}::uuid and vence_em between ${i}::date and ${f}::date` },
   tarefas_atrasadas: { nome: 'Tarefas atrasadas', unidade: 'numero', sentido: 'menor', ajuda: 'Tarefas com prazo no mês que passaram do prazo (feitas depois ou ainda abertas).', sql: (u, i, f) => sql`select count(*) as v from mesa_tarefas where responsavel_id = ${u}::uuid and vence_em between ${i}::date and ${f}::date and vence_em < (now() at time zone 'America/Sao_Paulo')::date and (feita_em is null or (feita_em at time zone 'America/Sao_Paulo')::date > vence_em)` },
 };
+
+// Consignado da carteira da pessoa (consultoras com ela como supervisora).
+FONTES.pedidos_ativos = { nome: 'Pedidos ativos da carteira', unidade: 'numero', sentido: 'maior', ajuda: 'Pedidos (maletas) com as consultoras da carteira dela no fim do mês (ou hoje, no mês corrente).', sql: (u, _i, f) => sqlAtivos(f < new Date(Date.now() - 3 * 3600_000).toISOString().slice(0, 10) ? f : new Date(Date.now() - 3 * 3600_000).toISOString().slice(0, 10), u) };
+FONTES.renovacoes = { nome: 'Renovações da carteira', unidade: 'numero', sentido: 'maior', ajuda: 'Pedidos novos no mês de consultoras da carteira que já tinham tido pedido.', sql: (u, i, f) => sqlRenovacoes(i, f, u) };
+FONTES.churn = { nome: 'Churn da carteira (quantidade)', unidade: 'numero', sentido: 'menor', ajuda: 'Consultoras da carteira com pedido baixado no mês que não pegaram outro.', sql: (u, i, f) => sqlChurn(i, f, u) };
+FONTES.churn_percentual = { nome: 'Churn da carteira (%)', unidade: 'percentual', sentido: 'menor', ajuda: 'Das consultoras da carteira com pedido baixado no mês, quantas não renovaram.', sql: (u, i, f) => sqlChurnPercentual(i, f, u) };
 
 const indicadorSchema = z
   .object({

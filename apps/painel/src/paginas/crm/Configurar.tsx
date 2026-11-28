@@ -681,6 +681,7 @@ function AgenteIa() {
         {salvar.isSuccess && <div className="aviso ok l4">Salvo. {f.ativo ? 'O agente já está atendendo as conversas novas.' : 'O agente está desligado.'}</div>}
         {admin && <div className="l4"><button className="botao" disabled={salvar.isPending} onClick={() => salvar.mutate()}>Salvar</button></div>}
       </div>
+      <NumerosIa especialistas={q.data?.especialistas ?? []} iaNosNumeros={f.ativo ? (q.data?.canais ?? []) : null} admin={admin} />
       <Especialistas lista={q.data?.especialistas ?? []} admin={admin} />
       <Licoes especialistas={q.data?.especialistas ?? []} admin={admin} />
       <UsoIa />
@@ -760,6 +761,76 @@ function AudioDoAgente({ f, setF, admin }: { f: ConfigAgente; setF: (c: ConfigAg
         </>
       )}
     </>
+  );
+}
+
+/** Por número: quais especialistas atendem nele e o horário da equipe (fora dele, a IA avisa quando a equipe volta). */
+function NumerosIa({ especialistas, iaNosNumeros, admin }: { especialistas: Especialista[]; iaNosNumeros: string[] | null; admin: boolean }) {
+  const canais = usarCanais();
+  const lista = canais.data ?? [];
+  if (!lista.length) return null;
+  return (
+    <div className="cartao coluna" style={{ gap: 10 }}>
+      <b>Números: especialistas e horário da equipe</b>
+      <p className="muted" style={{ margin: 0 }}>Para cada número, escolha quais especialistas a IA usa e o horário em que a equipe atende. Fora do horário, a IA continua a triagem e avisa quando a equipe responde. Nos números sem IA, dá para mandar um aviso automático fora do horário (uma vez por noite ou fim de semana).</p>
+      {lista.map((c) => <NumeroIa key={c.id} canal={c} especialistas={especialistas} iaAqui={iaNosNumeros === null ? false : !iaNosNumeros.length || iaNosNumeros.includes(c.id)} admin={admin} />)}
+    </div>
+  );
+}
+
+function NumeroIa({ canal: c, especialistas, iaAqui, admin }: { canal: Canal; especialistas: Especialista[]; iaAqui: boolean; admin: boolean }) {
+  const qc = useQueryClient();
+  const inicial = () => ({ esp: c.iaEspecialistas ?? [], ativo: c.atendimentoAtivo ?? false, inicio: c.atendimentoInicio ?? '09:00', fim: c.atendimentoFim ?? '18:00', dias: c.atendimentoDias ?? [1, 2, 3, 4, 5], aviso: c.avisoForaHorario ?? false, msg: c.mensagemForaHorario ?? '' });
+  const [f, setF] = useState(inicial);
+  const [aberto, setAberto] = useState(false);
+  const salvar = useMutation({
+    mutationFn: () => api(`/crm/canais/${c.id}`, { metodo: 'PATCH', corpo: { iaEspecialistas: f.esp, atendimentoAtivo: f.ativo, atendimentoInicio: f.inicio, atendimentoFim: f.fim, atendimentoDias: f.dias, avisoForaHorario: f.aviso, mensagemForaHorario: f.msg } }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['crm', 'canais'] }),
+  });
+  const ligados = especialistas.filter((e) => e.ativo && (!e.canais?.length || e.canais.includes(c.id)));
+  const usados = f.esp.length ? ligados.filter((e) => f.esp.includes(e.id)) : ligados;
+  const resumo = [iaAqui ? `IA ligada${usados.length ? ` · ${usados.map((e) => e.nome).join(', ')}` : ''}` : 'IA desligada (só equipe)', f.ativo ? `equipe ${f.inicio}–${f.fim}` : 'sem horário'].join(' · ');
+  return (
+    <div style={{ borderTop: '1px solid var(--borda)', paddingTop: 8 }}>
+      <div className="flex" style={{ justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
+        <span><b>{c.nome}</b> <span className="muted">· {resumo}</span></span>
+        <button className="botao claro pequeno" onClick={() => setAberto(!aberto)}>{aberto ? 'Fechar' : 'Configurar'}</button>
+      </div>
+      {aberto && (
+        <div className="form" style={{ marginTop: 8 }}>
+          {!iaAqui && <div className="aviso l4">A IA não atende neste número (marque-o em "Em quais números", acima, e salve). Os especialistas abaixo valem quando ela for ligada aqui.</div>}
+          <div className="l4">
+            <label className="muted" style={{ fontSize: 13, fontWeight: 600 }}>Especialistas neste número (nenhum marcado = todos os ligados)</label>
+            <div className="flex" style={{ gap: 12, flexWrap: 'wrap', marginTop: 4 }}>
+              {ligados.map((e) => <label key={e.id} className="check"><input type="checkbox" disabled={!admin} checked={f.esp.includes(e.id)} onChange={(ev) => setF({ ...f, esp: ev.target.checked ? [...f.esp, e.id] : f.esp.filter((x) => x !== e.id) })} /> {e.nome}</label>)}
+              {!ligados.length && <span className="muted">Nenhum especialista ligado para este número.</span>}
+            </div>
+            {usados.length === 1 && <span className="muted" style={{ fontSize: 12 }}>Só um especialista: ele atende direto, sem recepção.</span>}
+          </div>
+          <label className="check l4"><input type="checkbox" disabled={!admin} checked={f.ativo} onChange={(e) => setF({ ...f, ativo: e.target.checked })} /> A equipe atende neste número só em um horário</label>
+          {f.ativo && (
+            <>
+              <Campo rotulo="Das"><input type="time" disabled={!admin} value={f.inicio} onChange={(e) => setF({ ...f, inicio: e.target.value })} /></Campo>
+              <Campo rotulo="Até"><input type="time" disabled={!admin} value={f.fim} onChange={(e) => setF({ ...f, fim: e.target.value })} /></Campo>
+              <div className="l4 flex" style={{ gap: 12, flexWrap: 'wrap' }}>
+                {['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'].map((d, i) => (
+                  <label key={d} className="check"><input type="checkbox" disabled={!admin} checked={f.dias.includes(i)} onChange={(e) => setF({ ...f, dias: e.target.checked ? [...f.dias, i].sort() : f.dias.filter((x) => x !== i) })} /> {d}</label>
+                ))}
+              </div>
+              <label className="check l4"><input type="checkbox" disabled={!admin} checked={f.aviso} onChange={(e) => setF({ ...f, aviso: e.target.checked })} /> Quando a IA não estiver atendendo a conversa, mandar um aviso automático fora do horário</label>
+              {f.aviso && (
+                <Campo rotulo="Mensagem do aviso" className="l4" ajuda="{{horario}} vira o horário da equipe e {{retorno}} vira quando ela responde (ex.: amanhã a partir das 09:00). Em branco, usa a mensagem padrão.">
+                  <textarea rows={2} maxLength={1000} disabled={!admin} value={f.msg} onChange={(e) => setF({ ...f, msg: e.target.value })} placeholder="Oi! Recebemos sua mensagem 💛 Nosso atendimento é {{horario}}. A equipe responde {{retorno}}." />
+                </Campo>
+              )}
+            </>
+          )}
+          {salvar.error && <div className="l4"><Erro erro={salvar.error} /></div>}
+          {salvar.isSuccess && <div className="aviso ok l4">Salvo.</div>}
+          {admin && <div className="l4"><button className="botao" disabled={salvar.isPending} onClick={() => salvar.mutate()}>Salvar {c.nome}</button></div>}
+        </div>
+      )}
+    </div>
   );
 }
 

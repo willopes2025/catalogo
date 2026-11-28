@@ -4,6 +4,7 @@ import { somarDias } from '@aritana/regras';
 import { DB, type Db } from '../comum/db.module';
 import { Permissao, Usuario, temPermissao, type UsuarioLogado } from '../comum/auth';
 import { acertos, auditoria, grupos, maletaItens, maletas, pessoas, titulos, usuarios } from '../db/schema';
+import { sqlAtivos, sqlChurn, sqlChurnPercentual, sqlRenovacoes } from '../relatorios/consignado';
 import { hoje } from '../maletas/maletas.service';
 import { daEmpresa, empresaDaVisao } from '../relatorios/fontes';
 
@@ -75,6 +76,16 @@ export class PainelController {
       .from(acertos)
       .where(and(sql`${acertos.data} >= ${inicioMes}::date`, emp ? sql`exists (select 1 from maletas mm where mm.id = ${acertos.maletaId} and mm.empresa_id = ${emp}::uuid)` : undefined));
 
+    // Consignado do mês: pedidos ativos, renovações e churn (da empresa e da carteira de quem está vendo).
+    const um = async (q: SQL) => { const v = (await this.db.execute<{ v: number | string | null }>(q)).rows[0]?.v; return v === null || v === undefined ? null : Number(v); };
+    const fimMes = new Date(Date.UTC(Number(h.slice(0, 4)), Number(h.slice(5, 7)), 0)).toISOString().slice(0, 10);
+    const consignadoDe = async (sup: string | null) => {
+      const [ativos, renovacoes, churn, churnPct] = await Promise.all([um(sqlAtivos(h, sup)), um(sqlRenovacoes(inicioMes, fimMes, sup)), um(sqlChurn(inicioMes, fimMes, sup)), um(sqlChurnPercentual(inicioMes, fimMes, sup))]);
+      return { ativos: ativos ?? 0, renovacoes: renovacoes ?? 0, churn: churn ?? 0, churnPct };
+    };
+    const consignado = pode('maletas') ? await consignadoDe(null) : null;
+    const [{ carteira }] = (await this.db.execute<{ carteira: number }>(sql`select count(*)::int as carteira from pessoas where supervisor_id = ${u.id}::uuid and tipo = 'representante'`)).rows;
+    const minhaCarteira = Number(carteira) > 0 ? { consultoras: Number(carteira), ...(await consignadoDe(u.id)) } : null;
     const vendas = pode('vendas') || pode('maletas') || pode('lojas') ? await this.vendas(h, inicioMes, emp) : null;
     const pendencias = await this.pendencias(u, pode, h);
     const tarefas = pode('crm') ? await this.minhasTarefas(u.id) : [];
@@ -82,7 +93,7 @@ export class PainelController {
     const atividades = await this.atividades(gestao ? null : u.id, 25);
     const porPessoa = gestao ? await this.atividadePorPessoa(h) : null;
 
-    return { data: h, gestao, maletas: n(m), rede: n(rede), financeiro: n(fin), mes: n(mes), vendas, pendencias, tarefas, equipe, atividades, porPessoa };
+    return { data: h, gestao, maletas: n(m), rede: n(rede), financeiro: n(fin), mes: n(mes), consignado, minhaCarteira, vendas, pendencias, tarefas, equipe, atividades, porPessoa };
   }
 
   /** Últimas alterações, de todos (gestão) ou só minhas; filtro por pessoa e paginação por data. */
